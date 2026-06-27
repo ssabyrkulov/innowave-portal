@@ -1,0 +1,54 @@
+import { NavLink, Outlet } from 'react-router-dom'
+import { useAuth } from '../auth'
+
+const ROLE_LABELS = {
+  admin: 'Администратор',
+  accountant: 'Бухгалтер',
+  viewer: 'Наблюдатель',
+}
+
+export default function Layout() {
+  const { user, logout, can } = useAuth()
+
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">IW</div>
+          <div>
+            <div className="brand-title">InnoWave Group</div>
+            <div className="brand-sub">Платёжный календарь</div>
+          </div>
+        </div>
+
+        <nav className="nav">
+          <NavLink to="/" end className="nav-link">
+            📅 Календарь
+          </NavLink>
+          <NavLink to="/payments" className="nav-link">
+            📋 Платежи
+          </NavLink>
+          {can.manageUsers && (
+            <NavLink to="/users" className="nav-link">
+              👥 Пользователи
+            </NavLink>
+          )}
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="user-card">
+            <div className="user-name">{user.full_name}</div>
+            <div className="user-role">{ROLE_LABELS[user.role] || user.role}</div>
+          </div>
+          <button className="btn btn-ghost" onClick={logout}>
+            Выйти
+          </button>
+        </div>
+      </aside>
+
+      <main className="content">
+        <Outlet />
+      </main>
+    </div>
+  )
+}
