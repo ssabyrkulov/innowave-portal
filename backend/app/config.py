@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     database_url: str = "sqlite:///./payment_calendar.db"
 
+    # Comma-separated list of allowed frontend origins, or "*" for any.
+    cors_origins: str = "*"
+
     first_admin_email: str = "admin@innowave.group"
     first_admin_password: str = "admin123"
     first_admin_name: str = "Administrator"

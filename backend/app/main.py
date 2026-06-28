@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .config import settings
 from .database import Base, engine
 from .routers import auth, payments, users
 from .seed import seed_initial_admin
@@ -11,10 +12,13 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Auth uses Bearer tokens (not cookies), so credentials are not required and a
+# wildcard origin is safe. Restrict via the CORS_ORIGINS env var in production.
+origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=origins or ["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
