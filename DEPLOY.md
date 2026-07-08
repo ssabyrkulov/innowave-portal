@@ -71,6 +71,37 @@
 
 ---
 
+## Шаг 4 (необязательно). Свой домен, например innowavehygiene.com
+
+Vercel бесплатно подключает ваш собственный домен. Домен должен быть куплен
+у любого регистратора (Namecheap, Cloudflare, GoDaddy, reg.ru и т.п.).
+
+Рекомендуется поддомен — например `calendar.innowavehygiene.com`, — чтобы
+корневой домен остался под сайт компании.
+
+1. В Vercel: ваш проект → **Settings → Domains** → **Add** → введите домен,
+   например `calendar.innowavehygiene.com`.
+2. Vercel покажет, какую DNS-запись создать. В панели управления DNS у вашего
+   регистратора добавьте:
+
+   | Вариант | Тип записи | Имя | Значение |
+   |---|---|---|---|
+   | Поддомен `calendar.…` | CNAME | `calendar` | `cname.vercel-dns.com` |
+   | Корневой домен | A | `@` | `76.76.21.21` |
+
+3. Подождите обновления DNS (обычно минуты, максимум пара часов). Vercel сам
+   выпустит HTTPS-сертификат — домен заработает по `https://`.
+4. Не забудьте обновить `CORS_ORIGINS` на Render, добавив новый домен:
+   ```
+   https://calendar.innowavehygiene.com,https://payment-calendar.vercel.app
+   ```
+
+> При желании и бэкенд можно повесить на поддомен (например
+> `api.innowavehygiene.com`): в Render — Settings → Custom Domains, затем
+> обновить `VITE_API_BASE` на Vercel. Но это чисто косметика, необязательно.
+
+---
+
 ## Готово ✅
 
 Откройте адрес с Vercel и войдите:
