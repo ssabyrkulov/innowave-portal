@@ -32,51 +32,43 @@
 
 ## Шаг 2 (необязательно). Свой домен
 
-Календарь можно повесить на ваш домен — например
-`calendar.innowavehygiene.com` или `calendar.innowave-group.com`.
-Рекомендуется именно **поддомен**: корневой домен остаётся под сайт компании,
-и существующие сайт/почта не затрагиваются.
+Выбранная схема: приложение живёт прямо на корневом домене
+**`innowave-group.com`** (домен куплен на Cloudflare — он умеет CNAME на
+корне через «flattening»).
 
 ### 2.1. Добавить домен в Render
 
 Дашборд Render → ваш сервис → **Settings → Custom Domains → Add Custom
-Domain** → введите, например:
+Domain** → введите:
 
 ```
-calendar.innowavehygiene.com
+innowave-group.com
 ```
 
-Render покажет значение CNAME (ваш адрес `*.onrender.com`).
+Render автоматически добавит и `www.innowave-group.com` (с редиректом на
+корень) и покажет, какие DNS-записи создать.
 
-### 2.2. Добавить DNS-запись
+### 2.2. Добавить DNS-записи в Cloudflare
 
-Где добавлять — зависит от того, где обслуживается DNS вашего домена:
+Dashboard → домен `innowave-group.com` → **DNS → Records → Add record**,
+две записи:
 
-**Домен innowavehygiene.com** (DNS в Google Cloud):
-[console.cloud.google.com](https://console.cloud.google.com) →
-**Network Services → Cloud DNS** → зона `innowavehygiene.com` →
-**Add record set**:
+| Type | Name | Target | Proxy status |
+|---|---|---|---|
+| `CNAME` | `@` | `payment-calendar-XXXX.onrender.com` | **DNS only** (серое облачко!) |
+| `CNAME` | `www` | `payment-calendar-XXXX.onrender.com` | **DNS only** (серое облачко!) |
 
-| Поле | Значение |
-|---|---|
-| DNS name | `calendar` |
-| Type | `CNAME` |
-| Data | `payment-calendar.onrender.com.` ← **с точкой на конце** |
-
-**Домен на Cloudflare** (если купите новый там):
-Dashboard → домен → **DNS → Add record**:
-
-| Поле | Значение |
-|---|---|
-| Type | `CNAME` |
-| Name | `calendar` |
-| Target | `payment-calendar.onrender.com` |
-| Proxy status | **DNS only** (серое облачко, не оранжевое!) |
+`payment-calendar-XXXX.onrender.com` — служебный адрес вашего сервиса,
+Render показывает его в шаге 2.1.
 
 ### 2.3. Подождать
 
-DNS обновляется от пары минут до часа. Render сам проверит запись и выпустит
-HTTPS-сертификат. После этого сайт доступен по вашему домену.
+DNS обновляется от пары минут до часа. Render сам проверит записи и выпустит
+HTTPS-сертификат. После этого сайт доступен по `https://innowave-group.com`.
+
+> Если позже понадобится публичный сайт компании на этом же домене —
+> приложение можно перевесить на поддомен (например `app.innowave-group.com`)
+> за пару минут: поменять домен в Render и записи в Cloudflare.
 
 ---
 
