@@ -1,4 +1,6 @@
-const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+// Empty string = same origin (single-service deploy where the backend also
+// serves the frontend). Undefined (local dev) falls back to the /api proxy.
+const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
 const TOKEN_KEY = 'pc_token'
 

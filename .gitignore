@@ -11,6 +11,9 @@ node_modules/
 dist/
 .vite/
 
+# Build artifact: frontend copied into backend by Docker build
+backend/static/
+
 # Editor / OS
 .DS_Store
 .idea/

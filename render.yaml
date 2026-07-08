@@ -1,4 +1,4 @@
-# Render Blueprint — разворачивает backend + базу PostgreSQL.
+# Render Blueprint — разворачивает всё приложение (frontend + backend + база).
 # Подключите репозиторий в Render → New → Blueprint, и сервис создастся автоматически.
 databases:
   - name: payment-calendar-db
@@ -6,14 +6,14 @@ databases:
 
 services:
   - type: web
-    name: payment-calendar-api
+    name: payment-calendar
     runtime: docker
     repo: https://github.com/ssabyrkulov/payment-calendar
     branch: claude/innowave-group-calendar-81tcby
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     plan: free
-    healthCheckPath: /
+    healthCheckPath: /healthz
     envVars:
       - key: SECRET_KEY
         generateValue: true
@@ -27,9 +27,6 @@ services:
         value: admin@innowave.group
       - key: FIRST_ADMIN_NAME
         value: Administrator
-      # Задайте надёжный пароль в дашборде Render (отмечен sync:false — не хранится в репо).
+      # Задайте надёжный пароль в дашборде Render (sync:false — не хранится в репо).
       - key: FIRST_ADMIN_PASSWORD
         sync: false
-      # После деплоя фронтенда на Vercel впишите сюда его адрес, напр. https://payment-calendar.vercel.app
-      - key: CORS_ORIGINS
-        value: "*"
