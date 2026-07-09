@@ -4,11 +4,33 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import inspect, text
 
 from .config import settings
 from .database import Base, engine
-from .routers import auth, payments, sales, users
+from .routers import auth, checks, payments, sales, users
 from .seed import seed_initial_admin
+
+
+def run_mini_migrations() -> None:
+    """Добавляет недостающие колонки в существующие таблицы.
+
+    Base.metadata.create_all создаёт только новые таблицы; при добавлении
+    полей в модель уже развёрнутая база их не получит — досоздаём вручную.
+    """
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not inspector.has_table(table.name):
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                ddl_type = column.type.compile(engine.dialect)
+                conn.execute(text(
+                    f'ALTER TABLE {table.name} ADD COLUMN {column.name} {ddl_type}'
+                ))
 
 app = FastAPI(
     title="InnoWave Group — Corporate Portal API",
@@ -32,6 +54,7 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
+    run_mini_migrations()
     seed_initial_admin()
 
 
@@ -44,6 +67,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(payments.router)
 app.include_router(sales.router)
+app.include_router(checks.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

@@ -73,11 +73,23 @@ export const api = {
   updatePayment: (id, body) => request(`/payments/${id}`, { method: 'PATCH', body }),
   deletePayment: (id) => request(`/payments/${id}`, { method: 'DELETE' }),
 
-  importSales: (file) => {
+  importSales: (file, replacePeriod = false) => {
     const fd = new FormData()
     fd.append('file', file)
+    fd.append('replace_period', replacePeriod ? 'true' : 'false')
     return request('/sales/import', { method: 'POST', formData: fd })
   },
+  importLog: () => request('/sales/imports'),
+
+  checks: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '' && v !== false)
+    ).toString()
+    return request(`/checks${qs ? `?${qs}` : ''}`)
+  },
+  checksCount: () => request('/checks/count'),
+  ackViolation: (vhash) => request(`/checks/${vhash}/ack`, { method: 'POST' }),
+  unackViolation: (vhash) => request(`/checks/${vhash}/ack`, { method: 'DELETE' }),
   salesSummary: (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v != null && v !== '')

@@ -67,10 +67,43 @@ class Sale(Base):
     doc_total: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     unit: Mapped[str | None] = mapped_column(String, nullable=True)
     agent: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    discount_pct: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
+    account: Mapped[str | None] = mapped_column(String, nullable=True)
+    responsible: Mapped[str | None] = mapped_column(String, nullable=True)
     # Хэш строки для идемпотентного импорта: повторная загрузка того же
     # файла не создаёт дублей.
     row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ImportLog(Base):
+    """Журнал загрузок Excel — кто, когда и что импортировал."""
+
+    __tablename__ = "import_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    filename: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    added: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
+    errors_count: Mapped[int] = mapped_column(Integer, default=0)
+    replace_period: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship()
+
+
+class ViolationAck(Base):
+    """Принятые (закрытые) нарушения контроля."""
+
+    __tablename__ = "violation_acks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    vhash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship()
 
 
 class Payment(Base):

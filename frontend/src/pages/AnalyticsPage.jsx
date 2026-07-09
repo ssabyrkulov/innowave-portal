@@ -25,6 +25,7 @@ export default function AnalyticsPage() {
   const [dateTo, setDateTo] = useState('')
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)
+  const [replacePeriod, setReplacePeriod] = useState(false)
   const fileRef = useRef(null)
 
   async function load() {
@@ -49,7 +50,7 @@ export default function AnalyticsPage() {
     setImportResult(null)
     setError(null)
     try {
-      const res = await api.importSales(file)
+      const res = await api.importSales(file, replacePeriod)
       setImportResult(res)
       await load()
     } catch (err) {
@@ -66,7 +67,18 @@ export default function AnalyticsPage() {
       <div className="page-header">
         <h1>Аналитика продаж</h1>
         {can.editPayments && (
-          <>
+          <div className="import-controls">
+            <label
+              className="filter-inline replace-toggle"
+              title="Удалить из базы период, который покрывает файл, и загрузить его заново — правки 1С задним числом попадут корректно"
+            >
+              <input
+                type="checkbox"
+                checked={replacePeriod}
+                onChange={(e) => setReplacePeriod(e.target.checked)}
+              />
+              заменить период
+            </label>
             <input
               ref={fileRef}
               type="file"
@@ -81,13 +93,16 @@ export default function AnalyticsPage() {
             >
               {importing ? 'Загрузка…' : '⬆ Загрузить Excel из 1С'}
             </button>
-          </>
+          </div>
         )}
       </div>
 
       {importResult && (
         <div className="import-result">
           Импорт завершён: добавлено <b>{importResult.added}</b>
+          {importResult.replaced_rows > 0 && (
+            <>, заменено строк периода: <b>{importResult.replaced_rows}</b></>
+          )}
           {importResult.skipped_duplicates > 0 && (
             <>, пропущено дублей: <b>{importResult.skipped_duplicates}</b></>
           )}

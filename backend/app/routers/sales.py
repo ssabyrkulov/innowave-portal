@@ -3,7 +3,15 @@ import io
 from datetime import date, datetime
 
 import openpyxl
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -30,6 +38,9 @@ HEADER_MAP = {
     "СуммаДокумента": "doc_total",
     "НоменклатураЕдиницаИзмерения": "unit",
     "КонтрагентSD_АгентНаименование": "agent",
+    "ПроцентСкидкиНаценки": "discount_pct",
+    "СчетУчета": "account",
+    "ОтветственныйНаименование": "responsible",
 }
 
 REQUIRED_FIELDS = {"date", "client", "product", "qty", "price", "amount"}
@@ -62,7 +73,7 @@ def _row_hash(d: dict) -> str:
         str(d.get(f, ""))
         for f in (
             "date", "client", "product", "qty", "price",
-            "amount", "doc_number", "warehouse",
+            "amount", "doc_number", "warehouse", "doc_total",
         )
     )
     return hashlib.sha256(key.encode()).hexdigest()
@@ -71,8 +82,9 @@ def _row_hash(d: dict) -> str:
 @router.post("/import")
 async def import_sales(
     file: UploadFile,
+    replace_period: bool = Form(default=False),
     db: Session = Depends(get_db),
-    _: models.User = Depends(can_import),
+    current: models.User = Depends(can_import),
 ):
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(
@@ -116,15 +128,11 @@ async def import_sales(
             "Дата, КонтрагентНаименование, Сумма и т.д.)",
         )
 
-    existing_hashes = {h for (h,) in db.query(models.Sale.row_hash).all()}
-
-    added = 0
-    skipped = 0
+    # --- Фаза 1: разбор всех строк файла ---
+    parsed_rows: list[dict] = []
     errors: list[str] = []
-    seen_in_file: set[str] = set()
 
     def process(row, line_no):
-        nonlocal added, skipped
         data = {}
         for j, field in columns.items():
             data[field] = row[j] if j < len(row) else None
@@ -143,34 +151,94 @@ async def import_sales(
             "doc_total": _parse_float(data.get("doc_total")),
             "unit": str(data.get("unit") or "").strip() or None,
             "agent": str(data.get("agent") or "").strip() or None,
+            "discount_pct": _parse_float(data.get("discount_pct")),
+            "account": str(data.get("account") or "").strip() or None,
+            "responsible": str(data.get("responsible") or "").strip() or None,
         }
         missing = [f for f in REQUIRED_FIELDS if parsed.get(f) is None]
         if missing:
             if len(errors) < 20:
                 errors.append(f"Строка {line_no}: нет значений {', '.join(missing)}")
             return
-        h = _row_hash(parsed)
-        if h in existing_hashes or h in seen_in_file:
-            skipped += 1
-            return
-        seen_in_file.add(h)
-        db.add(models.Sale(**parsed, row_hash=h))
-        added += 1
+        parsed_rows.append(parsed)
 
-    line_no = 0
+    line_no = header_idx + 1
     for line_no, row in enumerate(buffered[header_idx + 1:], start=header_idx + 2):
         process(row, line_no)
     for line_no, row in enumerate(rows, start=line_no + 1):
         process(row, line_no)
 
+    replaced = 0
+    if replace_period and parsed_rows:
+        # Заменяем период, который покрывает файл: правки задним числом в 1С
+        # корректно попадут в базу, а не останутся дублями.
+        dmin = min(p["date"] for p in parsed_rows)
+        dmax = max(p["date"] for p in parsed_rows)
+        replaced = (
+            db.query(models.Sale)
+            .filter(models.Sale.date >= dmin, models.Sale.date <= dmax)
+            .delete(synchronize_session=False)
+        )
+        db.flush()
+
+    # --- Фаза 2: вставка с защитой от дублей ---
+    existing_hashes = {h for (h,) in db.query(models.Sale.row_hash).all()}
+    seen_in_file: set[str] = set()
+    added = 0
+    skipped = 0
+    for parsed in parsed_rows:
+        h = _row_hash(parsed)
+        if h in existing_hashes or h in seen_in_file:
+            skipped += 1
+            continue
+        seen_in_file.add(h)
+        db.add(models.Sale(**parsed, row_hash=h))
+        added += 1
+
+    db.add(models.ImportLog(
+        filename=file.filename or "upload.xlsx",
+        user_id=current.id,
+        added=added,
+        skipped=skipped,
+        errors_count=len(errors),
+        replace_period=replace_period,
+    ))
     db.commit()
     total = db.query(models.Sale).count()
     return {
         "added": added,
         "skipped_duplicates": skipped,
+        "replaced_rows": replaced,
         "errors": errors,
         "total_in_db": total,
     }
+
+
+@router.get("/imports")
+def list_imports(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    limit: int = Query(default=20, le=100),
+):
+    logs = (
+        db.query(models.ImportLog)
+        .order_by(models.ImportLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": l.id,
+            "filename": l.filename,
+            "user": l.user.full_name if l.user else None,
+            "added": l.added,
+            "skipped": l.skipped,
+            "errors_count": l.errors_count,
+            "replace_period": l.replace_period,
+            "created_at": l.created_at.isoformat(),
+        }
+        for l in logs
+    ]
 
 
 @router.get("/summary")

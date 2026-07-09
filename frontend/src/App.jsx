@@ -4,6 +4,7 @@ import { useAuth } from './auth'
 import Login from './pages/Login'
 import AnalyticsPage from './pages/AnalyticsPage'
 import CalendarPage from './pages/CalendarPage'
+import ChecksPage from './pages/ChecksPage'
 import PaymentsPage from './pages/PaymentsPage'
 import UsersPage from './pages/UsersPage'
 
@@ -30,6 +31,7 @@ export default function App() {
         <Route index element={<CalendarPage />} />
         <Route path="payments" element={<PaymentsPage />} />
         <Route path="analytics" element={<AnalyticsPage />} />
+        <Route path="checks" element={<ChecksPage />} />
         <Route
           path="users"
           element={
