@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import { useAuth } from './auth'
 import Login from './pages/Login'
 import AnalyticsPage from './pages/AnalyticsPage'
+import AgentsPage from './pages/AgentsPage'
 import DebtPage from './pages/DebtPage'
 import CalendarPage from './pages/CalendarPage'
 import ChecksPage from './pages/ChecksPage'
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="checks" element={<ChecksPage />} />
         <Route path="debt" element={<DebtPage />} />
+        <Route path="agents" element={<AgentsPage />} />
         <Route
           path="users"
           element={

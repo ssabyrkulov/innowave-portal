@@ -903,6 +903,77 @@ tbody tr:hover {
   }
 }
 
+/* ---------- Agents ---------- */
+.agent-row {
+  cursor: pointer;
+}
+
+.agent-toggle {
+  color: var(--muted);
+  font-size: 11px;
+  margin-right: 4px;
+}
+
+.sparkline {
+  width: 150px;
+  height: 34px;
+  display: block;
+}
+
+.spark-bar {
+  fill: var(--primary);
+  opacity: 0.85;
+}
+
+.spark-bar:hover {
+  opacity: 1;
+}
+
+.agent-detail td {
+  background: var(--bg);
+  padding: 10px 16px 14px;
+}
+
+.agent-clients-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 8px;
+}
+
+.agent-client-row {
+  display: grid;
+  grid-template-columns: 1fr 160px 160px;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 13px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.agent-client-row:last-child {
+  border-bottom: none;
+}
+
+.agent-client-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 840px) {
+  .agent-client-row {
+    grid-template-columns: 1fr auto;
+  }
+  .agent-client-row .num:last-child {
+    grid-column: 2;
+  }
+  .sparkline {
+    width: 90px;
+  }
+}
+
 /* ---------- Helpers ---------- */
 .muted {
   color: var(--muted);

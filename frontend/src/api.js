@@ -94,6 +94,8 @@ export const api = {
   createAlias: (payer, client) =>
     request('/receipts/alias', { method: 'POST', body: { payer, client } }),
 
+  agentsSummary: () => request('/agents/summary'),
+
   checks: (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v != null && v !== '' && v !== false)

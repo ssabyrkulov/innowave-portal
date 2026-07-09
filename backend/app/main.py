@@ -8,7 +8,7 @@ from sqlalchemy import inspect, text
 
 from .config import settings
 from .database import Base, engine
-from .routers import auth, checks, payments, receipts, sales, users
+from .routers import agents, auth, checks, payments, receipts, sales, users
 from .seed import seed_initial_admin
 
 
@@ -69,6 +69,7 @@ app.include_router(payments.router)
 app.include_router(sales.router)
 app.include_router(checks.router)
 app.include_router(receipts.router)
+app.include_router(agents.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the
