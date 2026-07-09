@@ -94,6 +94,8 @@ export const api = {
   createAlias: (payer, client) =>
     request('/receipts/alias', { method: 'POST', body: { payer, client } }),
 
+  dashboard: () => request('/dashboard'),
+
   agentsSummary: () => request('/agents/summary'),
   setAgentTarget: (agent, month, amount) =>
     request('/agents/target', { method: 'POST', body: { agent, month, amount } }),

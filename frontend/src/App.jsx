@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import { useAuth } from './auth'
 import Login from './pages/Login'
 import AnalyticsPage from './pages/AnalyticsPage'
+import DashboardPage from './pages/DashboardPage'
 import AgentsPage from './pages/AgentsPage'
 import DebtPage from './pages/DebtPage'
 import CalendarPage from './pages/CalendarPage'
@@ -30,7 +31,8 @@ export default function App() {
           </Protected>
         }
       >
-        <Route index element={<CalendarPage />} />
+        <Route index element={<DashboardPage />} />
+        <Route path="calendar" element={<CalendarPage />} />
         <Route path="payments" element={<PaymentsPage />} />
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="checks" element={<ChecksPage />} />

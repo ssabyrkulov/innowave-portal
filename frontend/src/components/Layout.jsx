@@ -37,6 +37,9 @@ export default function Layout() {
 
         <nav className="nav">
           <NavLink to="/" end className="nav-link">
+            🏠 Главная
+          </NavLink>
+          <NavLink to="/calendar" className="nav-link">
             📅 Календарь
           </NavLink>
           <NavLink to="/payments" className="nav-link">
