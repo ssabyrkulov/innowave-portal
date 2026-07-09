@@ -3,7 +3,7 @@ import Calendar from '../components/Calendar'
 import PaymentModal from '../components/PaymentModal'
 import { api } from '../api'
 import { useAuth } from '../auth'
-import { formatMoney, toISODate } from '../utils'
+import { DIRECTION_LABELS, STATUS_LABELS, formatMoney, toISODate } from '../utils'
 
 export default function CalendarPage() {
   const { can } = useAuth()
@@ -13,7 +13,8 @@ export default function CalendarPage() {
   const [payments, setPayments] = useState([])
   const [summary, setSummary] = useState(null)
   const [error, setError] = useState(null)
-  const [modal, setModal] = useState(null) // {payment} or {date}
+  // {type:'day', date} — список платежей дня; {type:'form', date, payment} — форма
+  const [modal, setModal] = useState(null)
 
   const dateFrom = toISODate(new Date(year, month, 1))
   const dateTo = toISODate(new Date(year, month + 1, 0))
@@ -55,14 +56,23 @@ export default function CalendarPage() {
   }
 
   function onDayClick(iso) {
-    if (!can.editPayments) return
-    setModal({ date: iso })
+    setModal({ type: 'day', date: iso })
   }
 
   async function save(data) {
     if (modal?.payment?.id) await api.updatePayment(modal.payment.id, data)
     else await api.createPayment(data)
     await load()
+  }
+
+  async function removePayment(p) {
+    if (!confirm(`Удалить платёж «${p.title}»?`)) return
+    try {
+      await api.deletePayment(p.id)
+      await load()
+    } catch (err) {
+      setError(err.message)
+    }
   }
 
   return (
@@ -88,7 +98,7 @@ export default function CalendarPage() {
           {can.editPayments && (
             <button
               className="btn btn-primary summary-add"
-              onClick={() => setModal({ date: toISODate(new Date()) })}
+              onClick={() => setModal({ type: 'form', date: toISODate(new Date()) })}
             >
               + Платёж
             </button>
@@ -108,13 +118,97 @@ export default function CalendarPage() {
         onDayClick={onDayClick}
       />
 
-      {modal && (
+      {modal?.type === 'day' && (
+        <DayModal
+          date={modal.date}
+          payments={payments.filter((p) => p.due_date === modal.date)}
+          canEdit={can.editPayments}
+          onClose={() => setModal(null)}
+          onAdd={() => setModal({ type: 'form', date: modal.date })}
+          onEdit={(p) => setModal({ type: 'form', date: modal.date, payment: p })}
+          onDelete={removePayment}
+        />
+      )}
+
+      {modal?.type === 'form' && (
         <PaymentModal
           initial={modal.payment || { due_date: modal.date }}
           onClose={() => setModal(null)}
           onSave={save}
         />
       )}
+    </div>
+  )
+}
+
+function formatDayTitle(iso) {
+  const [y, m, d] = iso.split('-')
+  return `${d}.${m}.${y}`
+}
+
+function DayModal({ date, payments, canEdit, onClose, onAdd, onEdit, onDelete }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="day-modal-header">
+          <h2>{formatDayTitle(date)}</h2>
+          {canEdit && (
+            <button className="btn btn-primary btn-sm" onClick={onAdd}>
+              + Добавить платёж
+            </button>
+          )}
+        </div>
+
+        {payments.length === 0 ? (
+          <div className="muted center">На этот день платежей нет</div>
+        ) : (
+          <div className="day-list">
+            {payments.map((p) => (
+              <div key={p.id} className="day-item">
+                <div className="day-item-main">
+                  <div className="day-item-title">{p.title}</div>
+                  <div className="day-item-sub">
+                    {DIRECTION_LABELS[p.direction]}
+                    {p.counterparty ? ` · ${p.counterparty}` : ''}
+                  </div>
+                </div>
+                <div className="day-item-right">
+                  <div
+                    className={`day-item-amount ${
+                      p.direction === 'incoming' ? 'pos' : 'neg'
+                    }`}
+                  >
+                    {p.direction === 'incoming' ? '+' : '−'}
+                    {formatMoney(p.amount, p.currency)}
+                  </div>
+                  <span className={`badge badge-${p.status}`}>
+                    {STATUS_LABELS[p.status]}
+                  </span>
+                </div>
+                {canEdit && (
+                  <div className="day-item-actions">
+                    <button className="btn btn-sm" onClick={() => onEdit(p)}>
+                      ✎
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => onDelete(p)}
+                    >
+                      🗑
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="modal-actions">
+          <button className="btn btn-ghost" onClick={onClose}>
+            Закрыть
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

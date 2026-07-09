@@ -444,7 +444,7 @@ select:disabled {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
-  overflow: hidden;
+  overflow-x: auto;
   box-shadow: var(--shadow);
 }
 
@@ -571,6 +571,69 @@ tbody tr:hover {
   margin-top: 8px;
 }
 
+/* ---------- Day modal ---------- */
+.day-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.day-modal-header h2 {
+  margin: 0;
+}
+
+.day-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.day-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+.day-item-main {
+  flex: 1;
+  min-width: 120px;
+}
+
+.day-item-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.day-item-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.day-item-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.day-item-amount {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.day-item-actions {
+  display: flex;
+  gap: 6px;
+}
+
 /* ---------- Helpers ---------- */
 .muted {
   color: var(--muted);
@@ -579,4 +642,146 @@ tbody tr:hover {
 .center {
   text-align: center;
   padding: 40px;
+}
+
+/* ---------- Mobile ---------- */
+@media (max-width: 840px) {
+  .app {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 10px 14px 6px;
+  }
+
+  .brand {
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+
+  .brand-mark {
+    width: 34px;
+    height: 34px;
+    font-size: 13px;
+  }
+
+  .brand-title {
+    font-size: 13px;
+  }
+
+  .brand-sub {
+    font-size: 10.5px;
+  }
+
+  .nav {
+    flex-direction: row;
+    flex-basis: 100%;
+    order: 3;
+    overflow-x: auto;
+    gap: 2px;
+  }
+
+  .nav-link {
+    padding: 8px 10px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .sidebar-footer {
+    border-top: none;
+    padding-top: 0;
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .user-card {
+    display: none;
+  }
+
+  .content {
+    padding: 14px 12px;
+  }
+
+  .summary-bar {
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .summary-card {
+    min-width: calc(50% - 4px);
+    flex: 1;
+    padding: 10px 12px;
+  }
+
+  .summary-value {
+    font-size: 16px;
+  }
+
+  .summary-add {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .calendar-header h1 {
+    font-size: 18px;
+  }
+
+  .weekday {
+    padding: 6px 2px;
+    font-size: 10.5px;
+  }
+
+  .day {
+    min-height: 58px;
+    padding: 3px 4px;
+    gap: 2px;
+  }
+
+  .day-number {
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+  }
+
+  /* На телефоне суммы в ячейках не помещаются — платежи показываем
+     цветными полосками, детали открываются по тапу на день. */
+  .chip {
+    font-size: 0;
+    height: 6px;
+    padding: 0;
+    border-radius: 3px;
+  }
+
+  .chip-arrow {
+    display: none;
+  }
+
+  .page-header h1 {
+    font-size: 18px;
+  }
+
+  th,
+  td {
+    padding: 8px 9px;
+    font-size: 12.5px;
+  }
+
+  .modal {
+    padding: 18px;
+  }
+
+  .login-card {
+    width: 100%;
+    max-width: 360px;
+  }
 }
