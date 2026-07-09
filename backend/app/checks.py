@@ -195,12 +195,14 @@ def run_checks(db: Session, date_from: date | None = None,
                 f"~{med:,.2f} ({deviation:+.0%})",
             ))
 
-    # R4: незаполненные agent/warehouse (по документам, чтобы не спамить)
+    # R4: незаполненные agent/warehouse (по документам, чтобы не спамить).
+    # Продавец может прийти либо в колонке агента (старая выгрузка), либо
+    # в «ОтветственныйФИО» (новая) — жалуемся, только если нет обоих.
     for key, lines in docs.items():
         s0 = lines[0]
         missing = []
-        if all(not l.agent for l in lines):
-            missing.append("агент")
+        if all(not (l.agent or l.responsible) for l in lines):
+            missing.append("агент/ответственный")
         if all(not l.warehouse for l in lines):
             missing.append("склад")
         if missing:

@@ -41,6 +41,8 @@ HEADER_MAP = {
     "ПроцентСкидкиНаценки": "discount_pct",
     "СчетУчета": "account",
     "ОтветственныйНаименование": "responsible",
+    # Новый вариант выгрузки: ФИО того, кто оформил документ
+    "ОтветственныйФИО": "responsible",
 }
 
 REQUIRED_FIELDS = {"date", "client", "product", "qty", "price", "amount"}
@@ -276,8 +278,11 @@ def sales_summary(
         p = products.setdefault(s.product, {"name": s.product, "revenue": 0.0, "qty": 0.0})
         p["revenue"] += amt
         p["qty"] += float(s.qty)
-        if s.agent:
-            a = agents.setdefault(s.agent, {"name": s.agent, "revenue": 0.0, "docs": set()})
+        # В старой выгрузке продавца несёт колонка агента, в новой — ФИО
+        # ответственного; берём что есть.
+        agent_name = s.agent or s.responsible
+        if agent_name:
+            a = agents.setdefault(agent_name, {"name": agent_name, "revenue": 0.0, "docs": set()})
             a["revenue"] += amt
             if s.doc_number:
                 a["docs"].add(s.doc_number)
