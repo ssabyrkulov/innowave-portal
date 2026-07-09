@@ -8,7 +8,7 @@ services:
   - type: web
     name: innowave-portal
     runtime: docker
-    repo: https://github.com/ssabyrkulov/payment-calendar
+    repo: https://github.com/ssabyrkulov/innowave-portal
     branch: claude/innowave-group-calendar-81tcby
     dockerfilePath: ./Dockerfile
     dockerContext: .
