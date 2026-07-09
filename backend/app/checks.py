@@ -21,15 +21,17 @@ from . import models
 # ~50% — сигналим только на то, что выходит и за него.
 PRICE_DEVIATION_LIMIT = 0.50
 DISCOUNT_LIMIT = 15.0          # R8: максимальная скидка, %
-DOC_TOTAL_TOLERANCE = 0.01     # R1: допуск расхождения сумм
+# R1: допуск расхождения сумм — 1 сом на документ (округления 1С при
+# применении скидок к строкам).
+DOC_TOTAL_TOLERANCE = 1.0
 BASE_CURRENCY = "KGS"
 
 RULES = {
     "doc_total_mismatch": {
         "title": "Сумма строк ≠ сумме документа",
         "severity": "critical",
-        "hint": "Строки накладной в сумме не сходятся с полем «СуммаДокумента» — "
-                "часть позиций удалена или внесена с ошибкой.",
+        "hint": "Строки накладной (с учётом скидок) не сходятся с полем "
+                "«СуммаДокумента» — часть позиций удалена или внесена с ошибкой.",
     },
     "numbering_gap": {
         "title": "Пропуск в нумерации накладных",
@@ -109,19 +111,26 @@ def run_checks(db: Session, date_from: date | None = None,
         if s.doc_number:
             docs[f"{s.doc_number}|{s.date}"].append(s)
 
-    # R1: сумма строк vs СуммаДокумента
+    # R1: сумма строк vs СуммаДокумента. В выгрузке 1С «Сумма» строки — ДО
+    # скидки, а «СуммаДокумента» — ПОСЛЕ, поэтому сверяем оба варианта:
+    # напрямую и с применением «ПроцентСкидкиНаценки» к каждой строке.
     for key, lines in docs.items():
         doc_totals = {float(l.doc_total) for l in lines if l.doc_total is not None}
         if len(doc_totals) != 1:
             continue  # разные итоги ловит R7
         doc_total = doc_totals.pop()
         lines_sum = sum(float(l.amount) for l in lines)
-        if abs(lines_sum - doc_total) > DOC_TOTAL_TOLERANCE:
+        discounted_sum = sum(
+            float(l.amount) * (1 - float(l.discount_pct or 0) / 100)
+            for l in lines
+        )
+        diff = min(abs(lines_sum - doc_total), abs(discounted_sum - doc_total))
+        if diff > DOC_TOTAL_TOLERANCE:
             s0 = lines[0]
             violations.append(_v(
                 "doc_total_mismatch", key, s0.doc_number, s0.date, s0.client,
-                f"строки: {lines_sum:,.2f}, документ: {doc_total:,.2f}, "
-                f"разница {lines_sum - doc_total:+,.2f}",
+                f"строки: {lines_sum:,.2f}, со скидками: {discounted_sum:,.2f}, "
+                f"документ: {doc_total:,.2f}",
             ))
 
     # R7: один номер накладной — разные СуммаДокумента.
