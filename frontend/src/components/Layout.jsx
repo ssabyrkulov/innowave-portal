@@ -73,10 +73,20 @@ export default function Layout() {
 
         <div className="sidebar-footer">
           <div className="user-card">
-            <div className="user-name">{user.full_name}</div>
-            <div className="user-role">{ROLE_LABELS[user.role] || user.role}</div>
+            <div className="avatar">
+              {user.full_name
+                .split(/\s+/)
+                .slice(0, 2)
+                .map((w) => w[0])
+                .join('')
+                .toUpperCase()}
+            </div>
+            <div>
+              <div className="user-name">{user.full_name}</div>
+              <div className="user-role">{ROLE_LABELS[user.role] || user.role}</div>
+            </div>
           </div>
-          <button className="btn btn-ghost" onClick={logout}>
+          <button className="btn btn-ghost btn-logout" onClick={logout}>
             Выйти
           </button>
         </div>
