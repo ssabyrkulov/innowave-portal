@@ -45,6 +45,9 @@ export default function Layout() {
           <NavLink to="/analytics" className="nav-link">
             📊 Аналитика
           </NavLink>
+          <NavLink to="/debt" className="nav-link">
+            💰 Дебиторка
+          </NavLink>
           <NavLink to="/checks" className="nav-link">
             🛡 Контроль
             {alertTotal > 0 && (

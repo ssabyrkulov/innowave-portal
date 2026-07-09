@@ -1,0 +1,327 @@
+import { useEffect, useRef, useState } from 'react'
+import { api } from '../api'
+import { useAuth } from '../auth'
+import { formatMoney } from '../utils'
+
+const STALE_DAYS = 30
+
+function daysSince(iso) {
+  if (!iso) return Infinity
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)
+}
+
+function fmtDate(iso) {
+  return iso ? iso.split('-').reverse().join('.') : '—'
+}
+
+export default function DebtPage() {
+  const { can } = useAuth()
+  const [data, setData] = useState(null)
+  const [receipts, setReceipts] = useState([])
+  const [showReceipts, setShowReceipts] = useState(false)
+  const [error, setError] = useState(null)
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState(null)
+  const [replacePeriod, setReplacePeriod] = useState(false)
+  const [aliasDraft, setAliasDraft] = useState({})
+  const fileRef = useRef(null)
+
+  async function load() {
+    setError(null)
+    try {
+      setData(await api.receivables())
+      if (showReceipts) setReceipts(await api.listReceipts())
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  useEffect(() => {
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showReceipts])
+
+  async function onFile(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setImporting(true)
+    setImportResult(null)
+    setError(null)
+    try {
+      const res = await api.importReceipts(file, replacePeriod)
+      setImportResult(res)
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  async function linkAlias(payer) {
+    const client = aliasDraft[payer]
+    if (!client) return
+    try {
+      await api.createAlias(payer, client)
+      await load()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function saveRate(r, value) {
+    const rate = Number(value)
+    if (!rate || rate <= 0 || rate === r.rate) return
+    try {
+      await api.setReceiptRate(r.id, rate)
+      setReceipts(await api.listReceipts())
+      setData(await api.receivables())
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const debtors = data ? data.clients.filter((c) => c.debt > 0.01) : []
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Дебиторка</h1>
+        {can.editPayments && (
+          <div className="import-controls">
+            <label className="replace-toggle">
+              <input
+                type="checkbox"
+                checked={replacePeriod}
+                onChange={(e) => setReplacePeriod(e.target.checked)}
+              />{' '}
+              заменить период
+            </label>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".xlsx,.xlsm"
+              style={{ display: 'none' }}
+              onChange={onFile}
+            />
+            <button
+              className="btn btn-primary"
+              disabled={importing}
+              onClick={() => fileRef.current?.click()}
+            >
+              {importing ? 'Загрузка…' : '⬆ Загрузить оплаты из 1С'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="note-readonly">
+        Учитываются только безналичные оплаты (выгрузка «Поступление денежных
+        средств»). Наличные платежи пока не загружаются — реальные долги могут
+        быть ниже показанных.
+      </div>
+
+      {importResult && (
+        <div className="import-result">
+          Импорт завершён: добавлено <b>{importResult.added}</b>
+          {importResult.replaced_rows > 0 && (
+            <>, заменено строк периода: <b>{importResult.replaced_rows}</b></>
+          )}
+          {importResult.skipped_duplicates > 0 && (
+            <>, пропущено дублей: <b>{importResult.skipped_duplicates}</b></>
+          )}
+          {importResult.errors.length > 0 && (
+            <details>
+              <summary>Строк с ошибками: {importResult.errors.length}</summary>
+              <ul>
+                {importResult.errors.map((e, i) => (
+                  <li key={i}>{e}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+
+      {error && <div className="error">{error}</div>}
+
+      {data && !data.has_receipts ? (
+        <div className="table-wrap">
+          <div className="center muted">
+            Оплаты ещё не загружены.
+            {can.editPayments
+              ? ' Нажмите «Загрузить оплаты из 1С» и выберите выгрузку «Поступление денежных средств».'
+              : ' Попросите бухгалтера загрузить выгрузку оплат.'}
+          </div>
+        </div>
+      ) : data ? (
+        <>
+          <div className="summary-bar">
+            <div className="summary-card">
+              <span className="summary-label">Отгружено</span>
+              <span className="summary-value">{formatMoney(data.total_shipped)}</span>
+            </div>
+            <div className="summary-card summary-in">
+              <span className="summary-label">Оплачено</span>
+              <span className="summary-value">{formatMoney(data.total_paid)}</span>
+            </div>
+            <div className="summary-card summary-out">
+              <span className="summary-label">Долг</span>
+              <span className="summary-value">{formatMoney(data.total_debt)}</span>
+            </div>
+            <div className="summary-card">
+              <span className="summary-label">Должников</span>
+              <span className="summary-value">{debtors.length}</span>
+            </div>
+          </div>
+
+          {data.unmatched.length > 0 && can.editPayments && (
+            <div className="chart-card">
+              <h2 className="chart-title">
+                ⚠ Плательщики, не найденные среди клиентов ({data.unmatched.length})
+              </h2>
+              <p className="muted unmatched-hint">
+                Оплаты этих плательщиков не попадают в расчёт долгов, пока вы не
+                укажете, какой это клиент (обычно — другое написание имени).
+              </p>
+              <div className="unmatched-list">
+                {data.unmatched.map((u) => (
+                  <div key={u.payer} className="unmatched-row">
+                    <div className="unmatched-name">
+                      {u.payer}
+                      <span className="muted"> · {formatMoney(u.paid)} ({u.count} опл.)</span>
+                    </div>
+                    <input
+                      list="sales-clients"
+                      placeholder="Выберите клиента из продаж…"
+                      value={aliasDraft[u.payer] || ''}
+                      onChange={(e) =>
+                        setAliasDraft((d) => ({ ...d, [u.payer]: e.target.value }))
+                      }
+                    />
+                    <button
+                      className="btn btn-sm btn-primary"
+                      disabled={!data.sales_clients.includes(aliasDraft[u.payer])}
+                      onClick={() => linkAlias(u.payer)}
+                    >
+                      Связать
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <datalist id="sales-clients">
+                {data.sales_clients.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+            </div>
+          )}
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Клиент</th>
+                  <th className="num">Отгружено</th>
+                  <th className="num">Оплачено</th>
+                  <th className="num">Долг</th>
+                  <th>Посл. отгрузка</th>
+                  <th>Посл. оплата</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {debtors.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="muted center">
+                      Долгов нет 🎉
+                    </td>
+                  </tr>
+                )}
+                {debtors.map((c) => {
+                  const stale = daysSince(c.last_payment) > STALE_DAYS
+                  return (
+                    <tr key={c.client}>
+                      <td>{c.client}</td>
+                      <td className="num">{formatMoney(c.shipped)}</td>
+                      <td className="num pos">{formatMoney(c.paid)}</td>
+                      <td className="num neg">{formatMoney(c.debt)}</td>
+                      <td>{fmtDate(c.last_shipment)}</td>
+                      <td>{fmtDate(c.last_payment)}</td>
+                      <td>
+                        {stale && (
+                          <span className="badge badge-overdue" title={`Оплат не было больше ${STALE_DAYS} дней`}>
+                            {c.last_payment ? `>${daysSince(c.last_payment)} дн.` : 'не платил'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <h2 className="section-title">
+            <button
+              className="btn btn-ghost"
+              onClick={() => setShowReceipts((s) => !s)}
+            >
+              {showReceipts ? '▾' : '▸'} Все поступления
+            </button>
+          </h2>
+          {showReceipts && (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Дата</th>
+                    <th>Плательщик</th>
+                    <th>Операция</th>
+                    <th className="num">Сумма</th>
+                    <th>Валюта</th>
+                    <th className="num">Курс</th>
+                    <th className="num">В сомах</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {receipts.map((r) => (
+                    <tr key={r.id}>
+                      <td>{fmtDate(r.date)}</td>
+                      <td>{r.payer}</td>
+                      <td className="muted">{r.operation}</td>
+                      <td className="num">
+                        {Number(r.amount).toLocaleString('ru-RU')}
+                      </td>
+                      <td>
+                        {r.currency !== 'KGS' ? <b>{r.currency}</b> : r.currency}
+                      </td>
+                      <td className="num">
+                        {r.currency !== 'KGS' && can.editPayments ? (
+                          <input
+                            className="rate-input"
+                            type="number"
+                            step="0.01"
+                            defaultValue={r.rate}
+                            onBlur={(e) => saveRate(r, e.target.value)}
+                            title="Курс к сому — изменится после выхода из поля"
+                          />
+                        ) : (
+                          r.rate
+                        )}
+                      </td>
+                      <td className="num">{formatMoney(r.amount_kgs)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="center muted">Загрузка…</div>
+      )}
+    </div>
+  )
+}

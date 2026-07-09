@@ -76,6 +76,35 @@ class Sale(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class Receipt(Base):
+    """Поступление денежных средств из 1С (оплаты клиентов и прочее)."""
+
+    __tablename__ = "receipts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
+    # Курс к сому и сумма в сомах; для KGS курс = 1.
+    rate: Mapped[float] = mapped_column(Numeric(12, 4), default=1, nullable=False)
+    amount_kgs: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    payer: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    operation: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ClientAlias(Base):
+    """Ручное сопоставление: имя плательщика → клиент из продаж."""
+
+    __tablename__ = "client_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    payer: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    client: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ImportLog(Base):
     """Журнал загрузок Excel — кто, когда и что импортировал."""
 

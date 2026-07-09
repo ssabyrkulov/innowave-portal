@@ -865,6 +865,44 @@ tbody tr:hover {
   cursor: pointer;
 }
 
+/* ---------- Debt (дебиторка) ---------- */
+.unmatched-hint {
+  font-size: 12.5px;
+  margin: 0 0 10px;
+}
+
+.unmatched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.unmatched-row {
+  display: grid;
+  grid-template-columns: 1fr 260px auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.unmatched-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rate-input {
+  width: 78px;
+  padding: 4px 6px;
+  font-size: 13px;
+  text-align: right;
+}
+
+@media (max-width: 840px) {
+  .unmatched-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ---------- Helpers ---------- */
 .muted {
   color: var(--muted);

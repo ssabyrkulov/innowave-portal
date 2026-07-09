@@ -81,6 +81,19 @@ export const api = {
   },
   importLog: () => request('/sales/imports'),
 
+  importReceipts: (file, replacePeriod = false) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('replace_period', replacePeriod ? 'true' : 'false')
+    return request('/receipts/import', { method: 'POST', formData: fd })
+  },
+  receivables: () => request('/receipts/receivables'),
+  listReceipts: () => request('/receipts'),
+  setReceiptRate: (id, rate) =>
+    request(`/receipts/${id}/rate`, { method: 'PATCH', body: { rate } }),
+  createAlias: (payer, client) =>
+    request('/receipts/alias', { method: 'POST', body: { payer, client } }),
+
   checks: (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v != null && v !== '' && v !== false)
