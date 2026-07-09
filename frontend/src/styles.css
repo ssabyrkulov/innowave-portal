@@ -934,6 +934,67 @@ tbody tr:hover {
   padding: 10px 16px 14px;
 }
 
+.agent-sub {
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.target-input {
+  width: 110px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.target-track {
+  position: relative;
+  height: 14px;
+  background: var(--border);
+  border-radius: 7px;
+  margin-top: 5px;
+  overflow: hidden;
+  min-width: 110px;
+}
+
+.target-fill {
+  height: 100%;
+  border-radius: 7px;
+}
+
+.target-ok {
+  background: var(--in);
+}
+
+.target-behind {
+  background: #f59f00;
+}
+
+.target-pct {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  color: var(--text);
+}
+
+.agent-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.agent-panel {
+  min-width: 0;
+}
+
+.agents-hint {
+  font-size: 12.5px;
+  margin-top: 10px;
+}
+
 .agent-clients-title {
   font-size: 12px;
   font-weight: 600;
@@ -945,11 +1006,16 @@ tbody tr:hover {
 
 .agent-client-row {
   display: grid;
-  grid-template-columns: 1fr 160px 160px;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
   padding: 5px 0;
-  font-size: 13px;
+  font-size: 12.5px;
   border-bottom: 1px dashed var(--border);
+  align-items: baseline;
+}
+
+.agent-client-row .num {
+  white-space: nowrap;
 }
 
 .agent-client-row:last-child {

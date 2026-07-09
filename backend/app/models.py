@@ -105,6 +105,19 @@ class ClientAlias(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AgentTarget(Base):
+    """План продаж агента на месяц (YYYY-MM)."""
+
+    __tablename__ = "agent_targets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    agent: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    month: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+
+    __table_args__ = ()
+
+
 class ImportLog(Base):
     """Журнал загрузок Excel — кто, когда и что импортировал."""
 

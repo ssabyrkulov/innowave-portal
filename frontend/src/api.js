@@ -95,6 +95,8 @@ export const api = {
     request('/receipts/alias', { method: 'POST', body: { payer, client } }),
 
   agentsSummary: () => request('/agents/summary'),
+  setAgentTarget: (agent, month, amount) =>
+    request('/agents/target', { method: 'POST', body: { agent, month, amount } }),
 
   checks: (params = {}) => {
     const qs = new URLSearchParams(
