@@ -13,13 +13,15 @@ export function setToken(token) {
   else localStorage.removeItem(TOKEN_KEY)
 }
 
-async function request(path, { method = 'GET', body, form } = {}) {
+async function request(path, { method = 'GET', body, form, formData } = {}) {
   const headers = {}
   const token = getToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
 
   let payload
-  if (form) {
+  if (formData) {
+    payload = formData // Content-Type с boundary браузер выставит сам
+  } else if (form) {
     payload = new URLSearchParams(form).toString()
     headers['Content-Type'] = 'application/x-www-form-urlencoded'
   } else if (body !== undefined) {
@@ -70,4 +72,16 @@ export const api = {
   createPayment: (body) => request('/payments', { method: 'POST', body }),
   updatePayment: (id, body) => request(`/payments/${id}`, { method: 'PATCH', body }),
   deletePayment: (id) => request(`/payments/${id}`, { method: 'DELETE' }),
+
+  importSales: (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request('/sales/import', { method: 'POST', formData: fd })
+  },
+  salesSummary: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString()
+    return request(`/sales/summary${qs ? `?${qs}` : ''}`)
+  },
 }

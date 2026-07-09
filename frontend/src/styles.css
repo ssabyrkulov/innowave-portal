@@ -634,6 +634,149 @@ tbody tr:hover {
   gap: 6px;
 }
 
+/* ---------- Analytics ---------- */
+.filter-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.import-result {
+  background: #ebfbee;
+  border: 1px solid #b2f2bb;
+  color: #2b8a3e;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  margin-bottom: 14px;
+}
+
+.import-result details {
+  margin-top: 6px;
+}
+
+.import-result summary {
+  cursor: pointer;
+}
+
+.import-result ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+  margin-bottom: 16px;
+}
+
+.chart-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.chart-scroll {
+  overflow-x: auto;
+}
+
+.column-chart {
+  width: 100%;
+  min-width: 560px;
+  display: block;
+}
+
+.grid-line {
+  stroke: #edf0f6;
+  stroke-width: 1;
+}
+
+.axis-line {
+  stroke: #ccd2de;
+  stroke-width: 1;
+}
+
+.bar {
+  fill: var(--primary);
+}
+
+.bar-group:hover .bar {
+  fill: var(--primary-dark);
+}
+
+.bar-label {
+  font-size: 11px;
+  fill: var(--text);
+  font-weight: 600;
+}
+
+.tick-label {
+  font-size: 10px;
+  fill: var(--muted);
+}
+
+.tops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.top-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.top-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 150px) 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.top-name {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.top-bar-track {
+  height: 12px;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.top-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--primary);
+  min-width: 2px;
+}
+
+.top-vals {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.25;
+}
+
+.top-money {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.top-extra {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* ---------- Helpers ---------- */
 .muted {
   color: var(--muted);

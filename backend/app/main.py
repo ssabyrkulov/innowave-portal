@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .database import Base, engine
-from .routers import auth, payments, users
+from .routers import auth, payments, sales, users
 from .seed import seed_initial_admin
 
 app = FastAPI(
@@ -43,6 +43,7 @@ def health():
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(payments.router)
+app.include_router(sales.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

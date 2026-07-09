@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import { useAuth } from './auth'
 import Login from './pages/Login'
+import AnalyticsPage from './pages/AnalyticsPage'
 import CalendarPage from './pages/CalendarPage'
 import PaymentsPage from './pages/PaymentsPage'
 import UsersPage from './pages/UsersPage'
@@ -28,6 +29,7 @@ export default function App() {
       >
         <Route index element={<CalendarPage />} />
         <Route path="payments" element={<PaymentsPage />} />
+        <Route path="analytics" element={<AnalyticsPage />} />
         <Route
           path="users"
           element={

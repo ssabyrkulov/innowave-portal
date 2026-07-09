@@ -28,6 +28,9 @@ export default function Layout() {
           <NavLink to="/payments" className="nav-link">
             📋 Платежи
           </NavLink>
+          <NavLink to="/analytics" className="nav-link">
+            📊 Аналитика
+          </NavLink>
           {can.manageUsers && (
             <NavLink to="/users" className="nav-link">
               👥 Пользователи

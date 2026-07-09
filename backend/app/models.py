@@ -49,6 +49,30 @@ class User(Base):
     )
 
 
+class Sale(Base):
+    """Строка реализации товаров из 1С (импорт из Excel)."""
+
+    __tablename__ = "sales"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    client: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
+    product: Mapped[str] = mapped_column(String, nullable=False)
+    qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
+    price: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    doc_total: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    agent: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Хэш строки для идемпотентного импорта: повторная загрузка того же
+    # файла не создаёт дублей.
+    row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Payment(Base):
     __tablename__ = "payments"
 
