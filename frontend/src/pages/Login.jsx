@@ -34,7 +34,7 @@ export default function Login() {
           <div className="brand-mark">IW</div>
           <div>
             <div className="brand-title">InnoWave Group</div>
-            <div className="brand-sub">Платёжный календарь</div>
+            <div className="brand-sub">Корпоративный портал</div>
           </div>
         </div>
 

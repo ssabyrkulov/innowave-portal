@@ -11,8 +11,9 @@ from .routers import auth, payments, users
 from .seed import seed_initial_admin
 
 app = FastAPI(
-    title="InnoWave Group — Payment Calendar API",
-    description="Платёжный календарь с пользователями и правами доступа",
+    title="InnoWave Group — Corporate Portal API",
+    description="Корпоративный портал: платёжный календарь и другие модули, "
+    "пользователи и права доступа",
     version="1.0.0",
 )
 
@@ -36,7 +37,7 @@ def on_startup() -> None:
 
 @app.get("/healthz", tags=["health"])
 def health():
-    return {"status": "ok", "service": "payment-calendar"}
+    return {"status": "ok", "service": "innowave-portal"}
 
 
 app.include_router(auth.router)
@@ -69,4 +70,4 @@ else:
 
     @app.get("/", tags=["health"], include_in_schema=False)
     def root():
-        return {"status": "ok", "service": "payment-calendar", "docs": "/docs"}
+        return {"status": "ok", "service": "innowave-portal", "docs": "/docs"}

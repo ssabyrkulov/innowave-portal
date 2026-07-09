@@ -1,4 +1,4 @@
-# 🚀 Деплой в интернет — пошаговая инструкция
+# 🚀 Деплой портала в интернет — пошаговая инструкция
 
 Всё приложение (сайт + API + база данных) разворачивается **одним сервисом на
 [Render](https://render.com)** — бесплатно. Регистрация через GitHub, ~5 минут.
@@ -18,7 +18,7 @@
 5. Нажмите **Apply / Create**. Render соберёт приложение (первая сборка
    занимает 5–10 минут).
 6. Когда статус станет **Live** — скопируйте адрес сервиса, например:
-   `https://payment-calendar.onrender.com`
+   `https://innowave-portal.onrender.com`
 
 **Это уже рабочая ссылка на сайт.** Откройте её и войдите:
 - **Email:** `admin@innowave.group`
@@ -55,10 +55,10 @@ Dashboard → домен `innowave-group.com` → **DNS → Records → Add reco
 
 | Type | Name | Target | Proxy status |
 |---|---|---|---|
-| `CNAME` | `@` | `payment-calendar-XXXX.onrender.com` | **DNS only** (серое облачко!) |
-| `CNAME` | `www` | `payment-calendar-XXXX.onrender.com` | **DNS only** (серое облачко!) |
+| `CNAME` | `@` | `innowave-portal-XXXX.onrender.com` | **DNS only** (серое облачко!) |
+| `CNAME` | `www` | `innowave-portal-XXXX.onrender.com` | **DNS only** (серое облачко!) |
 
-`payment-calendar-XXXX.onrender.com` — служебный адрес вашего сервиса,
+`innowave-portal-XXXX.onrender.com` — служебный адрес вашего сервиса,
 Render показывает его в шаге 2.1.
 
 ### 2.3. Подождать
