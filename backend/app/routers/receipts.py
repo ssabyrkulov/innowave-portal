@@ -111,10 +111,12 @@ async def import_receipts(
             amount = float(str(data.get("amount")).replace(" ", "").replace(",", "."))
         except (TypeError, ValueError):
             amount = None
-        payer = str(data.get("payer") or "").strip()
-        if not dt or amount is None or not payer:
+        # Контрагент бывает пуст у служебных операций (снятие наличных,
+        # прочий приход) — такие строки сохраняем, в дебиторку они не идут.
+        payer = str(data.get("payer") or "").strip() or "Не указан"
+        if not dt or amount is None:
             if len(errors) < 20:
-                errors.append(f"Строка {line_no}: нет даты, суммы или контрагента")
+                errors.append(f"Строка {line_no}: нет даты или суммы")
             return
         currency = (str(data.get("currency") or "KGS").strip() or "KGS")[:3]
         rate = DEFAULT_RATES.get(currency, 1.0)
