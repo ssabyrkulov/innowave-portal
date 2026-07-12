@@ -57,7 +57,9 @@ function syncNewFiles() {
       const res = UrlFetchApp.fetch(ENDPOINT, {
         method: 'post',
         headers: { Authorization: 'Bearer ' + TOKEN },
-        payload: { file: f.getBlob() },
+        // fname — имя файла отдельным полем (кириллица в заголовке multipart
+        // портится, а в поле формы приходит корректно)
+        payload: { file: f.getBlob(), fname: f.getName() },
         muteHttpExceptions: true,
       });
       const code = res.getResponseCode();

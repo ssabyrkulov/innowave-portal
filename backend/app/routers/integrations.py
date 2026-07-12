@@ -10,7 +10,7 @@ import io
 import secrets
 
 import openpyxl
-from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -149,11 +149,15 @@ async def inbox(
     file: UploadFile,
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
+    fname: str | None = Form(default=None),
 ):
     _require_token(authorization)
 
     content = await file.read()
-    filename = _recover_filename(file.filename or "file.xlsx")
+    # Имя из поля формы (fname) — приходит корректным UTF-8, в отличие от
+    # имени в заголовке multipart, где кириллица портится. Заголовок —
+    # запасной вариант с попыткой восстановления.
+    filename = fname or _recover_filename(file.filename or "file.xlsx")
     # Имя файла — первичный сигнал; колонки — запасной для незнакомых имён.
     kind = classify_by_name(filename) or sniff_kind(content)
     if kind == "ignore":
