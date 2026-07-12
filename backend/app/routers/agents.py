@@ -27,6 +27,7 @@ def agents_summary(
 ):
     sales = db.query(models.Sale).all()
     receipts = db.query(models.Receipt).all()
+    return_docs = db.query(models.ReturnDoc).all()
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
     today = date.today()
     cur_month = today.strftime("%Y-%m")
@@ -70,8 +71,20 @@ def agents_summary(
         if client not in last_payment_by_client or r.date > last_payment_by_client[client]:
             last_payment_by_client[client] = r.date
 
+    returned_by_client: dict[str, float] = defaultdict(float)
+    for rd in return_docs:
+        client = aliases.get(rd.client)
+        if client is None:
+            client = rd.client if rd.client in shipped_by_client else norm_clients.get(_normalize(rd.client))
+        returned_by_client[client or rd.client] += float(rd.amount)
+
     debt_by_client = {
-        c: round(shipped_by_client[c] - paid_by_client.get(c, 0.0), 2)
+        c: round(
+            shipped_by_client[c]
+            - returned_by_client.get(c, 0.0)
+            - paid_by_client.get(c, 0.0),
+            2,
+        )
         for c in shipped_by_client
     }
 

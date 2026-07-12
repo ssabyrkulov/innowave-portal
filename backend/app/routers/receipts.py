@@ -277,9 +277,10 @@ def receivables(
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
 ):
-    """Дебиторка: отгружено − оплачено по каждому клиенту."""
+    """Дебиторка: отгружено − возвраты − оплачено по каждому клиенту."""
     sales = db.query(models.Sale).all()
     receipts = db.query(models.Receipt).all()
+    return_docs = db.query(models.ReturnDoc).all()
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
 
     # Отгрузки по клиентам: итог документа (после скидок); документы без
@@ -309,6 +310,14 @@ def receivables(
 
     norm_clients = {_normalize(c): c for c in shipped}
 
+    # Возвраты уменьшают долг клиента (сопоставление имён — как у оплат)
+    returned: dict[str, float] = defaultdict(float)
+    for rd in return_docs:
+        client = aliases.get(rd.client)
+        if client is None:
+            client = rd.client if rd.client in shipped else norm_clients.get(_normalize(rd.client))
+        returned[client or rd.client] += float(rd.amount)
+
     paid: dict[str, float] = defaultdict(float)
     last_payment: dict[str, date] = {}
     unmatched: dict[str, dict] = {}
@@ -331,22 +340,29 @@ def receivables(
             last_payment[client] = r.date
 
     clients = []
-    for client in set(shipped) | set(paid):
-        sh, pd = shipped.get(client, 0.0), paid.get(client, 0.0)
+    for client in set(shipped) | set(paid) | set(returned):
+        sh = shipped.get(client, 0.0)
+        pd = paid.get(client, 0.0)
+        ret = returned.get(client, 0.0)
         clients.append({
             "client": client,
             "shipped": round(sh, 2),
+            "returned": round(ret, 2),
             "paid": round(pd, 2),
-            "debt": round(sh - pd, 2),
+            "debt": round(sh - ret - pd, 2),
             "last_shipment": last_shipment.get(client) and last_shipment[client].isoformat(),
             "last_payment": last_payment.get(client) and last_payment[client].isoformat(),
         })
     clients.sort(key=lambda c: -c["debt"])
 
+    total_shipped = sum(shipped.values())
+    total_paid = sum(paid.values())
+    total_returned = sum(returned.values())
     return {
-        "total_shipped": round(sum(shipped.values()), 2),
-        "total_paid": round(sum(paid.values()), 2),
-        "total_debt": round(sum(shipped.values()) - sum(paid.values()), 2),
+        "total_shipped": round(total_shipped, 2),
+        "total_returned": round(total_returned, 2),
+        "total_paid": round(total_paid, 2),
+        "total_debt": round(total_shipped - total_returned - total_paid, 2),
         "clients": clients,
         "unmatched": sorted(unmatched.values(), key=lambda u: -u["paid"]),
         "sales_clients": sorted(shipped.keys()),

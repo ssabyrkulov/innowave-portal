@@ -116,7 +116,14 @@ function DesktopDash({ data }) {
       </div>
 
       <div className="summary-bar">
-        <div className="summary-card summary-in">
+        {data.cash && (
+          <div className="summary-card summary-in">
+            <span className="summary-label">Деньги на счетах и в кассах</span>
+            <span className="summary-value">{formatMoney(data.cash.total)}</span>
+            <span className="dash-delta muted">{data.cash.accounts} счетов · из 1С</span>
+          </div>
+        )}
+        <div className={`summary-card ${data.cash ? '' : 'summary-in'}`}>
           <span className="summary-label">Поступило от клиентов · {monthLabel(data.current_month)}</span>
           <span className="summary-value">{formatMoney(data.money.month_in)}</span>
           <Delta cur={data.money.month_in} prev={data.money.prev_month_in} />
@@ -235,7 +242,14 @@ function MobileDash({ data, user }) {
       )}
 
       <div className="mdash-carousel">
-        <div className="mdash-kpi mdash-kpi-money">
+        {data.cash && (
+          <div className="mdash-kpi mdash-kpi-money">
+            <div className="mdash-kpi-label">На счетах и в кассах</div>
+            <div className="mdash-kpi-value">{shortMoney(data.cash.total)}</div>
+            <div className="mdash-kpi-sub">{data.cash.accounts} счетов</div>
+          </div>
+        )}
+        <div className={`mdash-kpi ${data.cash ? '' : 'mdash-kpi-money'}`}>
           <div className="mdash-kpi-label">Поступило · {monthLabel(data.current_month)}</div>
           <div className="mdash-kpi-value">{shortMoney(data.money.month_in)}</div>
           <Delta cur={data.money.month_in} prev={data.money.prev_month_in} />

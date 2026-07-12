@@ -99,15 +99,12 @@ async def import_sales(
     )
 
 
-def import_sales_workbook(
-    db: Session,
-    content: bytes,
-    filename: str,
-    user_id: int,
-    replace_period: bool = False,
-) -> dict:
-    """Импорт выгрузки продаж из байтов Excel (используется и веб-загрузкой,
-    и автоприёмом из Google Drive)."""
+def parse_sales_workbook(content: bytes) -> tuple[list[dict], list[str]]:
+    """Разбирает Excel продаж (или возвратов в том же формате) в строки.
+
+    Возвращает (parsed_rows, errors). Используется импортом продаж и
+    очисткой ошибочно загруженных возвратов.
+    """
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     except Exception:
@@ -183,6 +180,20 @@ def import_sales_workbook(
         process(row, line_no)
     for line_no, row in enumerate(rows, start=line_no + 1):
         process(row, line_no)
+
+    return parsed_rows, errors
+
+
+def import_sales_workbook(
+    db: Session,
+    content: bytes,
+    filename: str,
+    user_id: int,
+    replace_period: bool = False,
+) -> dict:
+    """Импорт выгрузки продаж из байтов Excel (используется и веб-загрузкой,
+    и автоприёмом из Google Drive)."""
+    parsed_rows, errors = parse_sales_workbook(content)
 
     replaced = 0
     if replace_period and parsed_rows:

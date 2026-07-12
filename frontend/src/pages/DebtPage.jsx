@@ -162,6 +162,12 @@ export default function DebtPage() {
               <span className="summary-label">Отгружено</span>
               <span className="summary-value">{formatMoney(data.total_shipped)}</span>
             </div>
+            {data.total_returned > 0 && (
+              <div className="summary-card">
+                <span className="summary-label">Возвраты</span>
+                <span className="summary-value">−{formatMoney(data.total_returned)}</span>
+              </div>
+            )}
             <div className="summary-card summary-in">
               <span className="summary-label">Оплачено</span>
               <span className="summary-value">{formatMoney(data.total_paid)}</span>
@@ -224,6 +230,7 @@ export default function DebtPage() {
                 <tr>
                   <th>Клиент</th>
                   <th className="num">Отгружено</th>
+                  <th className="num">Возвраты</th>
                   <th className="num">Оплачено</th>
                   <th className="num">Долг</th>
                   <th>Посл. отгрузка</th>
@@ -234,7 +241,7 @@ export default function DebtPage() {
               <tbody>
                 {debtors.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="muted center">
+                    <td colSpan={8} className="muted center">
                       Долгов нет 🎉
                     </td>
                   </tr>
@@ -245,6 +252,9 @@ export default function DebtPage() {
                     <tr key={c.client}>
                       <td>{c.client}</td>
                       <td className="num">{formatMoney(c.shipped)}</td>
+                      <td className="num muted">
+                        {c.returned > 0 ? `−${formatMoney(c.returned)}` : '—'}
+                      </td>
                       <td className="num pos">{formatMoney(c.paid)}</td>
                       <td className="num neg">{formatMoney(c.debt)}</td>
                       <td>{fmtDate(c.last_shipment)}</td>

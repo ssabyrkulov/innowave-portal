@@ -11,11 +11,13 @@ from .database import Base, engine
 from .routers import (
     agents,
     auth,
+    balances,
     checks,
     dashboard,
     integrations,
     payments,
     receipts,
+    returns,
     sales,
     users,
 )
@@ -82,6 +84,8 @@ app.include_router(receipts.router)
 app.include_router(agents.router)
 app.include_router(dashboard.router)
 app.include_router(integrations.router)
+app.include_router(returns.router)
+app.include_router(balances.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

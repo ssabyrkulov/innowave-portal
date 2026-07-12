@@ -94,6 +94,44 @@ class Receipt(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ReturnDoc(Base):
+    """Возврат товаров от покупателя (уровень документа) из 1С."""
+
+    __tablename__ = "return_docs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
+    client: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CashBalance(Base):
+    """Снапшот остатков денег по кассам/счетам (ВыгрузкаБанкКасса)."""
+
+    __tablename__ = "cash_balances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    account: Mapped[str] = mapped_column(String, nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class StockBalance(Base):
+    """Снапшот остатков товаров по складам (ВыгрузкаОст)."""
+
+    __tablename__ = "stock_balances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    product: Mapped[str] = mapped_column(String, nullable=False)
+    warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ClientAlias(Base):
     """Ручное сопоставление: имя плательщика → клиент из продаж."""
 

@@ -73,6 +73,12 @@ RULES = {
         "hint": f"Скидка превышает {int(DISCOUNT_LIMIT)}% — требуется "
                 "подтверждение руководителя.",
     },
+    "negative_stock": {
+        "title": "Отрицательный остаток на складе",
+        "severity": "critical",
+        "hint": "Продано больше, чем оприходовано — не введены поступления "
+                "товара или пересорт.",
+    },
 }
 
 
@@ -100,10 +106,10 @@ def run_checks(db: Session, date_from: date | None = None,
     if date_to:
         query = query.filter(models.Sale.date <= date_to)
     sales = query.all()
-    if not sales:
-        return []
-
     violations: list[dict] = []
+    if not sales:
+        # Продаж нет — но складские проверки всё равно выполняем ниже
+        sales = []
 
     # Группировка по документам (номер + дата — как в summary)
     docs: dict[str, list] = defaultdict(list)
@@ -235,6 +241,17 @@ def run_checks(db: Session, date_from: date | None = None,
             violations.append(_v(
                 "discount_over_limit", s.row_hash, s.doc_number, s.date, s.client,
                 f"{s.product}: скидка {float(s.discount_pct):g}%",
+            ))
+
+    # R9: отрицательные остатки на складах (по последнему снапшоту 1С)
+    for sb in db.query(models.StockBalance).all():
+        if float(sb.qty) < 0 or float(sb.amount) < 0:
+            violations.append(_v(
+                "negative_stock",
+                f"{sb.product}|{sb.warehouse}",
+                None, None, None,
+                f"{sb.product} / {sb.warehouse or 'склад не указан'}: "
+                f"{float(sb.qty):g} шт, {float(sb.amount):,.2f} сом",
             ))
 
     severity_rank = {"critical": 0, "warning": 1}

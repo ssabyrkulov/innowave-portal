@@ -34,6 +34,7 @@ def dashboard(
 
     # --- Дебиторка (та же логика, что в /receipts/receivables) ---
     receipts = db.query(models.Receipt).all()
+    return_docs = db.query(models.ReturnDoc).all()
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
 
     shipped: dict[str, float] = defaultdict(float)
@@ -68,15 +69,30 @@ def dashboard(
         if client is not None:
             paid[client] += float(r.amount_kgs)
 
+    returned: dict[str, float] = defaultdict(float)
+    for rd in return_docs:
+        client = aliases.get(rd.client)
+        if client is None:
+            client = rd.client if rd.client in shipped else norm_clients.get(_normalize(rd.client))
+        returned[client or rd.client] += float(rd.amount)
+
     debts = sorted(
         (
-            {"name": c, "debt": round(shipped[c] - paid.get(c, 0.0), 2)}
+            {"name": c, "debt": round(shipped[c] - returned.get(c, 0.0) - paid.get(c, 0.0), 2)}
             for c in shipped
-            if shipped[c] - paid.get(c, 0.0) > 0.01
+            if shipped[c] - returned.get(c, 0.0) - paid.get(c, 0.0) > 0.01
         ),
         key=lambda x: -x["debt"],
     )
     total_debt = round(sum(d["debt"] for d in debts), 2)
+
+    # --- Деньги на счетах (снапшот из 1С) ---
+    cash_rows = db.query(models.CashBalance).all()
+    cash = {
+        "total": round(sum(float(r.amount) for r in cash_rows), 2),
+        "updated_at": cash_rows[0].updated_at.isoformat() if cash_rows else None,
+        "accounts": len(cash_rows),
+    } if cash_rows else None
 
     # --- Контроль ---
     acked = {a.vhash for a in db.query(models.ViolationAck).all()}
@@ -127,6 +143,7 @@ def dashboard(
             "month_in": round(month_in, 2),
             "prev_month_in": round(prev_month_in, 2),
         },
+        "cash": cash,
         "debt": {
             "total": total_debt,
             "debtors": len(debts),
