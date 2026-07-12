@@ -1930,3 +1930,69 @@ tbody tr:hover {
     width: 90px;
   }
 }
+
+/* ---------- Поиск по номенклатуре (Аналитика) ---------- */
+.product-search-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.product-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+}
+
+.product-search-input:focus {
+  outline: none;
+  border-color: var(--text);
+  background: var(--surface);
+}
+
+.product-search-hint {
+  font-size: 13.5px;
+  padding: 6px 2px;
+}
+
+.product-search-total {
+  font-size: 14px;
+  color: var(--text);
+  padding: 4px 2px 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.product-search-total b {
+  font-weight: 600;
+}
+
+.product-search-table {
+  margin-top: 12px;
+}
+
+.num-col {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.product-search-period {
+  color: var(--faint);
+  font-size: 12.5px;
+}
+
+@media (max-width: 840px) {
+  .product-search-period {
+    display: none;
+  }
+  .product-search-input {
+    font-size: 16px; /* iOS не зумит при фокусе от 16px */
+  }
+}

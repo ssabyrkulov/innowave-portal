@@ -349,6 +349,81 @@ def sales_summary(
     }
 
 
+@router.get("/products")
+def sales_products(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    q: str | None = Query(default=None, description="Поиск по названию номенклатуры"),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    limit: int = Query(default=200, le=1000),
+):
+    """Продажи в разрезе номенклатуры: сколько штук и на какую сумму продано
+    каждого товара за период. Поддерживает поиск по подстроке названия —
+    под вопросы вида «сколько продали туалетной бумаги по сегодня».
+    """
+    query = db.query(models.Sale)
+    if date_from:
+        query = query.filter(models.Sale.date >= date_from)
+    if date_to:
+        query = query.filter(models.Sale.date <= date_to)
+    if q:
+        # регистронезависимый поиск по подстроке (работает и в SQLite, и в PG)
+        query = query.filter(models.Sale.product.ilike(f"%{q.strip()}%"))
+    sales = query.all()
+
+    products: dict[str, dict] = {}
+    total_qty = total_amount = 0.0
+    total_docs: set[str] = set()
+    for s in sales:
+        amt = float(s.amount)
+        qty = float(s.qty)
+        total_qty += qty
+        total_amount += amt
+        if s.doc_number:
+            total_docs.add(f"{s.doc_number}|{s.date}")
+        p = products.setdefault(s.product, {
+            "product": s.product, "qty": 0.0, "amount": 0.0,
+            "unit": s.unit or "шт", "docs": set(),
+            "first_date": s.date, "last_date": s.date,
+        })
+        p["qty"] += qty
+        p["amount"] += amt
+        if s.unit and p["unit"] == "шт":
+            p["unit"] = s.unit
+        if s.doc_number:
+            p["docs"].add(f"{s.doc_number}|{s.date}")
+        if s.date < p["first_date"]:
+            p["first_date"] = s.date
+        if s.date > p["last_date"]:
+            p["last_date"] = s.date
+
+    rows = sorted(
+        (
+            {
+                "product": p["product"],
+                "qty": round(p["qty"], 3),
+                "amount": round(p["amount"], 2),
+                "unit": p["unit"],
+                "docs": len(p["docs"]),
+                "first_date": p["first_date"].isoformat(),
+                "last_date": p["last_date"].isoformat(),
+            }
+            for p in products.values()
+        ),
+        key=lambda x: -x["amount"],
+    )
+
+    return {
+        "query": q or "",
+        "count": len(rows),
+        "total_qty": round(total_qty, 3),
+        "total_amount": round(total_amount, 2),
+        "total_docs": len(total_docs),
+        "products": rows[:limit],
+    }
+
+
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 def clear_sales(
     db: Session = Depends(get_db),

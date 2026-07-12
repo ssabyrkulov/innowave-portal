@@ -174,6 +174,8 @@ export default function AnalyticsPage() {
             </div>
           )}
 
+          <ProductSearch dateFrom={dateFrom} dateTo={dateTo} />
+
           <div className="tops-grid">
             <TopTable
               title="Топ клиентов"
@@ -194,6 +196,126 @@ export default function AnalyticsPage() {
         </>
       ) : (
         <div className="center muted">Загрузка…</div>
+      )}
+    </div>
+  )
+}
+
+function fmtDate(iso) {
+  if (!iso) return ''
+  const [y, m, d] = iso.split('-')
+  return `${d}.${m}.${y}`
+}
+
+function fmtQty(v) {
+  return Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 2 })
+}
+
+// Поиск по номенклатуре: «сколько штук и на какую сумму продали товара X».
+// Даёт быстрый ответ на вопросы про конкретный товар без обращения ко мне.
+function ProductSearch({ dateFrom, dateTo }) {
+  const [q, setQ] = useState('')
+  const [res, setRes] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => {
+    // пустой запрос без дат не грузим — иначе тянем всю номенклатуру зря
+    if (!q.trim() && !dateFrom && !dateTo) {
+      setRes(null)
+      return
+    }
+    const t = setTimeout(async () => {
+      setLoading(true)
+      setErr(null)
+      try {
+        setRes(await api.salesProducts({ q: q.trim(), date_from: dateFrom, date_to: dateTo }))
+      } catch (e) {
+        setErr(e.message)
+      } finally {
+        setLoading(false)
+      }
+    }, 350)
+    return () => clearTimeout(t)
+  }, [q, dateFrom, dateTo])
+
+  return (
+    <div className="chart-card">
+      <h2 className="chart-title">Поиск по номенклатуре</h2>
+      <div className="product-search-bar">
+        <input
+          className="product-search-input"
+          type="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Название товара, напр. «туалетная бумага», «салфетки»…"
+        />
+        {q && (
+          <button className="btn btn-ghost" onClick={() => setQ('')}>
+            Очистить
+          </button>
+        )}
+      </div>
+
+      {err && <div className="error">{err}</div>}
+
+      {!res && !loading && (
+        <div className="muted product-search-hint">
+          Введите часть названия товара — покажу, сколько штук и на какую сумму
+          продано{dateFrom || dateTo ? ' за выбранный период' : ''}.
+        </div>
+      )}
+
+      {loading && <div className="muted product-search-hint">Ищу…</div>}
+
+      {res && !loading && (
+        <>
+          <div className="product-search-total">
+            {res.count === 0 ? (
+              <span className="muted">Ничего не найдено по запросу «{res.query}».</span>
+            ) : (
+              <>
+                Найдено позиций: <b>{res.count}</b> · продано{' '}
+                <b>{fmtQty(res.total_qty)} шт</b> на{' '}
+                <b>{formatMoney(res.total_amount)}</b>
+                {res.total_docs > 0 && <> · накладных: <b>{res.total_docs}</b></>}
+              </>
+            )}
+          </div>
+
+          {res.count > 0 && (
+            <div className="table-wrap product-search-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Товар</th>
+                    <th className="num-col">Кол-во</th>
+                    <th className="num-col">Сумма</th>
+                    <th className="num-col">Накл.</th>
+                    <th className="num-col">Период продаж</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {res.products.map((p) => (
+                    <tr key={p.product}>
+                      <td>{p.product}</td>
+                      <td className="num num-col">
+                        {fmtQty(p.qty)} {p.unit}
+                      </td>
+                      <td className="num num-col">{formatMoney(p.amount)}</td>
+                      <td className="num num-col">{p.docs}</td>
+                      <td className="num num-col product-search-period">
+                        {p.first_date === p.last_date
+                          ? fmtDate(p.first_date)
+                          : `${fmtDate(p.first_date)}—${fmtDate(p.last_date)}`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </div>
   )

@@ -116,4 +116,11 @@ export const api = {
     ).toString()
     return request(`/sales/summary${qs ? `?${qs}` : ''}`)
   },
+
+  salesProducts: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString()
+    return request(`/sales/products${qs ? `?${qs}` : ''}`)
+  },
 }
