@@ -130,6 +130,8 @@ class ImportLog(Base):
     skipped: Mapped[int] = mapped_column(Integer, default=0)
     errors_count: Mapped[int] = mapped_column(Integer, default=0)
     replace_period: Mapped[bool] = mapped_column(Boolean, default=False)
+    # SHA-256 содержимого файла — автоприём не обрабатывает один файл дважды
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship()

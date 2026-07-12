@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed frontend origins, or "*" for any.
     cors_origins: str = "*"
 
+    # Секрет для автоприёма файлов из Google Drive (Apps Script).
+    # Пустая строка = автоприём выключен.
+    inbox_token: str = ""
+
     first_admin_email: str = "admin@innowave.group"
     first_admin_password: str = "admin123"
     first_admin_name: str = "Administrator"

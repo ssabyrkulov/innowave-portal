@@ -72,6 +72,19 @@ async def import_receipts(
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="Ожидается файл Excel (.xlsx)")
     content = await file.read()
+    return import_receipts_workbook(
+        db, content, file.filename, current.id, replace_period
+    )
+
+
+def import_receipts_workbook(
+    db: Session,
+    content: bytes,
+    filename: str,
+    user_id: int,
+    replace_period: bool = False,
+) -> dict:
+    """Импорт поступлений из байтов Excel (веб-загрузка и автоприём)."""
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     except Exception:
@@ -164,8 +177,8 @@ async def import_receipts(
         added += 1
 
     db.add(models.ImportLog(
-        filename=f"[оплаты] {file.filename}",
-        user_id=current.id,
+        filename=f"[оплаты] {filename}",
+        user_id=user_id,
         added=added,
         skipped=skipped,
         errors_count=len(errors),

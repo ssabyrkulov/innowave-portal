@@ -94,6 +94,20 @@ async def import_sales(
             detail="Ожидается файл Excel (.xlsx)",
         )
     content = await file.read()
+    return import_sales_workbook(
+        db, content, file.filename, current.id, replace_period
+    )
+
+
+def import_sales_workbook(
+    db: Session,
+    content: bytes,
+    filename: str,
+    user_id: int,
+    replace_period: bool = False,
+) -> dict:
+    """Импорт выгрузки продаж из байтов Excel (используется и веб-загрузкой,
+    и автоприёмом из Google Drive)."""
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     except Exception:
@@ -198,8 +212,8 @@ async def import_sales(
         added += 1
 
     db.add(models.ImportLog(
-        filename=file.filename or "upload.xlsx",
-        user_id=current.id,
+        filename=filename or "upload.xlsx",
+        user_id=user_id,
         added=added,
         skipped=skipped,
         errors_count=len(errors),

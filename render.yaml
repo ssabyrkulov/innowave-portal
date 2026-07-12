@@ -30,3 +30,6 @@ services:
       # Задайте надёжный пароль в дашборде Render (sync:false — не хранится в репо).
       - key: FIRST_ADMIN_PASSWORD
         sync: false
+      # Секрет автоприёма файлов из Google Drive (Apps Script)
+      - key: INBOX_TOKEN
+        generateValue: true

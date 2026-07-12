@@ -13,6 +13,7 @@ from .routers import (
     auth,
     checks,
     dashboard,
+    integrations,
     payments,
     receipts,
     sales,
@@ -80,6 +81,7 @@ app.include_router(checks.router)
 app.include_router(receipts.router)
 app.include_router(agents.router)
 app.include_router(dashboard.router)
+app.include_router(integrations.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the
