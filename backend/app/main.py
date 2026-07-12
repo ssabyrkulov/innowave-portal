@@ -73,7 +73,17 @@ def on_startup() -> None:
 
 @app.get("/healthz", tags=["health"])
 def health():
-    return {"status": "ok", "service": "innowave-portal"}
+    # modules — быстрая проверка, какая версия развёрнута: если в списке
+    # есть "expenses", значит модуль расходов уже задеплоен.
+    modules = sorted(
+        {
+            r.path.split("/")[1]
+            for r in app.routes
+            if getattr(r, "path", "").count("/") >= 1 and r.path != "/"
+        }
+        - {"", "healthz", "docs", "openapi.json", "redoc", "assets", "{full_path:path}"}
+    )
+    return {"status": "ok", "service": "innowave-portal", "modules": modules}
 
 
 app.include_router(auth.router)
