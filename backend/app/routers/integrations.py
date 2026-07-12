@@ -32,6 +32,18 @@ router = APIRouter(prefix="/integrations", tags=["integrations"])
 ROBOT_EMAIL = "robot@innowave.portal"
 
 
+def _recover_filename(name: str) -> str:
+    """Чинит имя файла, если оно пришло «моджибейком» (UTF-8 байты,
+    прочитанные как latin-1) — типичная беда multipart-загрузок с
+    кириллицей. Для корректных кириллических имён encode('latin-1')
+    падает → возвращаем как есть.
+    """
+    try:
+        return name.encode("latin-1").decode("utf-8")
+    except (UnicodeError, AttributeError):
+        return name
+
+
 def _require_token(authorization: str | None) -> None:
     if not settings.inbox_token:
         raise HTTPException(
@@ -141,7 +153,7 @@ async def inbox(
     _require_token(authorization)
 
     content = await file.read()
-    filename = file.filename or "file.xlsx"
+    filename = _recover_filename(file.filename or "file.xlsx")
     # Имя файла — первичный сигнал; колонки — запасной для незнакомых имён.
     kind = classify_by_name(filename) or sniff_kind(content)
     if kind == "ignore":
