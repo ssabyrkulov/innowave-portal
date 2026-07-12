@@ -23,7 +23,7 @@ from .balances import (
 )
 from .expenses import import_expenses_workbook
 from .receipts import import_receipts_workbook
-from .returns import import_returns_workbook
+from .returns import import_return_lines_workbook, import_returns_workbook
 from .sales import _row_hash, import_sales_workbook, parse_sales_workbook
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
@@ -59,29 +59,34 @@ def _robot_user(db: Session) -> models.User:
     return user
 
 
+# Каноничный файл на каждый тип данных. У некоторых выгрузок есть несколько
+# вариантов (Реал/Реал2, Возв/ТовВозв) — это разные форматы одних и тех же
+# данных, которые тестировали с 1С. Грузим ТОЛЬКО каноничный, дубли-варианты
+# явно пропускаем, чтобы не задваивать выручку/возвраты.
+# Чтобы сменить каноничный файл — поправьте условия ниже.
 def classify_by_name(filename: str) -> str | None:
-    """Определяет тип выгрузки по имени файла — самый надёжный сигнал,
-    т.к. несколько выгрузок 1С делят одинаковую структуру колонок.
-    Возвращает None, если имя не распознано (тогда падаем в sniff_kind).
-    """
+    """Тип выгрузки по имени файла — самый надёжный сигнал. None → sniff_kind."""
     name = (filename or "").lower()
     if name.startswith("~$"):
         return "ignore"  # временный файл Excel
-    # Порядок важен: более специфичные подстроки раньше общих.
+
+    # --- Продажи: каноничный = Реал2, старый Реал → дубль ---
+    if "реал" in name:
+        return "sales" if "реал2" in name else "dup_sales"
+
+    # --- Возвраты: каноничный = ТовВозв (построчный), Возв → дубль ---
     if "товвозв" in name:
         return "return_lines"
     if "возв" in name:
-        return "return_docs"
+        return "dup_returns"
+
+    # --- Остальные типы (по одному файлу) ---
     if "банккасса" in name:
         return "cash_balances"
     if "пписход" in name or "рко" in name:
         return "expense"
-    if "реал" in name:
-        return "sales"
     if "банквх" in name or "пко" in name:
         return "receipts"
-    if name.startswith("выгрузкаост") or "остех" in name or "выгрузкаост" in name:
-        return "stock_balances"
     if "ост" in name and "прост" not in name:
         return "stock_balances"
     return None
@@ -140,6 +145,14 @@ async def inbox(
     kind = classify_by_name(filename) or sniff_kind(content)
     if kind == "ignore":
         return {"type": "ignore", "status": "skipped", "detail": "Временный файл"}
+    if kind in ("dup_sales", "dup_returns"):
+        # Дубль-вариант выгрузки (напр. старый Реал при наличии Реал2) —
+        # не грузим, чтобы не задваивать данные.
+        return {
+            "type": kind,
+            "status": "skipped",
+            "detail": "Дубль-вариант выгрузки — грузится каноничный файл",
+        }
     robot = _robot_user(db)
 
     # Раньше здесь стоял короткий выход «файл уже обработан» по хэшу
@@ -166,32 +179,13 @@ async def inbox(
         exp_kind = "cash" if "рко" in filename.lower() else "bank"
         result = import_expenses_workbook(db, content, auto_name, robot.id, exp_kind)
     elif kind == "return_lines":
-        # Возвраты в формате продаж. Финансово их несёт документный файл;
-        # здесь главное — самолечение: удаляем строки этого файла, если они
-        # когда-то ошибочно попали в продажи.
-        parsed, _errs = parse_sales_workbook(content)
-        hashes = [_row_hash(p) for p in parsed]
-        removed = 0
-        if hashes:
-            removed = (
-                db.query(models.Sale)
-                .filter(models.Sale.row_hash.in_(hashes))
-                .delete(synchronize_session=False)
-            )
-        db.add(models.ImportLog(
-            filename=f"[возвраты, очистка продаж: −{removed}] {filename}",
-            user_id=robot.id,
-            added=0,
-            skipped=len(hashes),
-            errors_count=0,
-            file_hash=file_hash,
-        ))
-        db.commit()
-        return {
-            "type": kind,
-            "status": "cleaned",
-            "removed_from_sales": removed,
-        }
+        # ТовВозв: очистка продаж + запись сумм возвратов по клиентам.
+        result = import_return_lines_workbook(db, content, auto_name, robot.id)
+        log = db.query(models.ImportLog).order_by(models.ImportLog.id.desc()).first()
+        if log and log.file_hash is None:
+            log.file_hash = file_hash
+            db.commit()
+        return {"type": kind, "status": "imported", **result}
     else:
         db.add(models.ImportLog(
             filename=f"[авто, не распознан] {filename}",

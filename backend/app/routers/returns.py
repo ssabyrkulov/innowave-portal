@@ -20,6 +20,63 @@ HEADERS = {"Дата": "date", "Сумма": "amount", "Валюта": "currency
            "Контрагент": "client"}
 
 
+def import_return_lines_workbook(
+    db: Session, content: bytes, filename: str, user_id: int
+) -> dict:
+    """Возвраты из построчного файла ВыгрузкаТовВозв (формат продаж).
+
+    Делает две вещи:
+    1. Самолечение: удаляет из продаж строки, если они когда-то по ошибке
+       туда попали (совпадение по row_hash).
+    2. Записывает суммы возвратов по клиентам (заменой целиком) — уменьшают
+       долг в дебиторке. Сумма строки берётся с учётом скидки, как в продажах.
+    """
+    from .sales import _row_hash, parse_sales_workbook
+
+    parsed, errors = parse_sales_workbook(content)
+
+    # 1. Очистка продаж от возвратных строк
+    hashes = [_row_hash(p) for p in parsed]
+    removed = 0
+    if hashes:
+        removed = (
+            db.query(models.Sale)
+            .filter(models.Sale.row_hash.in_(hashes))
+            .delete(synchronize_session=False)
+        )
+
+    # 2. Возвраты по клиентам — заменой целиком (файл = полная история)
+    db.query(models.ReturnDoc).delete()
+    db.flush()
+    seen: set[str] = set()
+    occ: dict[str, int] = defaultdict(int)
+    added = 0
+    for p in parsed:
+        amount = float(p["amount"]) * (1 - float(p.get("discount_pct") or 0) / 100)
+        base = f"{p['date']}|{p['client']}|{p['product']}|{amount}|{p.get('doc_number')}"
+        occ[base] += 1
+        h = hashlib.sha256(f"{base}#{occ[base]}".encode()).hexdigest()
+        if h in seen:
+            continue
+        seen.add(h)
+        db.add(models.ReturnDoc(
+            date=p["date"], amount=round(amount, 2),
+            currency=p.get("currency") or "KGS", client=p["client"], row_hash=h,
+        ))
+        added += 1
+
+    db.add(models.ImportLog(
+        filename=f"[возвраты, очистка продаж −{removed}] {filename}",
+        user_id=user_id, added=added, skipped=0, errors_count=len(errors),
+    ))
+    db.commit()
+    return {
+        "added_returns": added,
+        "removed_from_sales": removed,
+        "total_returns_in_db": db.query(models.ReturnDoc).count(),
+    }
+
+
 def _parse_date(value):
     if isinstance(value, datetime):
         return value.date()
