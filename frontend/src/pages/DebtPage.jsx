@@ -224,7 +224,7 @@ export default function DebtPage() {
             </div>
           )}
 
-          <div className="table-wrap">
+          <div className="table-wrap cards">
             <table>
               <thead>
                 <tr>
@@ -250,16 +250,16 @@ export default function DebtPage() {
                   const stale = daysSince(c.last_payment) > STALE_DAYS
                   return (
                     <tr key={c.client}>
-                      <td>{c.client}</td>
-                      <td className="num">{formatMoney(c.shipped)}</td>
-                      <td className="num muted">
+                      <td data-label="Клиент">{c.client}</td>
+                      <td className="num" data-label="Отгружено">{formatMoney(c.shipped)}</td>
+                      <td className="num muted" data-label="Возвраты">
                         {c.returned > 0 ? `−${formatMoney(c.returned)}` : '—'}
                       </td>
-                      <td className="num pos">{formatMoney(c.paid)}</td>
-                      <td className="num neg">{formatMoney(c.debt)}</td>
-                      <td>{fmtDate(c.last_shipment)}</td>
-                      <td>{fmtDate(c.last_payment)}</td>
-                      <td>
+                      <td className="num pos" data-label="Оплачено">{formatMoney(c.paid)}</td>
+                      <td className="num neg" data-label="Долг">{formatMoney(c.debt)}</td>
+                      <td data-label="Посл. отгрузка">{fmtDate(c.last_shipment)}</td>
+                      <td data-label="Посл. оплата">{fmtDate(c.last_payment)}</td>
+                      <td className="card-action">
                         {stale && (
                           <span className="badge badge-overdue" title={`Оплат не было больше ${STALE_DAYS} дней`}>
                             {c.last_payment ? `>${daysSince(c.last_payment)} дн.` : 'не платил'}
@@ -282,7 +282,7 @@ export default function DebtPage() {
             </button>
           </h2>
           {showReceipts && (
-            <div className="table-wrap">
+            <div className="table-wrap cards">
               <table>
                 <thead>
                   <tr>
@@ -298,16 +298,16 @@ export default function DebtPage() {
                 <tbody>
                   {receipts.map((r) => (
                     <tr key={r.id}>
-                      <td>{fmtDate(r.date)}</td>
-                      <td>{r.payer}</td>
-                      <td className="muted">{r.operation}</td>
-                      <td className="num">
+                      <td data-label="Дата">{fmtDate(r.date)}</td>
+                      <td data-label="Плательщик">{r.payer}</td>
+                      <td className="muted" data-label="Операция">{r.operation}</td>
+                      <td className="num" data-label="Сумма">
                         {Number(r.amount).toLocaleString('ru-RU')}
                       </td>
-                      <td>
+                      <td data-label="Валюта">
                         {r.currency !== 'KGS' ? <b>{r.currency}</b> : r.currency}
                       </td>
-                      <td className="num">
+                      <td className="num" data-label="Курс">
                         {r.currency !== 'KGS' && can.editPayments ? (
                           <input
                             className="rate-input"
@@ -321,7 +321,7 @@ export default function DebtPage() {
                           r.rate
                         )}
                       </td>
-                      <td className="num">{formatMoney(r.amount_kgs)}</td>
+                      <td className="num" data-label="В сомах">{formatMoney(r.amount_kgs)}</td>
                     </tr>
                   ))}
                 </tbody>

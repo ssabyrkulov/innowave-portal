@@ -59,7 +59,7 @@ export default function UsersPage() {
 
       {error && <div className="error">{error}</div>}
 
-      <div className="table-wrap">
+      <div className="table-wrap cards">
         <table>
           <thead>
             <tr>
@@ -73,18 +73,18 @@ export default function UsersPage() {
           <tbody>
             {users.map((u) => (
               <tr key={u.id}>
-                <td>
+                <td data-label="Имя">
                   {u.full_name}
                   {u.id === me.id && <span className="tag-you">вы</span>}
                 </td>
-                <td>{u.email}</td>
-                <td>{ROLE_LABELS[u.role]}</td>
-                <td>
+                <td data-label="Email">{u.email}</td>
+                <td data-label="Роль">{ROLE_LABELS[u.role]}</td>
+                <td data-label="Статус">
                   <span className={`badge ${u.is_active ? 'badge-paid' : 'badge-overdue'}`}>
                     {u.is_active ? 'Активен' : 'Отключён'}
                   </span>
                 </td>
-                <td className="actions">
+                <td className="actions card-action">
                   <button className="btn btn-sm" onClick={() => setModal(u)}>
                     ✎
                   </button>

@@ -74,7 +74,7 @@ export default function PaymentsPage() {
 
       {error && <div className="error">{error}</div>}
 
-      <div className="table-wrap">
+      <div className="table-wrap cards">
         <table>
           <thead>
             <tr>
@@ -99,23 +99,23 @@ export default function PaymentsPage() {
             )}
             {payments.map((p) => (
               <tr key={p.id}>
-                <td>{p.due_date}</td>
-                <td>{p.title}</td>
-                <td>{p.counterparty || '—'}</td>
-                <td>{p.category || '—'}</td>
-                <td className={`num ${p.direction === 'incoming' ? 'pos' : 'neg'}`}>
+                <td data-label="Дата">{p.due_date}</td>
+                <td data-label="Название">{p.title}</td>
+                <td data-label="Контрагент">{p.counterparty || '—'}</td>
+                <td data-label="Категория">{p.category || '—'}</td>
+                <td className={`num ${p.direction === 'incoming' ? 'pos' : 'neg'}`} data-label="Сумма">
                   {p.direction === 'incoming' ? '+' : '−'}
                   {formatMoney(p.amount, p.currency)}
                 </td>
-                <td>{DIRECTION_LABELS[p.direction]}</td>
-                <td>
+                <td data-label="Направление">{DIRECTION_LABELS[p.direction]}</td>
+                <td data-label="Статус">
                   <span className={`badge badge-${p.status}`}>
                     {STATUS_LABELS[p.status]}
                   </span>
                 </td>
-                <td className="muted">{p.creator_name || '—'}</td>
+                <td className="muted" data-label="Автор">{p.creator_name || '—'}</td>
                 {can.editPayments && (
-                  <td className="actions">
+                  <td className="actions card-action">
                     <button className="btn btn-sm" onClick={() => setModal(p)}>
                       ✎
                     </button>

@@ -2007,10 +2007,99 @@ tbody tr:hover {
 }
 
 @media (max-width: 840px) {
-  .product-search-period {
-    display: none;
-  }
   .product-search-input {
     font-size: 16px; /* iOS не зумит при фокусе от 16px */
+  }
+}
+
+/* ---------- Таблицы-карточки на телефоне ---------- */
+/* .table-wrap.cards: на узком экране строка превращается в карточку
+   «поле: значение», не нужно крутить таблицу вбок. Подпись берётся из
+   атрибута data-label каждой ячейки. */
+@media (max-width: 840px) {
+  .table-wrap.cards {
+    overflow-x: visible;
+    border: none;
+    background: transparent;
+  }
+
+  .table-wrap.cards table,
+  .table-wrap.cards tbody,
+  .table-wrap.cards tr,
+  .table-wrap.cards td {
+    display: block;
+    width: 100%;
+  }
+
+  .table-wrap.cards thead {
+    display: none;
+  }
+
+  .table-wrap.cards tr {
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    padding: 4px 14px;
+    margin-bottom: 10px;
+  }
+
+  .table-wrap.cards td {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    padding: 9px 0;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    text-align: right;
+    font-size: 13.5px;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .table-wrap.cards tr td:last-child {
+    border-bottom: none;
+  }
+
+  .table-wrap.cards td::before {
+    content: attr(data-label);
+    flex: 0 0 38%;
+    text-align: left;
+    color: var(--faint);
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-variant-numeric: normal;
+    letter-spacing: 0;
+  }
+
+  /* ячейка с кнопками действий — кнопки в ряд на всю ширину, без подписи */
+  .table-wrap.cards td.card-action {
+    display: flex;
+    gap: 8px;
+    justify-content: stretch;
+    padding: 12px 0 6px;
+  }
+
+  .table-wrap.cards td.card-action:empty {
+    display: none;
+  }
+
+  .table-wrap.cards td.card-action::before {
+    display: none;
+  }
+
+  .table-wrap.cards td.card-action .btn {
+    flex: 1;
+  }
+
+  /* пустая строка «ничего не найдено» — по центру, без подписи-поля */
+  .table-wrap.cards td[colspan] {
+    justify-content: center;
+    text-align: center;
+    border-bottom: none;
+  }
+
+  .table-wrap.cards td[colspan]::before {
+    display: none;
   }
 }

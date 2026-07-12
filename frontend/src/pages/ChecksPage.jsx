@@ -117,7 +117,7 @@ export default function ChecksPage() {
             )}
           </div>
 
-          <div className="table-wrap">
+          <div className="table-wrap cards">
             <table>
               <thead>
                 <tr>
@@ -142,7 +142,7 @@ export default function ChecksPage() {
                   const meta = data.rules.find((r) => r.rule === v.rule)
                   return (
                     <tr key={v.vhash} className={v.acked ? 'row-acked' : ''}>
-                      <td>
+                      <td data-label="Важность">
                         <span
                           className={`badge ${
                             v.severity === 'critical' ? 'badge-overdue' : 'badge-planned'
@@ -151,13 +151,13 @@ export default function ChecksPage() {
                           {v.severity === 'critical' ? 'Критично' : 'Внимание'}
                         </span>
                       </td>
-                      <td>{meta?.title || v.rule}</td>
-                      <td>{v.doc_number || '—'}</td>
-                      <td>{v.date ? v.date.split('-').reverse().join('.') : '—'}</td>
-                      <td>{v.client || '—'}</td>
-                      <td className="detail-cell">{v.detail}</td>
+                      <td data-label="Нарушение">{meta?.title || v.rule}</td>
+                      <td data-label="Документ">{v.doc_number || '—'}</td>
+                      <td data-label="Дата">{v.date ? v.date.split('-').reverse().join('.') : '—'}</td>
+                      <td data-label="Контрагент">{v.client || '—'}</td>
+                      <td className="detail-cell" data-label="Детали">{v.detail}</td>
                       {can.editPayments && (
-                        <td className="actions">
+                        <td className="actions card-action">
                           <button
                             className="btn btn-sm"
                             title={
@@ -192,7 +192,7 @@ export default function ChecksPage() {
           </button>
         )}
       </div>
-      <div className="table-wrap">
+      <div className="table-wrap cards">
         <table>
           <thead>
             <tr>
@@ -215,13 +215,13 @@ export default function ChecksPage() {
             )}
             {imports.map((l) => (
               <tr key={l.id}>
-                <td>{new Date(l.created_at + 'Z').toLocaleString('ru-RU')}</td>
-                <td>{l.filename}</td>
-                <td>{l.user || '—'}</td>
-                <td className="num">{l.added}</td>
-                <td className="num">{l.skipped}</td>
-                <td className="num">{l.errors_count}</td>
-                <td>{l.replace_period ? 'замена периода' : 'дозагрузка'}</td>
+                <td data-label="Когда">{new Date(l.created_at + 'Z').toLocaleString('ru-RU')}</td>
+                <td data-label="Файл">{l.filename}</td>
+                <td data-label="Кто">{l.user || '—'}</td>
+                <td className="num" data-label="Добавлено">{l.added}</td>
+                <td className="num" data-label="Дублей">{l.skipped}</td>
+                <td className="num" data-label="Ошибок">{l.errors_count}</td>
+                <td data-label="Режим">{l.replace_period ? 'замена периода' : 'дозагрузка'}</td>
               </tr>
             ))}
           </tbody>
