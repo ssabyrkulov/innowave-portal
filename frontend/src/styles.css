@@ -915,16 +915,34 @@ tbody tr:hover {
 
 .top-row {
   display: grid;
-  grid-template-columns: minmax(90px, 150px) 1fr auto;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'name name'
+    'bar  vals';
   align-items: center;
-  gap: 10px;
+  gap: 5px 10px;
 }
 
 .top-name {
+  grid-area: name;
   font-size: 12.5px;
-  white-space: nowrap;
+  line-height: 1.3;
+  /* Название — на всю ширину, до 2 строк. Размер товара в конце имени
+     («…размер 3 (4-9 кг)») больше не срезается многоточием сбоку. */
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.top-bar-track {
+  grid-area: bar;
+}
+
+.top-vals {
+  grid-area: vals;
 }
 
 .top-bar-track {
