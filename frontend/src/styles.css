@@ -1,48 +1,66 @@
 :root {
-  /* Полотно */
-  --bg: #f2f4f9;
-  --surface: #ffffff;
-  --border: #e6e9f1;
-  --border-strong: #d5dae7;
+  /* ===== Тема «Ventriloc» — editorial data observatory ===== */
+  /* Палитра refero: Graphite / Ash / Ember / Brass. 95% ахроматично,
+     оранжевый уголёк — только акцент; без теней; острые кнопки. */
+
+  /* Полотно: Ash-страница, белые карточки */
+  --bg: #efefef;            /* Ash — фон приложения */
+  --surface: #ffffff;       /* Canvas White — карточки */
+  --surface-2: #f5f5f5;     /* Fog — вложенные поверхности */
+  --ivory: #ebe6dd;         /* Ivory — тёплый акцент-блок */
+  --border: #e8e8e8;        /* Mist — волосяные линии */
+  --border-strong: #d7d7d7;
 
   /* Текст */
-  --text: #171e33;
-  --muted: #6c7590;
+  --text: #202020;          /* Graphite */
+  --muted: #4d4d4d;         /* Steel — вторичный текст */
+  --faint: #828282;         /* Slate — третичный */
 
-  /* Бренд */
-  --primary: #3d5af1;
-  --primary-dark: #2b44d4;
-  --primary-soft: #e9edfe;
-  --primary-glow: rgba(61, 90, 241, 0.24);
+  /* Акцент — Ember Orange (уголёк). НЕ заливка кнопок. */
+  --primary: #ff682c;
+  --primary-dark: #e0531b;
+  --primary-soft: #ffe7dd;
+  --primary-glow: rgba(255, 104, 44, 0.22);
+  --brass: #816729;         /* Brass — вторичный тёплый акцент */
 
-  /* Сайдбар (тёмный) */
-  --side-bg: #12182f;
-  --side-bg2: #0d1226;
-  --side-text: #9aa4c7;
-  --side-active: #ffffff;
-  --side-hover: rgba(255, 255, 255, 0.06);
-  --side-active-bg: rgba(93, 118, 246, 0.22);
-  --side-border: rgba(255, 255, 255, 0.07);
+  /* Действие — тёмная кнопка Graphite */
+  --action: #202020;
+  --action-hover: #000000;
 
-  /* Семантика */
-  --in: #14934c;
-  --in-soft: #e5f7ec;
-  --out: #e5484d;
-  --out-soft: #fdeaea;
-  --planned: #1971c2;
-  --planned-soft: #e7f1fc;
-  --warn: #b25e09;
-  --warn-soft: #fdf0e0;
+  /* Сайдбар — светлый (Fog), чернильный текст */
+  --side-bg: #f5f5f5;
+  --side-bg2: #efefef;
+  --side-text: #4d4d4d;
+  --side-active: #202020;
+  --side-hover: #e8e8e8;
+  --side-active-bg: #ffffff;
+  --side-border: #e2e2e2;
 
-  --shadow-sm: 0 1px 2px rgba(23, 30, 51, 0.05);
-  --shadow: 0 1px 2px rgba(23, 30, 51, 0.04), 0 10px 30px -12px rgba(23, 30, 51, 0.14);
-  --shadow-pop: 0 24px 60px -16px rgba(23, 30, 51, 0.28);
+  /* Семантика денег — только Ember + Brass (без зелёного/синего) */
+  --in: #6f5a1f;            /* приход/оплата — Brass (тёмный, читаемый) */
+  --in-soft: #efe9d8;
+  --out: #e0531b;          /* расход/долг/просрочка — Ember */
+  --out-soft: #ffe7dd;
+  --planned: #4d4d4d;      /* запланировано — нейтральный Steel */
+  --planned-soft: #ececec;
+  --warn: #b5651a;
+  --warn-soft: #f6ead6;
 
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 16px;
+  /* Тени убраны — глубина через цвет и границы (спека: no shadows) */
+  --shadow-sm: none;
+  --shadow: none;
+  --shadow-pop: 0 20px 50px -20px rgba(32, 32, 32, 0.35);
 
-  font-family: 'Golos Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  /* Радиусы: кнопки 0, карточки 8, крупные 8 */
+  --r-sm: 3px;
+  --r-md: 8px;
+  --r-lg: 8px;
+
+  /* Шрифтовые роли (PolySans → Inter Tight 400) */
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Inter Tight', 'Inter', -apple-system, sans-serif;
+
+  font-family: var(--font-body);
 }
 
 * {
@@ -63,6 +81,46 @@ button {
 
 ::selection {
   background: var(--primary-soft);
+}
+
+/* ===== Ventriloc: типографика ===== */
+/* Заголовки — Inter Tight вес 400, тайтовый трекинг (whisper-weight) */
+.brand-title,
+.page-header h1,
+.calendar-header h1,
+.chart-title,
+.section-title,
+.modal h2,
+.mdash-greet,
+.summary-value,
+.mdash-kpi-value {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+.page-header h1,
+.calendar-header h1,
+.mdash-greet {
+  font-size: 32px;
+  line-height: 1.19;
+  letter-spacing: -0.02em;
+}
+
+/* Цифры — табличные (точность «обсерватории данных») */
+.num,
+.summary-value,
+.mdash-kpi-value,
+.rule-count,
+.day-number,
+.target-pct,
+.dash-row-date,
+.mdash-item-date,
+.top-money,
+.dash-delta,
+table {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -88,7 +146,8 @@ button {
 .sidebar {
   width: 256px;
   flex-shrink: 0;
-  background: linear-gradient(180deg, var(--side-bg) 0%, var(--side-bg2) 100%);
+  background: var(--side-bg);
+  border-right: 1px solid var(--side-border);
   display: flex;
   flex-direction: column;
   padding: 22px 14px 18px;
@@ -105,30 +164,30 @@ button {
 }
 
 .brand-mark {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #5d76f6 0%, #3d5af1 55%, #7a5cf0 130%);
-  box-shadow: 0 8px 20px -6px var(--primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  width: 40px;
+  height: 40px;
+  border-radius: 0;                 /* острый угол — Ventriloc */
+  background: var(--action);        /* Graphite */
   color: #fff;
-  font-weight: 800;
-  font-size: 14px;
-  letter-spacing: 0.5px;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 15px;
+  letter-spacing: -0.02em;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .brand-title {
-  font-weight: 700;
+  font-weight: 400;
   font-size: 15px;
-  color: #fff;
-  letter-spacing: 0.1px;
+  color: var(--text);
+  letter-spacing: -0.02em;
 }
 
 .brand-sub {
   font-size: 11.5px;
-  color: var(--side-text);
+  color: var(--faint);
   margin-top: 1px;
 }
 
@@ -145,21 +204,22 @@ button {
   text-decoration: none;
   color: var(--side-text);
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: 200px;             /* пилюли — Ventriloc nav */
+  font-family: var(--font-display);
   font-size: 14px;
-  font-weight: 500;
-  letter-spacing: 0.1px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
 }
 
 .nav-link:hover {
   background: var(--side-hover);
-  color: #dfe4f5;
+  color: var(--text);
 }
 
 .nav-link.active {
   background: var(--side-active-bg);
   color: var(--side-active);
-  box-shadow: inset 0 0 0 1px rgba(122, 143, 255, 0.25);
+  box-shadow: inset 3px 0 0 var(--primary);   /* Ember-уголёк слева */
 }
 
 .sidebar-footer {
@@ -180,27 +240,28 @@ button {
 .avatar {
   width: 36px;
   height: 36px;
-  border-radius: 50%;
+  border-radius: 0;
   flex-shrink: 0;
-  background: linear-gradient(135deg, #33406e, #222c50);
-  color: #cdd6f4;
+  background: var(--action);
+  color: #fff;
+  font-family: var(--font-display);
   font-size: 12.5px;
-  font-weight: 700;
+  font-weight: 400;
+  letter-spacing: -0.02em;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 
 .user-name {
-  font-weight: 600;
+  font-weight: 500;
   font-size: 13px;
-  color: #e8ecf8;
+  color: var(--text);
 }
 
 .user-role {
   font-size: 11.5px;
-  color: var(--side-text);
+  color: var(--faint);
 }
 
 .sidebar-footer .btn-logout {
@@ -222,23 +283,23 @@ button {
   min-width: 0;
 }
 
-/* ---------- Кнопки ---------- */
+/* ---------- Кнопки (Ventriloc: острые углы, без теней) ---------- */
 .btn {
-  border: 1px solid transparent;
-  border-radius: 10px;
-  padding: 9px 15px;
+  border: 1px solid var(--text);    /* ghost: 1px Graphite */
+  border-radius: 0;
+  padding: 9px 16px;
+  font-family: var(--font-display);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 400;
+  letter-spacing: -0.01em;
   cursor: pointer;
-  background: var(--surface);
-  border-color: var(--border-strong);
+  background: transparent;
   color: var(--text);
-  box-shadow: var(--shadow-sm);
 }
 
 .btn:hover {
-  border-color: var(--primary);
-  color: var(--primary-dark);
+  background: var(--text);
+  color: #fff;
 }
 
 .btn:active {
@@ -249,24 +310,29 @@ button {
 input:focus-visible,
 select:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px var(--primary-glow);
+  box-shadow: 0 0 0 2px var(--primary-glow);
 }
 
 .btn-primary {
-  background: linear-gradient(180deg, #4e69f5, var(--primary));
-  border-color: var(--primary-dark);
+  background: var(--action);        /* Graphite fill */
+  border-color: var(--action);
   color: #fff;
-  box-shadow: 0 6px 16px -6px var(--primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
 .btn-primary:hover {
-  background: linear-gradient(180deg, #4460f0, var(--primary-dark));
+  background: var(--action-hover);
   color: #fff;
 }
 
 .btn-ghost {
   background: transparent;
-  box-shadow: none;
+  border-color: var(--border-strong);
+}
+
+.btn-ghost:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--text);
 }
 
 .btn-block {
@@ -274,9 +340,9 @@ select:focus-visible {
 }
 
 .btn-sm {
-  padding: 5px 10px;
+  padding: 5px 11px;
   font-size: 13px;
-  border-radius: 8px;
+  border-radius: 0;
 }
 
 .btn-danger {
@@ -301,24 +367,18 @@ select:focus-visible {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background:
-    radial-gradient(900px 480px at 12% -8%, rgba(93, 118, 246, 0.20), transparent 60%),
-    radial-gradient(800px 500px at 105% 8%, rgba(122, 92, 240, 0.16), transparent 55%),
-    radial-gradient(700px 500px at 50% 115%, rgba(61, 90, 241, 0.12), transparent 60%),
-    var(--bg);
+  background: var(--ivory);          /* тёплая бумага */
 }
 
 .login-card {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  padding: 38px 34px 34px;
-  border-radius: 20px;
-  box-shadow: var(--shadow-pop);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 40px 36px 36px;
+  border-radius: var(--r-lg);
   width: 400px;
   display: flex;
   flex-direction: column;
-  gap: 15px;
+  gap: 16px;
 }
 
 .login-brand {
@@ -519,9 +579,9 @@ select:disabled {
 }
 
 .day-today .day-number {
-  background: linear-gradient(180deg, #4e69f5, var(--primary));
+  background: var(--action);
   color: #fff;
-  box-shadow: 0 4px 10px -3px var(--primary-glow);
+  border-radius: 0;
 }
 
 .day-items {
@@ -815,11 +875,11 @@ tbody tr:hover {
 }
 
 .bar {
-  fill: var(--primary);
+  fill: #cfcfcf;             /* спокойный серый — «печатный отчёт» */
 }
 
 .bar-group:hover .bar {
-  fill: var(--primary-dark);
+  fill: var(--primary);      /* Ember на наведении */
 }
 
 .bar-label {
@@ -867,7 +927,7 @@ tbody tr:hover {
 .top-bar-fill {
   height: 100%;
   border-radius: 6px;
-  background: linear-gradient(90deg, #5d76f6, var(--primary));
+  background: var(--primary);
   min-width: 2px;
 }
 
@@ -1247,15 +1307,15 @@ tbody tr:hover {
 }
 
 .dash-bar {
-  fill: #c3cdf7;
+  fill: #d9d9d9;             /* Mist-серый — данные */
 }
 
 .dash-bar-cur {
-  fill: var(--primary);
+  fill: var(--primary);     /* Ember — текущий месяц */
 }
 
 .dash-bar:hover {
-  fill: var(--primary-dark);
+  fill: var(--brass);
 }
 
 .dash-tick {
@@ -1396,41 +1456,38 @@ tbody tr:hover {
 }
 
 .mdash-kpi-money {
-  background: linear-gradient(160deg, #143a26 0%, #0f2c1d 100%);
-  border-color: transparent;
+  background: var(--action);         /* Graphite — «денежная» карточка */
+  border-color: var(--action);
 }
 
 .mdash-kpi-money .mdash-kpi-label {
-  color: #86caa2;
+  color: #b0b0b0;
 }
 
 .mdash-kpi-money .mdash-kpi-value {
-  color: #d9f5e4;
+  color: #ffffff;
 }
 
-.mdash-kpi-money .dash-delta.pos {
-  color: #6fdc9c;
-}
-
+.mdash-kpi-money .dash-delta.pos,
 .mdash-kpi-money .dash-delta.neg {
-  color: #ff9e9e;
+  color: #d8d8d8;
 }
 
 .mdash-kpi-debt {
-  background: linear-gradient(160deg, #3a1416 0%, #2c0f11 100%);
-  border-color: transparent;
+  background: var(--ivory);          /* тёплая бумага — долг */
+  border-color: var(--border-strong);
 }
 
 .mdash-kpi-debt .mdash-kpi-label {
-  color: #e39a9c;
+  color: var(--muted);
 }
 
 .mdash-kpi-debt .mdash-kpi-value {
-  color: #ffdfe0;
+  color: var(--out);                 /* Ember */
 }
 
 .mdash-kpi-debt .mdash-kpi-sub {
-  color: #c98789;
+  color: var(--faint);
 }
 
 .mdash-kpi-label {
