@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -83,7 +84,15 @@ def health():
         }
         - {"", "healthz", "docs", "openapi.json", "redoc", "assets", "{full_path:path}"}
     )
-    return {"status": "ok", "service": "innowave-portal", "modules": modules}
+    # Render кладёт короткий SHA коммита в RENDER_GIT_COMMIT — по нему видно,
+    # какая именно версия развёрнута.
+    commit = os.environ.get("RENDER_GIT_COMMIT", "")[:7] or "dev"
+    return {
+        "status": "ok",
+        "service": "innowave-portal",
+        "commit": commit,
+        "modules": modules,
+    }
 
 
 app.include_router(auth.router)
