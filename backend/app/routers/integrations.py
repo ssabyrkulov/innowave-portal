@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..config import settings
 from ..database import get_db
+from ..deps import require_roles
 from ..security import hash_password
 from .balances import (
     import_cash_balances_workbook,
@@ -212,3 +213,32 @@ async def inbox(
         db.commit()
 
     return {"type": kind, "status": "imported", **result}
+
+
+admin_only = require_roles(models.Role.admin)
+
+
+@router.post("/reset")
+def reset_imported_data(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(admin_only),
+):
+    """Полная очистка импортированных из 1С данных для чистого переимпорта.
+
+    Удаляет только то, что грузится из 1С. Ручные данные портала —
+    пользователи, платежи календаря, планы агентов, сопоставления имён,
+    принятые нарушения — сохраняются.
+    """
+    cleared = {}
+    for model in (
+        models.Sale,
+        models.Receipt,
+        models.Expense,
+        models.ReturnDoc,
+        models.CashBalance,
+        models.StockBalance,
+        models.ImportLog,
+    ):
+        cleared[model.__tablename__] = db.query(model).delete()
+    db.commit()
+    return {"status": "reset", "cleared": cleared}

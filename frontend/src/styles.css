@@ -970,6 +970,14 @@ tbody tr:hover {
   letter-spacing: -0.1px;
 }
 
+.journal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .import-controls {
   display: flex;
   align-items: center;

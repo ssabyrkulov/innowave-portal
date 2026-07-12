@@ -97,6 +97,7 @@ export const api = {
   dashboard: () => request('/dashboard'),
 
   agentsSummary: () => request('/agents/summary'),
+  resetImportedData: () => request('/integrations/reset', { method: 'POST' }),
   setAgentTarget: (agent, month, amount) =>
     request('/agents/target', { method: 'POST', body: { agent, month, amount } }),
 

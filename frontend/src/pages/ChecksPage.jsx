@@ -3,7 +3,35 @@ import { api } from '../api'
 import { useAuth } from '../auth'
 
 export default function ChecksPage() {
-  const { can } = useAuth()
+  const { can, user } = useAuth()
+  const [resetting, setResetting] = useState(false)
+
+  async function rebuildFromScratch() {
+    if (
+      !confirm(
+        'Полностью очистить импортированные из 1С данные (продажи, оплаты, ' +
+        'расходы, возвраты, остатки)?\n\nРучные данные — пользователи, платежи ' +
+        'календаря, планы агентов, сопоставления имён — сохранятся.\n\n' +
+        'После очистки запустите resendAll в Google Apps Script — данные ' +
+        'зальются заново начисто.'
+      )
+    )
+      return
+    setResetting(true)
+    try {
+      const res = await api.resetImportedData()
+      const n = Object.values(res.cleared).reduce((a, b) => a + b, 0)
+      alert(
+        `Готово: удалено ${n} записей.\n\nТеперь запустите resendAll в Apps ` +
+        'Script — портал зальёт данные из 1С заново и без дублей.'
+      )
+      await load()
+    } catch (e) {
+      alert('Ошибка: ' + e.message)
+    } finally {
+      setResetting(false)
+    }
+  }
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [rule, setRule] = useState('')
@@ -152,7 +180,18 @@ export default function ChecksPage() {
         </>
       )}
 
-      <h2 className="section-title">Журнал загрузок</h2>
+      <div className="journal-head">
+        <h2 className="section-title">Журнал загрузок</h2>
+        {user.role === 'admin' && (
+          <button
+            className="btn btn-danger btn-sm"
+            disabled={resetting}
+            onClick={rebuildFromScratch}
+          >
+            {resetting ? 'Очистка…' : '↻ Пересобрать всё из 1С'}
+          </button>
+        )}
+      </div>
       <div className="table-wrap">
         <table>
           <thead>
