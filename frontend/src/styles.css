@@ -1422,117 +1422,166 @@ tbody tr:hover {
   gap: 16px;
 }
 
-.mdash-head {
-  padding: 4px 2px 0;
-}
-
-.mdash-greet {
-  font-size: 21px;
-  font-weight: 700;
-  letter-spacing: -0.3px;
+/* Тонкая строка: дата слева, статус контроля справа (был большой баннер) */
+.mdash-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 2px 0;
 }
 
 .mdash-date {
   font-size: 13px;
-  color: var(--muted);
-  margin-top: 2px;
+  color: var(--faint);
   text-transform: capitalize;
 }
 
-.mdash-alert {
-  display: block;
-  background: var(--out-soft);
-  border: 1px solid #f3b6b8;
-  color: #c22e33;
-  border-radius: var(--r-md);
-  padding: 11px 14px;
-  font-size: 13.5px;
+.mdash-status {
+  flex-shrink: 0;
+  font-size: 12.5px;
   font-weight: 600;
   text-decoration: none;
+  padding: 4px 10px;
+  border-radius: 200px;
+  border: 1px solid var(--border-strong);
 }
 
-.mdash-carousel {
-  display: flex;
+.mdash-status.is-crit {
+  background: var(--out-soft);
+  border-color: #f3b6b8;
+  color: var(--out);
+}
+
+.mdash-status.is-warn {
+  background: var(--warn-soft);
+  border-color: #e6cfa6;
+  color: var(--warn);
+}
+
+.mdash-status.is-ok {
+  background: var(--in-soft);
+  border-color: #d9d1b6;
+  color: var(--in);
+}
+
+/* Главная цифра — деньги в моменте (тёмная карточка Graphite) */
+.mdash-hero {
+  background: var(--action);
+  color: #fff;
+  border-radius: var(--r-lg);
+  padding: 18px 18px 16px;
+}
+
+.mdash-hero-label {
+  font-size: 12px;
+  color: #b0b0b0;
+  letter-spacing: 0.2px;
+}
+
+.mdash-hero-value {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 40px;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mdash-hero-sub {
+  font-size: 12px;
+  color: #9a9a9a;
+  margin-top: 6px;
+}
+
+/* Сетка ключевых метрик 2×2 — без прокрутки вбок */
+.mdash-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  margin: 0 -12px;
-  padding: 2px 12px 6px;
-  -webkit-overflow-scrolling: touch;
 }
 
-.mdash-carousel::-webkit-scrollbar {
-  display: none;
-}
-
-.mdash-kpi {
-  scroll-snap-align: start;
-  flex: 0 0 46%;
-  min-width: 150px;
+.mtile {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
-  padding: 14px 15px;
+  padding: 13px 14px;
   text-decoration: none;
   color: inherit;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+  min-width: 0;
 }
 
-.mdash-kpi-money {
-  background: var(--action);         /* Graphite — «денежная» карточка */
-  border-color: var(--action);
-}
-
-.mdash-kpi-money .mdash-kpi-label {
-  color: #b0b0b0;
-}
-
-.mdash-kpi-money .mdash-kpi-value {
-  color: #ffffff;
-}
-
-.mdash-kpi-money .dash-delta.pos,
-.mdash-kpi-money .dash-delta.neg {
-  color: #d8d8d8;
-}
-
-.mdash-kpi-debt {
-  background: var(--ivory);          /* тёплая бумага — долг */
-  border-color: var(--border-strong);
-}
-
-.mdash-kpi-debt .mdash-kpi-label {
-  color: var(--muted);
-}
-
-.mdash-kpi-debt .mdash-kpi-value {
-  color: var(--out);                 /* Ember */
-}
-
-.mdash-kpi-debt .mdash-kpi-sub {
-  color: var(--faint);
-}
-
-.mdash-kpi-label {
+.mtile-label {
   font-size: 11.5px;
   font-weight: 600;
-  color: var(--muted);
-  letter-spacing: 0.2px;
+  color: var(--faint);
+  letter-spacing: 0.1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.mdash-kpi-value {
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: -0.4px;
+.mtile-value {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 25px;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
 
-.mdash-kpi-sub {
+.mtile-sub {
   font-size: 12px;
+  color: var(--faint);
+}
+
+.mtile-debt .mtile-value {
+  color: var(--out);
+}
+
+/* Денежный поток — узкая полоса под сеткой */
+.mdash-flow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.mdash-flow-label {
+  font-size: 13px;
+  font-weight: 600;
   color: var(--muted);
+}
+
+.mdash-flow-value {
+  font-family: var(--font-display);
+  font-size: 20px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.mdash-flow.is-pos {
+  background: var(--in-soft);
+  border-color: #e0d8bf;
+}
+
+.mdash-flow.is-pos .mdash-flow-value {
+  color: var(--in);
+}
+
+.mdash-flow.is-neg {
+  background: var(--out-soft);
+  border-color: #f3c3b6;
+}
+
+.mdash-flow.is-neg .mdash-flow-value {
+  color: var(--out);
 }
 
 .mdash-section {

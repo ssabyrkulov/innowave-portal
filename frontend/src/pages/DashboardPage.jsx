@@ -26,12 +26,14 @@ function deltaPct(cur, prev) {
   return ((cur - prev) / prev) * 100
 }
 
-function Delta({ cur, prev }) {
+function Delta({ cur, prev, invert = false, compact = false }) {
   const d = deltaPct(cur, prev)
   if (d == null) return null
+  // invert: для расходов рост — это плохо (красный), а не хорошо
+  const good = invert ? d < 0 : d >= 0
   return (
-    <span className={`dash-delta ${d >= 0 ? 'pos' : 'neg'}`}>
-      {d >= 0 ? '↑' : '↓'} {Math.abs(d).toFixed(0)}% к пр. мес
+    <span className={`dash-delta ${good ? 'pos' : 'neg'}`}>
+      {d >= 0 ? '↑' : '↓'} {Math.abs(d).toFixed(0)}%{compact ? '' : ' к пр. мес'}
     </span>
   )
 }
@@ -221,109 +223,113 @@ function DesktopDash({ data }) {
 
 /* ============================== МОБИЛЬНЫЙ ============================== */
 
-function greeting() {
-  const h = new Date().getHours()
-  if (h < 5) return 'Доброй ночи'
-  if (h < 12) return 'Доброе утро'
-  if (h < 18) return 'Добрый день'
-  return 'Добрый вечер'
-}
+function MobileDash({ data }) {
+  const crit = data.checks.critical
+  const warn = data.checks.warning
+  const flow = data.money.month_in - data.money.month_out
+  const dateStr = new Date(data.today + 'T00:00:00').toLocaleDateString('ru-RU', {
+    weekday: 'short', day: 'numeric', month: 'long',
+  })
+  const mo = monthLabel(data.current_month)
 
-function MobileDash({ data, user }) {
-  const firstName = user.full_name.split(/\s+/)[0]
   return (
     <div className="mdash">
-      <div className="mdash-head">
-        <div className="mdash-greet">{greeting()}, {firstName} 👋</div>
-        <div className="mdash-date">
-          {new Date(data.today + 'T00:00:00').toLocaleDateString('ru-RU', {
-            weekday: 'long', day: 'numeric', month: 'long',
-          })}
-        </div>
+      {/* Тонкая строка: дата + статус контроля (вместо большого баннера) */}
+      <div className="mdash-topline">
+        <span className="mdash-date">{dateStr}</span>
+        <Link
+          to="/checks"
+          className={`mdash-status ${crit ? 'is-crit' : warn ? 'is-warn' : 'is-ok'}`}
+        >
+          {crit ? `🛡 ${crit} крит` : warn ? `🛡 ${warn} внимание` : '🛡 всё чисто'}
+        </Link>
       </div>
 
-      {data.checks.critical > 0 && (
-        <Link to="/checks" className="mdash-alert">
-          ⚠ {data.checks.critical} критичных сигнала в контроле — посмотреть →
-        </Link>
+      {/* Главная цифра — деньги в моменте */}
+      {data.cash && (
+        <div className="mdash-hero">
+          <div className="mdash-hero-label">Деньги на счетах и в кассах</div>
+          <div className="mdash-hero-value">{shortMoney(data.cash.total)}</div>
+          <div className="mdash-hero-sub">{data.cash.accounts} счетов · из 1С</div>
+        </div>
       )}
 
-      <div className="mdash-carousel">
-        {data.cash && (
-          <div className="mdash-kpi mdash-kpi-money">
-            <div className="mdash-kpi-label">На счетах и в кассах</div>
-            <div className="mdash-kpi-value">{shortMoney(data.cash.total)}</div>
-            <div className="mdash-kpi-sub">{data.cash.accounts} счетов</div>
-          </div>
-        )}
-        <div className={`mdash-kpi ${data.cash ? '' : 'mdash-kpi-money'}`}>
-          <div className="mdash-kpi-label">Поступило · {monthLabel(data.current_month)}</div>
-          <div className="mdash-kpi-value">{shortMoney(data.money.month_in)}</div>
-          <Delta cur={data.money.month_in} prev={data.money.prev_month_in} />
+      {/* Ключевые метрики — сетка 2×2, без прокрутки вбок */}
+      <div className="mdash-grid">
+        <div className="mtile">
+          <div className="mtile-label">Продажи · {mo}</div>
+          <div className="mtile-value">{shortMoney(data.sales.month)}</div>
+          <Delta cur={data.sales.month} prev={data.sales.prev_month} compact />
         </div>
-        {data.money.month_out > 0 && (
-          <div className="mdash-kpi mdash-kpi-debt">
-            <div className="mdash-kpi-label">Расходы · {monthLabel(data.current_month)}</div>
-            <div className="mdash-kpi-value">{shortMoney(data.money.month_out)}</div>
-            <Delta cur={data.money.month_out} prev={data.money.prev_month_out} />
-          </div>
-        )}
-        <div className="mdash-kpi">
-          <div className="mdash-kpi-label">Продажи · {monthLabel(data.current_month)}</div>
-          <div className="mdash-kpi-value">{shortMoney(data.sales.month)}</div>
-          <Delta cur={data.sales.month} prev={data.sales.prev_month} />
+        <div className="mtile">
+          <div className="mtile-label">Поступило · {mo}</div>
+          <div className="mtile-value">{shortMoney(data.money.month_in)}</div>
+          <Delta cur={data.money.month_in} prev={data.money.prev_month_in} compact />
         </div>
-        <Link to="/debt" className="mdash-kpi mdash-kpi-debt">
-          <div className="mdash-kpi-label">Долг клиентов</div>
-          <div className="mdash-kpi-value">{shortMoney(data.debt.total)}</div>
-          <div className="mdash-kpi-sub">{data.debt.debtors} должников</div>
-        </Link>
-        <Link to="/calendar" className="mdash-kpi">
-          <div className="mdash-kpi-label">Платежи · 30 дн</div>
-          <div className="mdash-kpi-value neg">↑ {shortMoney(data.payments.out_30)}</div>
-          <div className="mdash-kpi-sub pos">↓ {shortMoney(data.payments.in_30)}</div>
+        <div className="mtile">
+          <div className="mtile-label">Расходы · {mo}</div>
+          <div className="mtile-value">{shortMoney(data.money.month_out)}</div>
+          <Delta cur={data.money.month_out} prev={data.money.prev_month_out} invert compact />
+        </div>
+        <Link to="/debt" className="mtile mtile-link mtile-debt">
+          <div className="mtile-label">Долг клиентов</div>
+          <div className="mtile-value">{shortMoney(data.debt.total)}</div>
+          <div className="mtile-sub">{data.debt.debtors} должников →</div>
         </Link>
       </div>
 
-      <div className="mdash-section">
-        <div className="mdash-section-head">
-          <span>Ближайшие платежи</span>
-          <Link to="/calendar">все →</Link>
-        </div>
-        {data.payments.upcoming.slice(0, 4).map((p, i) => (
-          <div key={i} className="mdash-item">
-            <div className="mdash-item-date">{fmtDate(p.due_date)}</div>
-            <div className="mdash-item-name">{p.title}</div>
-            <div className={`num ${p.direction === 'incoming' ? 'pos' : 'neg'}`}>
-              {p.direction === 'incoming' ? '+' : '−'}{shortMoney(p.amount)}
-            </div>
-          </div>
-        ))}
-        {data.payments.upcoming.length === 0 && (
-          <div className="muted mdash-empty">Запланированных платежей нет</div>
-        )}
+      {/* Денежный поток месяца — поступления минус расходы */}
+      <div className={`mdash-flow ${flow >= 0 ? 'is-pos' : 'is-neg'}`}>
+        <span className="mdash-flow-label">Денежный поток · {mo}</span>
+        <span className="mdash-flow-value">
+          {flow >= 0 ? '+' : '−'}{shortMoney(Math.abs(flow))}
+        </span>
       </div>
 
+      {/* Топ должников — кем заняться в первую очередь */}
       <div className="mdash-section">
         <div className="mdash-section-head">
           <span>Топ должников</span>
           <Link to="/debt">все →</Link>
         </div>
-        {data.debt.top.slice(0, 4).map((d) => (
+        {data.debt.top.slice(0, 5).map((d) => (
           <div key={d.name} className="mdash-item">
             <div className="mdash-item-name">{d.name}</div>
             <div className="num neg">{shortMoney(d.debt)}</div>
           </div>
         ))}
+        {data.debt.top.length === 0 && (
+          <div className="muted mdash-empty">Долгов нет 🎉</div>
+        )}
       </div>
 
+      {/* Динамика продаж */}
       <div className="mdash-section">
         <div className="mdash-section-head">
           <span>Продажи · 12 мес</span>
           <Link to="/analytics">аналитика →</Link>
         </div>
-        <MiniChart monthly={data.sales.monthly} height={80} />
+        <MiniChart monthly={data.sales.monthly} height={92} />
       </div>
+
+      {/* Ближайшие платежи — только если есть */}
+      {data.payments.upcoming.length > 0 && (
+        <div className="mdash-section">
+          <div className="mdash-section-head">
+            <span>Ближайшие платежи</span>
+            <Link to="/calendar">все →</Link>
+          </div>
+          {data.payments.upcoming.slice(0, 4).map((p, i) => (
+            <div key={i} className="mdash-item">
+              <div className="mdash-item-date">{fmtDate(p.due_date)}</div>
+              <div className="mdash-item-name">{p.title}</div>
+              <div className={`num ${p.direction === 'incoming' ? 'pos' : 'neg'}`}>
+                {p.direction === 'incoming' ? '+' : '−'}{shortMoney(p.amount)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

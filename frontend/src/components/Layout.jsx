@@ -24,17 +24,6 @@ const SECONDARY = [
   { to: '/users', icon: '👥', label: 'Пользователи', adminOnly: true },
 ]
 
-const TITLES = {
-  '/': 'Главная',
-  '/calendar': 'Календарь',
-  '/payments': 'Платежи',
-  '/analytics': 'Аналитика',
-  '/debt': 'Дебиторка',
-  '/agents': 'Агенты',
-  '/checks': 'Контроль',
-  '/users': 'Пользователи',
-}
-
 export default function Layout() {
   const { user, logout, can } = useAuth()
   const [alerts, setAlerts] = useState(null)
@@ -71,7 +60,6 @@ export default function Layout() {
     .toUpperCase()
 
   const secondaryVisible = SECONDARY.filter((i) => !i.adminOnly || can.manageUsers)
-  const title = TITLES[location.pathname] || 'InnoWave Group'
   // раздел активен по «Ещё», если открыта одна из вторичных страниц
   const inSecondary = secondaryVisible.some((i) => i.to === location.pathname)
 
@@ -115,19 +103,14 @@ export default function Layout() {
         </div>
       </aside>
 
-      {/* ---------- Телефон: верхняя панель приложения ---------- */}
+      {/* ---------- Телефон: верхняя панель приложения ----------
+          Только бренд: раздел и так подсвечен в нижних вкладках, а меню
+          открывается вкладкой «Ещё» — дубли сверху убраны. */}
       <header className="appbar">
         <div className="appbar-brand">
           <div className="brand-mark">IW</div>
-          <span className="appbar-title">{title}</span>
+          <span className="appbar-title">InnoWave Group</span>
         </div>
-        <button
-          className="appbar-avatar"
-          onClick={() => setMoreOpen(true)}
-          aria-label="Меню"
-        >
-          {initials}
-        </button>
       </header>
 
       <main className="content">
