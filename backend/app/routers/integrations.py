@@ -120,7 +120,19 @@ async def inbox(
         .first()
     )
     if already:
-        return {"type": kind, "status": "unchanged", "detail": "Файл уже обработан"}
+        # Исключение: файл возвратов, который ранее ошибочно записался в
+        # продажи, — пропускаем к самолечению; но повторную очистку того же
+        # файла не гоняем.
+        cleaned_before = (
+            db.query(models.ImportLog)
+            .filter(
+                models.ImportLog.file_hash == file_hash,
+                models.ImportLog.filename.like("[возвраты%"),
+            )
+            .first()
+        )
+        if kind != "return_lines" or cleaned_before:
+            return {"type": kind, "status": "unchanged", "detail": "Файл уже обработан"}
 
     auto_name = f"[авто] {filename}"
     if kind == "sales":
