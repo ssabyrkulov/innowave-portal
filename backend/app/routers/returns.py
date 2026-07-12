@@ -28,8 +28,10 @@ def import_return_lines_workbook(
     Делает две вещи:
     1. Самолечение: удаляет из продаж строки, если они когда-то по ошибке
        туда попали (совпадение по row_hash).
-    2. Записывает суммы возвратов по клиентам (заменой целиком) — уменьшают
-       долг в дебиторке. Сумма строки берётся с учётом скидки, как в продажах.
+    2. Записывает суммы возвратов по клиентам (заменой целиком). Сумма
+       берётся по «СуммаДокумента» возврата (итог документа, как у продаж) —
+       так значения совпадают с выгрузкой Возв и Excel. Если у документа нет
+       итога — суммируем строки со скидкой.
     """
     from .sales import _row_hash, parse_sales_workbook
 
@@ -45,23 +47,42 @@ def import_return_lines_workbook(
             .delete(synchronize_session=False)
         )
 
-    # 2. Возвраты по клиентам — заменой целиком (файл = полная история)
+    # 2. Возвраты по документам: один ReturnDoc на документ по СуммаДокумента.
     db.query(models.ReturnDoc).delete()
     db.flush()
-    seen: set[str] = set()
-    occ: dict[str, int] = defaultdict(int)
-    added = 0
+    seen_docs: set = set()
+    fallback: dict[tuple, dict] = {}  # документы без номера/итога — по строкам
+    docs: list[dict] = []
     for p in parsed:
-        amount = float(p["amount"]) * (1 - float(p.get("discount_pct") or 0) / 100)
-        base = f"{p['date']}|{p['client']}|{p['product']}|{amount}|{p.get('doc_number')}"
-        occ[base] += 1
-        h = hashlib.sha256(f"{base}#{occ[base]}".encode()).hexdigest()
-        if h in seen:
-            continue
-        seen.add(h)
+        client = p["client"]
+        if p.get("doc_number") and p.get("doc_total") is not None:
+            key = (p["doc_number"], p["date"], client)
+            if key in seen_docs:
+                continue
+            seen_docs.add(key)
+            docs.append({
+                "date": p["date"], "client": client,
+                "amount": float(p["doc_total"]),
+                "currency": p.get("currency") or "KGS",
+            })
+        else:
+            # нет итога документа — копим сумму строк (со скидкой) по клиенту/дате
+            fkey = (p["date"], client)
+            f = fallback.setdefault(fkey, {
+                "date": p["date"], "client": client, "amount": 0.0,
+                "currency": p.get("currency") or "KGS",
+            })
+            f["amount"] += float(p["amount"]) * (1 - float(p.get("discount_pct") or 0) / 100)
+    docs.extend(fallback.values())
+
+    added = 0
+    for i, d in enumerate(docs):
+        h = hashlib.sha256(
+            f"{d['date']}|{d['client']}|{d['amount']}|{i}".encode()
+        ).hexdigest()
         db.add(models.ReturnDoc(
-            date=p["date"], amount=round(amount, 2),
-            currency=p.get("currency") or "KGS", client=p["client"], row_hash=h,
+            date=d["date"], amount=round(d["amount"], 2),
+            currency=d["currency"], client=d["client"], row_hash=h,
         ))
         added += 1
 
