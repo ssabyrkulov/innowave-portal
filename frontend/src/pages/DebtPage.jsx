@@ -224,18 +224,18 @@ export default function DebtPage() {
             </div>
           )}
 
-          <div className="table-wrap cards">
+          <div className="table-wrap compact">
             <table>
               <thead>
                 <tr>
                   <th>Клиент</th>
-                  <th className="num">Отгружено</th>
-                  <th className="num">Возвраты</th>
+                  <th className="num hide-mobile">Отгружено</th>
+                  <th className="num hide-mobile">Возвраты</th>
                   <th className="num">Оплачено</th>
                   <th className="num">Долг</th>
-                  <th>Посл. отгрузка</th>
-                  <th>Посл. оплата</th>
-                  <th></th>
+                  <th className="hide-mobile">Посл. отгрузка</th>
+                  <th className="hide-mobile">Посл. оплата</th>
+                  <th className="hide-mobile"></th>
                 </tr>
               </thead>
               <tbody>
@@ -250,16 +250,24 @@ export default function DebtPage() {
                   const stale = daysSince(c.last_payment) > STALE_DAYS
                   return (
                     <tr key={c.client}>
-                      <td data-label="Клиент">{c.client}</td>
-                      <td className="num" data-label="Отгружено">{formatMoney(c.shipped)}</td>
-                      <td className="num muted" data-label="Возвраты">
+                      <td>
+                        {c.client}
+                        {/* на телефоне метку «давно не платил» показываем прямо под именем */}
+                        {stale && (
+                          <span className="badge badge-overdue debt-stale-inline" title={`Оплат не было больше ${STALE_DAYS} дней`}>
+                            {c.last_payment ? `>${daysSince(c.last_payment)} дн. без оплат` : 'не платил'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="num hide-mobile">{formatMoney(c.shipped)}</td>
+                      <td className="num muted hide-mobile">
                         {c.returned > 0 ? `−${formatMoney(c.returned)}` : '—'}
                       </td>
-                      <td className="num pos" data-label="Оплачено">{formatMoney(c.paid)}</td>
-                      <td className="num neg" data-label="Долг">{formatMoney(c.debt)}</td>
-                      <td data-label="Посл. отгрузка">{fmtDate(c.last_shipment)}</td>
-                      <td data-label="Посл. оплата">{fmtDate(c.last_payment)}</td>
-                      <td className="card-action">
+                      <td className="num pos">{formatMoney(c.paid)}</td>
+                      <td className="num neg">{formatMoney(c.debt)}</td>
+                      <td className="hide-mobile">{fmtDate(c.last_shipment)}</td>
+                      <td className="hide-mobile">{fmtDate(c.last_payment)}</td>
+                      <td className="hide-mobile">
                         {stale && (
                           <span className="badge badge-overdue" title={`Оплат не было больше ${STALE_DAYS} дней`}>
                             {c.last_payment ? `>${daysSince(c.last_payment)} дн.` : 'не платил'}

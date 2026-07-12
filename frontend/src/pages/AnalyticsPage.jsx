@@ -284,27 +284,27 @@ function ProductSearch({ dateFrom, dateTo }) {
           </div>
 
           {res.count > 0 && (
-            <div className="table-wrap cards product-search-table">
+            <div className="table-wrap compact product-search-table">
               <table>
                 <thead>
                   <tr>
                     <th>Товар</th>
                     <th className="num-col">Кол-во</th>
                     <th className="num-col">Сумма</th>
-                    <th className="num-col">Накл.</th>
-                    <th className="num-col">Период продаж</th>
+                    <th className="num-col hide-mobile">Накл.</th>
+                    <th className="num-col hide-mobile">Период продаж</th>
                   </tr>
                 </thead>
                 <tbody>
                   {res.products.map((p) => (
                     <tr key={p.product}>
-                      <td data-label="Товар">{p.product}</td>
-                      <td className="num num-col" data-label="Кол-во">
+                      <td>{p.product}</td>
+                      <td className="num num-col">
                         {fmtQty(p.qty)} {p.unit}
                       </td>
-                      <td className="num num-col" data-label="Сумма">{formatMoney(p.amount)}</td>
-                      <td className="num num-col" data-label="Накл.">{p.docs}</td>
-                      <td className="num num-col product-search-period" data-label="Период">
+                      <td className="num num-col">{formatMoney(p.amount)}</td>
+                      <td className="num num-col hide-mobile">{p.docs}</td>
+                      <td className="num num-col hide-mobile">
                         {p.first_date === p.last_date
                           ? fmtDate(p.first_date)
                           : `${fmtDate(p.first_date)}—${fmtDate(p.last_date)}`}

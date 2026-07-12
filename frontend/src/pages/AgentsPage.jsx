@@ -96,16 +96,16 @@ export default function AgentsPage() {
         )}
       </div>
 
-      <div className="table-wrap">
+      <div className="table-wrap compact">
         <table>
           <thead>
             <tr>
               <th>Агент</th>
               <th className="num">Тек. месяц</th>
               <th>План / выполнение</th>
-              <th className="num" title="К прошлому месяцу">Δ к пр. мес</th>
-              <th className="num">Долг клиентов</th>
-              <th>Динамика (12 мес)</th>
+              <th className="num hide-mobile" title="К прошлому месяцу">Δ к пр. мес</th>
+              <th className="num hide-mobile">Долг клиентов</th>
+              <th className="hide-mobile">Динамика (12 мес)</th>
             </tr>
           </thead>
           <tbody>
@@ -191,10 +191,10 @@ function AgentRow({ agent, canEdit, open, onToggle, onSaveTarget }) {
             </div>
           ) : null}
         </td>
-        <td className={`num ${d == null ? 'muted' : d >= 0 ? 'pos' : 'neg'}`}>
+        <td className={`num hide-mobile ${d == null ? 'muted' : d >= 0 ? 'pos' : 'neg'}`}>
           {d == null ? '—' : `${d >= 0 ? '+' : ''}${d.toFixed(0)}%`}
         </td>
-        <td className="num">
+        <td className="num hide-mobile">
           {agent.debt > 0 ? (
             <span className="neg">
               {shortMoney(agent.debt)}
@@ -204,7 +204,7 @@ function AgentRow({ agent, canEdit, open, onToggle, onSaveTarget }) {
             <span className="muted">—</span>
           )}
         </td>
-        <td>
+        <td className="hide-mobile">
           <Sparkline monthly={agent.monthly} />
         </td>
       </tr>

@@ -2012,6 +2012,48 @@ tbody tr:hover {
   }
 }
 
+/* метка «давно не платил» под именем клиента — только на телефоне */
+.debt-stale-inline {
+  display: none;
+}
+
+/* ---------- Компактные таблицы на телефоне (для сравнения) ---------- */
+/* .table-wrap.compact: остаётся таблицей — цифры выровнены в столбик, их
+   удобно сравнивать глазом. Второстепенные колонки помечаются .hide-mobile
+   и прячутся, чтобы всё влезло по ширине без прокрутки вбок. */
+@media (max-width: 840px) {
+  .hide-mobile {
+    display: none !important;
+  }
+
+  .table-wrap.compact {
+    overflow-x: visible;
+  }
+
+  .table-wrap.compact th,
+  .table-wrap.compact td {
+    padding: 9px 7px;
+    font-size: 12.5px;
+  }
+
+  .table-wrap.compact th:first-child,
+  .table-wrap.compact td:first-child {
+    white-space: normal;      /* длинное имя переносится, а не режется */
+    word-break: break-word;
+  }
+
+  .table-wrap.compact .num {
+    white-space: nowrap;
+  }
+
+  .debt-stale-inline {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 1px 6px;
+    font-size: 10.5px;
+  }
+}
+
 /* ---------- Таблицы-карточки на телефоне ---------- */
 /* .table-wrap.cards: на узком экране строка превращается в карточку
    «поле: значение», не нужно крутить таблицу вбок. Подпись берётся из
