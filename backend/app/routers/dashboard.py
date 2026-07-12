@@ -86,6 +86,16 @@ def dashboard(
     )
     total_debt = round(sum(d["debt"] for d in debts), 2)
 
+    # --- Расходы текущего/прошлого месяца (в сомах) ---
+    expense_month = 0.0
+    expense_prev = 0.0
+    for e in db.query(models.Expense).all():
+        em = e.date.strftime("%Y-%m")
+        if em == cur_month:
+            expense_month += float(e.amount_kgs)
+        elif em == prev_month:
+            expense_prev += float(e.amount_kgs)
+
     # --- Деньги на счетах (снапшот из 1С) ---
     cash_rows = db.query(models.CashBalance).all()
     cash = {
@@ -142,6 +152,8 @@ def dashboard(
         "money": {
             "month_in": round(month_in, 2),
             "prev_month_in": round(prev_month_in, 2),
+            "month_out": round(expense_month, 2),
+            "prev_month_out": round(expense_prev, 2),
         },
         "cash": cash,
         "debt": {

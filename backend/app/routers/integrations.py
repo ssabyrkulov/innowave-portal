@@ -21,6 +21,7 @@ from .balances import (
     import_cash_balances_workbook,
     import_stock_balances_workbook,
 )
+from .expenses import import_expenses_workbook
 from .receipts import import_receipts_workbook
 from .returns import import_returns_workbook
 from .sales import _row_hash, import_sales_workbook, parse_sales_workbook
@@ -56,6 +57,34 @@ def _robot_user(db: Session) -> models.User:
         db.commit()
         db.refresh(user)
     return user
+
+
+def classify_by_name(filename: str) -> str | None:
+    """Определяет тип выгрузки по имени файла — самый надёжный сигнал,
+    т.к. несколько выгрузок 1С делят одинаковую структуру колонок.
+    Возвращает None, если имя не распознано (тогда падаем в sniff_kind).
+    """
+    name = (filename or "").lower()
+    if name.startswith("~$"):
+        return "ignore"  # временный файл Excel
+    # Порядок важен: более специфичные подстроки раньше общих.
+    if "товвозв" in name:
+        return "return_lines"
+    if "возв" in name:
+        return "return_docs"
+    if "банккасса" in name:
+        return "cash_balances"
+    if "пписход" in name or "рко" in name:
+        return "expense"
+    if "реал" in name:
+        return "sales"
+    if "банквх" in name or "пко" in name:
+        return "receipts"
+    if name.startswith("выгрузкаост") or "остех" in name or "выгрузкаост" in name:
+        return "stock_balances"
+    if "ост" in name and "прост" not in name:
+        return "stock_balances"
+    return None
 
 
 def sniff_kind(content: bytes) -> str:
@@ -107,32 +136,19 @@ async def inbox(
 
     content = await file.read()
     filename = file.filename or "file.xlsx"
-    kind = sniff_kind(content)
+    # Имя файла — первичный сигнал; колонки — запасной для незнакомых имён.
+    kind = classify_by_name(filename) or sniff_kind(content)
+    if kind == "ignore":
+        return {"type": "ignore", "status": "skipped", "detail": "Временный файл"}
     robot = _robot_user(db)
 
-    # Один и тот же файл (по содержимому) не обрабатываем повторно.
-    # Хэш пишется только при успешной обработке, поэтому «отложенные»
-    # форматы обработаются, как только появится их импортёр.
+    # Раньше здесь стоял короткий выход «файл уже обработан» по хэшу
+    # содержимого. Он мешал переразложить файлы после смены логики
+    # маршрутизации, поэтому убран: все импортёры идемпотентны — снапшоты
+    # (остатки) грузятся заменой, продажи/оплаты/расходы/возвраты
+    # дедуплицируются построчно или заменой периода. Хэш по-прежнему
+    # пишем в журнал для аудита.
     file_hash = hashlib.sha256(content).hexdigest()
-    already = (
-        db.query(models.ImportLog)
-        .filter(models.ImportLog.file_hash == file_hash)
-        .first()
-    )
-    if already:
-        # Исключение: файл возвратов, который ранее ошибочно записался в
-        # продажи, — пропускаем к самолечению; но повторную очистку того же
-        # файла не гоняем.
-        cleaned_before = (
-            db.query(models.ImportLog)
-            .filter(
-                models.ImportLog.file_hash == file_hash,
-                models.ImportLog.filename.like("[возвраты%"),
-            )
-            .first()
-        )
-        if kind != "return_lines" or cleaned_before:
-            return {"type": kind, "status": "unchanged", "detail": "Файл уже обработан"}
 
     auto_name = f"[авто] {filename}"
     if kind == "sales":
@@ -145,6 +161,10 @@ async def inbox(
         result = import_cash_balances_workbook(db, content, auto_name, robot.id)
     elif kind == "stock_balances":
         result = import_stock_balances_workbook(db, content, auto_name, robot.id)
+    elif kind == "expense":
+        # РКО = касса, ППИсход = банк
+        exp_kind = "cash" if "рко" in filename.lower() else "bank"
+        result = import_expenses_workbook(db, content, auto_name, robot.id, exp_kind)
     elif kind == "return_lines":
         # Возвраты в формате продаж. Финансово их несёт документный файл;
         # здесь главное — самолечение: удаляем строки этого файла, если они

@@ -96,7 +96,12 @@ def import_returns_workbook(
     for line_no, row in enumerate(rows_iter, start=line_no + 1):
         process(row, line_no)
 
-    existing = {h for (h,) in db.query(models.ReturnDoc.row_hash).all()}
+    # Возвраты — полная выгрузка за всю историю, поэтому грузим «заменой
+    # целиком»: это самоисцеляет таблицу, если в неё раньше по ошибке попал
+    # чужой файл (напр. исходящие платежи).
+    db.query(models.ReturnDoc).delete()
+    db.flush()
+    existing: set[str] = set()
     seen: set[str] = set()
     occurrences: dict[str, int] = defaultdict(int)
     added = skipped = 0

@@ -94,6 +94,25 @@ class Receipt(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class Expense(Base):
+    """Расход денежных средств: исходящие платёжки (банк) и РКО (касса)."""
+
+    __tablename__ = "expenses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
+    rate: Mapped[float] = mapped_column(Numeric(12, 4), default=1, nullable=False)
+    amount_kgs: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    counterparty: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String, default="bank", nullable=False)  # bank|cash
+    basis: Mapped[str | None] = mapped_column(String, nullable=True)  # Основание / ВидОперации
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ReturnDoc(Base):
     """Возврат товаров от покупателя (уровень документа) из 1С."""
 
