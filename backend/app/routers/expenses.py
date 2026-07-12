@@ -22,14 +22,34 @@ router = APIRouter(prefix="/expenses", tags=["expenses"])
 admin_only = require_roles(models.Role.admin)
 
 HEADERS = {
+    # дата
     "Дата": "date",
+    "ДатаДокумента": "date",
+    # сумма
     "Сумма": "amount",
+    "СуммаДокумента": "amount",
+    "СуммаПлатежа": "amount",
+    "СуммаРасхода": "amount",
+    # валюта
     "Валюта": "currency",
+    "ВалютаДокумента": "currency",
+    "ВалютаДокументаНаименование": "currency",
+    # контрагент/получатель
     "Контрагент": "counterparty",
+    "КонтрагентНаименование": "counterparty",
+    "Получатель": "counterparty",
+    "ПолучательНаименование": "counterparty",
+    # основание/назначение/статья
     "Основание": "basis",
     "ВидОперации": "basis",
     "Назначение": "basis",
+    "НазначениеПлатежа": "basis",
+    "СтатьяДвиженияДенежныхСредств": "basis",
+    "СтатьяДДС": "basis",
+    "Статья": "basis",
+    # номер
     "Номер": "doc_number",
+    "НомерДокумента": "doc_number",
 }
 
 
@@ -58,22 +78,29 @@ def import_expenses_workbook(
     rows_iter = ws.iter_rows(values_only=True)
 
     header_idx, columns, buffered = None, {}, []
+    seen_headers: list[str] = []
     for i, row in enumerate(rows_iter):
         buffered.append(row)
         if i >= 20:
             break
+        cells = [str(c).strip() for c in row if c is not None]
+        if cells and not seen_headers:
+            seen_headers = cells
         matched = {
             j: HEADERS[str(c).strip()]
             for j, c in enumerate(row)
             if c is not None and str(c).strip() in HEADERS
         }
-        if {"date", "amount", "counterparty"} <= set(matched.values()):
+        # Минимум — дата и сумма; контрагент желателен, но не обязателен.
+        if {"date", "amount"} <= set(matched.values()):
             header_idx, columns = i, matched
+            seen_headers = cells
             break
     if header_idx is None:
         raise HTTPException(
             status_code=400,
-            detail="Не найдены колонки расхода (Дата, Сумма, Контрагент)",
+            detail="Не найдены колонки расхода (нужны минимум Дата и Сумма). "
+                   f"Заголовки в файле: {', '.join(seen_headers) or '—'}",
         )
 
     parsed, errors = [], []
