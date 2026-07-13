@@ -14,7 +14,12 @@ const clone = (o) => JSON.parse(JSON.stringify(o))
 function loadConfig() {
   try {
     const raw = localStorage.getItem(STORE_KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      // при смене структуры модели (новая версия) берём свежие дефолты,
+      // чтобы новые направления/поля точно подхватились
+      if (parsed && parsed.version === DEFAULT_CONFIG.version) return parsed
+    }
   } catch {
     /* ignore */
   }
@@ -86,6 +91,8 @@ export default function UnitEconomicsPage() {
   const setPlan = (key, v) => patch((n) => { n.plan[key] = v })
 
   const commonSum = company.commonTotal
+  const coeffSum = config.directions.reduce((s, d) => s + (Number(d.commonCoeff) || 0), 0)
+  const coeffOk = Math.abs(coeffSum - 1) < 0.005
 
   return (
     <div className="ue">
@@ -263,6 +270,12 @@ export default function UnitEconomicsPage() {
           <h2 className="chart-title">Общий котёл · постоянные расходы</h2>
           <div className="ue-bep">{fmtMoney(commonSum)} / мес</div>
         </div>
+        {!coeffOk && (
+          <div className="ue-warn">
+            ⚠ Сумма «долей общих» по направлениям = {fmtPct(coeffSum)}, а должна быть 100%
+            (иначе общие расходы делятся неверно). Поправь коэффициенты в направлениях.
+          </div>
+        )}
         <div className="ue-common-grid">
           {config.common.items.map((it, i) => (
             <label key={i} className="ue-field ue-field-row">

@@ -7,7 +7,10 @@
 // ————————————————————————————————————————————————————————————
 // Дефолтная модель (все значения редактируемые в UI)
 // ————————————————————————————————————————————————————————————
+export const CONFIG_VERSION = 2
+
 export const DEFAULT_CONFIG = {
+  version: CONFIG_VERSION,
   common: {
     items: [
       { label: 'Подписки / сертификаты', amount: 60000 },
@@ -37,7 +40,7 @@ export const DEFAULT_CONFIG = {
       costMode: 'pct', // поставщики% задаётся напрямую
       deliveryPct: 0.07785314066647006,
       customsPct: 0.10380418755529343,
-      commonCoeff: 0.5,
+      commonCoeff: 1 / 3,
       directCosts: [
         { label: 'Реклама (роддом/таргет)', amount: 50000 },
         { label: 'Кэшбэк / полки', amount: 50000 },
@@ -55,7 +58,7 @@ export const DEFAULT_CONFIG = {
       unitCost: 110, // себестоимость «всё включено» (доставка/растаможка в цене)
       deliveryPct: 0,
       customsPct: 0,
-      commonCoeff: 0.5,
+      commonCoeff: 1 / 3,
       directCosts: [
         { label: 'Реклама', amount: 0 },
         { label: 'Кэшбэк / полки', amount: 0 },
@@ -64,6 +67,24 @@ export const DEFAULT_CONFIG = {
         { name: 'ОПТ (сети)', price: 130, share: 1 / 3, taxPct: 0.04, provisional: true },
         { name: 'РОЗНИЦА', price: 145.8, share: 1 / 3, taxPct: 0.04, provisional: true },
         { name: 'БАЗАР', price: 135, share: 1 / 3, taxPct: 0.04, provisional: true },
+      ],
+    },
+    {
+      id: 'one_classic',
+      name: 'Подгузники ONE classic',
+      costMode: 'fixedCost', // поставщики% = себестоимость / цена канала
+      unitCost: 145, // себестоимость «всё включено»
+      deliveryPct: 0,
+      customsPct: 0,
+      commonCoeff: 1 / 3,
+      directCosts: [
+        { label: 'Реклама', amount: 0 },
+        { label: 'Кэшбэк / полки', amount: 0 },
+      ],
+      channels: [
+        { name: 'Сети', price: 170, share: 1 / 3, taxPct: 0.04, provisional: true },
+        { name: 'Базар', price: 180, share: 1 / 3, taxPct: 0.04, provisional: true },
+        { name: 'Розница', price: 200, share: 1 / 3, taxPct: 0.04, provisional: true },
       ],
     },
   ],
