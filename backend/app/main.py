@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -65,8 +66,38 @@ app.add_middleware(
 )
 
 
+def wait_for_db(attempts: int = 12, base_delay: float = 2.0) -> None:
+    """Ждёт готовности БД перед инициализацией.
+
+    Бесплатный PostgreSQL на Render иногда не успевает принять соединение к
+    моменту старта контейнера — раньше одно такое «моргание» роняло весь
+    деплой (Application startup failed → Render откатывался на старую версию).
+    Повторяем подключение с нарастающей паузой, чтобы транзиентный таймаут
+    не срывал выкладку.
+    """
+    last_err: Exception | None = None
+    for i in range(attempts):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return
+        except Exception as err:  # noqa: BLE001 — ждём любую ошибку соединения
+            last_err = err
+            delay = min(base_delay * (i + 1), 15.0)
+            print(
+                f"[startup] БД пока недоступна (попытка {i + 1}/{attempts}): "
+                f"{err.__class__.__name__}. Повтор через {delay:.0f}s…",
+                flush=True,
+            )
+            time.sleep(delay)
+    raise RuntimeError(
+        f"Не удалось подключиться к БД после {attempts} попыток"
+    ) from last_err
+
+
 @app.on_event("startup")
 def on_startup() -> None:
+    wait_for_db()
     Base.metadata.create_all(bind=engine)
     run_mini_migrations()
     seed_initial_admin()
