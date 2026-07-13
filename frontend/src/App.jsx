@@ -10,6 +10,7 @@ import CalendarPage from './pages/CalendarPage'
 import ChecksPage from './pages/ChecksPage'
 import PaymentsPage from './pages/PaymentsPage'
 import UsersPage from './pages/UsersPage'
+import UnitEconomicsPage from './pages/UnitEconomicsPage'
 
 function Protected({ children, adminOnly = false }) {
   const { user, loading } = useAuth()
@@ -38,6 +39,14 @@ export default function App() {
         <Route path="checks" element={<ChecksPage />} />
         <Route path="debt" element={<DebtPage />} />
         <Route path="agents" element={<AgentsPage />} />
+        <Route
+          path="tools/unit-economics"
+          element={
+            <Protected adminOnly>
+              <UnitEconomicsPage />
+            </Protected>
+          }
+        />
         <Route
           path="users"
           element={

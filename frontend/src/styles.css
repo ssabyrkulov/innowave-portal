@@ -2194,3 +2194,146 @@ tbody tr:hover {
     display: none;
   }
 }
+
+/* ================= Юнит-экономика и ТБУ ================= */
+.ue { display: flex; flex-direction: column; gap: 16px; }
+
+.ue-input {
+  width: 100%;
+  max-width: 130px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.ue-input:focus { outline: none; border-color: var(--text); }
+.ue-input-flag { border-color: var(--warn); background: var(--warn-soft); }
+
+.ue-calc { color: var(--muted); }
+
+.ue-flag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  font-size: 10.5px;
+  border-radius: 200px;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.ue-hero {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--action);
+  color: #fff;
+  border-radius: var(--r-lg);
+  padding: 20px 22px;
+}
+.ue-hero-label { font-size: 12.5px; color: #b0b0b0; }
+.ue-hero-value {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 40px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  margin-top: 4px;
+}
+.ue-hero-side { display: flex; flex-direction: column; gap: 6px; min-width: 220px; }
+.ue-hero-item {
+  display: flex; justify-content: space-between; gap: 16px;
+  font-size: 13px; color: #d8d8d8;
+  border-bottom: 1px solid #3a3a3a; padding-bottom: 5px;
+}
+.ue-hero-item b { color: #fff; font-variant-numeric: tabular-nums; }
+
+.ue-dir-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; margin-bottom: 14px; flex-wrap: wrap;
+}
+.ue-bep {
+  font-family: var(--font-display);
+  font-size: 18px; letter-spacing: -0.02em;
+  color: var(--text); font-variant-numeric: tabular-nums;
+}
+.ue-bep.ue-bad { color: var(--out); }
+
+.ue-params, .ue-plan-controls {
+  display: flex; flex-wrap: wrap; gap: 14px 18px; margin-bottom: 14px;
+}
+.ue-field { display: flex; flex-direction: column; gap: 5px; }
+.ue-field > span { font-size: 11.5px; color: var(--faint); }
+.ue-field-row {
+  flex-direction: row; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 4px 0;
+}
+.ue-field-row > span { font-size: 12.5px; color: var(--muted); flex: 1; }
+.ue-field-wide { flex: 1 1 260px; }
+.ue-field-wide .ue-input { max-width: none; text-align: left; }
+
+.ue-table { margin: 4px 0 12px; }
+.ue-table td, .ue-table th { padding: 8px 10px; }
+.ue-table tfoot td { font-weight: 600; border-top: 2px solid var(--border-strong); }
+.ue-table .ue-input { max-width: 96px; }
+
+.ue-sub { font-size: 12px; color: var(--faint); margin: 4px 0 6px; font-weight: 600; }
+
+.ue-direct { margin: 8px 0; max-width: 460px; }
+
+.ue-summary {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 18px; margin-top: 12px;
+  border-top: 1px solid var(--border); padding-top: 14px;
+}
+.ue-summary > div { display: flex; flex-direction: column; gap: 2px; }
+.ue-summary span { font-size: 11.5px; color: var(--faint); }
+.ue-summary b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.ue-check.ok b { color: var(--in); }
+.ue-check.bad b { color: var(--out); }
+
+.ue-warn { color: var(--out); font-size: 13px; margin: 4px 0 8px; }
+
+.ue-common-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 2px 20px;
+}
+.ue-common-grid .ue-field-row { border-bottom: 1px dashed var(--border); }
+
+.ue-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-sm); overflow: hidden; }
+.ue-seg-btn {
+  border: none; background: var(--surface); color: var(--muted);
+  padding: 8px 14px; font-family: var(--font-display); font-size: 13px; cursor: pointer;
+  border-right: 1px solid var(--border-strong);
+}
+.ue-seg-btn:last-child { border-right: none; }
+.ue-seg-btn.active { background: var(--action); color: #fff; }
+.ue-goal { display: flex; flex-direction: column; gap: 6px; }
+
+.ue-plan-kpis {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px; margin: 8px 0 14px;
+}
+.ue-kpi {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.ue-kpi span { font-size: 11.5px; color: var(--faint); }
+.ue-kpi b { font-family: var(--font-display); font-size: 19px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+
+.ue-plan-table { max-height: 460px; overflow-y: auto; }
+.ue-foot { font-size: 12px; }
+
+@media (max-width: 840px) {
+  .ue-hero-value { font-size: 32px; }
+  .ue-hero-side { min-width: 0; width: 100%; }
+  .ue-input { max-width: 100%; font-size: 16px; }
+  .ue-table .ue-input { max-width: 80px; font-size: 14px; }
+}
