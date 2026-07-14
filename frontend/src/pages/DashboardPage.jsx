@@ -38,6 +38,30 @@ function Delta({ cur, prev, invert = false, compact = false }) {
   )
 }
 
+// Детализация «Деньги на счетах» — какой счёт сколько, из 1С.
+function CashDetail({ cash }) {
+  return (
+    <div className="chart-card cash-detail">
+      <div className="cash-detail-head">
+        <span>Деньги по счетам · из 1С</span>
+        <span className="muted">{cash.accounts} счетов</span>
+      </div>
+      <div className="cash-list">
+        {cash.items.map((a) => (
+          <div key={a.account} className="cash-row">
+            <span className="cash-acc">{a.account}</span>
+            <span className="num">{formatMoney(a.amount)}</span>
+          </div>
+        ))}
+        <div className="cash-row cash-total">
+          <span>Итого</span>
+          <span className="num">{formatMoney(cash.total)}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function MiniChart({ monthly, height = 64, width = 400 }) {
   const W = width
   const H = height
@@ -105,6 +129,7 @@ export default function DashboardPage() {
 /* ============================== ДЕСКТОП ============================== */
 
 function DesktopDash({ data }) {
+  const [cashOpen, setCashOpen] = useState(false)
   const hasAlerts = data.checks.critical + data.checks.warning > 0
   return (
     <div>
@@ -119,11 +144,16 @@ function DesktopDash({ data }) {
 
       <div className="summary-bar">
         {data.cash && (
-          <div className="summary-card summary-in">
+          <button
+            className="summary-card summary-in summary-link"
+            onClick={() => setCashOpen((o) => !o)}
+          >
             <span className="summary-label">Деньги на счетах и в кассах</span>
             <span className="summary-value">{formatMoney(data.cash.total)}</span>
-            <span className="dash-delta muted">{data.cash.accounts} счетов · из 1С</span>
-          </div>
+            <span className="dash-delta muted">
+              {data.cash.accounts} счетов · {cashOpen ? 'скрыть ▲' : 'детали ▼'}
+            </span>
+          </button>
         )}
         <div className={`summary-card ${data.cash ? '' : 'summary-in'}`}>
           <span className="summary-label">Поступило от клиентов · {monthLabel(data.current_month)}</span>
@@ -163,6 +193,8 @@ function DesktopDash({ data }) {
           <span className="dash-delta muted">открыть контроль →</span>
         </Link>
       </div>
+
+      {data.cash && cashOpen && <CashDetail cash={data.cash} />}
 
       <div className="dash-grid">
         <div className="chart-card dash-span2">
@@ -224,6 +256,7 @@ function DesktopDash({ data }) {
 /* ============================== МОБИЛЬНЫЙ ============================== */
 
 function MobileDash({ data }) {
+  const [cashOpen, setCashOpen] = useState(false)
   const crit = data.checks.critical
   const warn = data.checks.warning
   const flow = data.money.month_in - data.money.month_out
@@ -245,14 +278,17 @@ function MobileDash({ data }) {
         </Link>
       </div>
 
-      {/* Главная цифра — деньги в моменте */}
+      {/* Главная цифра — деньги в моменте (тап — детализация по счетам) */}
       {data.cash && (
-        <div className="mdash-hero">
+        <button className="mdash-hero" onClick={() => setCashOpen((o) => !o)}>
           <div className="mdash-hero-label">Деньги на счетах и в кассах</div>
           <div className="mdash-hero-value">{shortMoney(data.cash.total)}</div>
-          <div className="mdash-hero-sub">{data.cash.accounts} счетов · из 1С</div>
-        </div>
+          <div className="mdash-hero-sub">
+            {data.cash.accounts} счетов · {cashOpen ? 'скрыть ▲' : 'детали ▼'}
+          </div>
+        </button>
       )}
+      {data.cash && cashOpen && <CashDetail cash={data.cash} />}
 
       {/* Ключевые метрики — сетка 2×2, без прокрутки вбок */}
       <div className="mdash-grid">

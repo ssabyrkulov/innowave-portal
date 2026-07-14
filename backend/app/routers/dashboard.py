@@ -102,6 +102,11 @@ def dashboard(
         "total": round(sum(float(r.amount) for r in cash_rows), 2),
         "updated_at": cash_rows[0].updated_at.isoformat() if cash_rows else None,
         "accounts": len(cash_rows),
+        "items": sorted(
+            ({"account": r.account, "amount": round(float(r.amount), 2)}
+             for r in cash_rows),
+            key=lambda x: -x["amount"],
+        ),
     } if cash_rows else None
 
     # --- Контроль ---

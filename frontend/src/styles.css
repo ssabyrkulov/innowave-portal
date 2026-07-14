@@ -2368,3 +2368,33 @@ tbody tr:hover {
 @media (max-width: 840px) {
   .bdds-input { width: 100%; font-size: 16px; }
 }
+
+/* ---------- Детализация «Деньги по счетам» ---------- */
+button.summary-card {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mdash-hero {
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: #fff;
+}
+.cash-detail { margin-bottom: 16px; }
+.cash-detail-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 13px; font-weight: 600; margin-bottom: 8px;
+}
+.cash-list { display: flex; flex-direction: column; }
+.cash-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; padding: 8px 0; border-bottom: 1px dashed var(--border);
+  font-size: 13.5px;
+}
+.cash-row:last-child { border-bottom: none; }
+.cash-acc { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cash-total { font-weight: 700; border-top: 2px solid var(--border-strong); }
+.cash-total span { font-weight: 700; }
