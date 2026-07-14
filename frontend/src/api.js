@@ -129,4 +129,6 @@ export const api = {
   budgetUpsert: (body) => request('/budget', { method: 'PUT', body }),
   budgetDelete: (id) => request(`/budget/${id}`, { method: 'DELETE' }),
   budgetFactArticles: (period) => request(`/budget/fact-articles?period=${period}`),
+
+  stockBalances: () => request('/balances/stock'),
 }

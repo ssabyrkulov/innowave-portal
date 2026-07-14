@@ -21,6 +21,7 @@ const SECONDARY = [
   { to: '/payments', icon: '📋', label: 'Платежи' },
   { to: '/analytics', icon: '📊', label: 'Аналитика' },
   { to: '/agents', icon: '🧑‍💼', label: 'Агенты' },
+  { to: '/stock', icon: '📦', label: 'Остатки' },
   { to: '/budget', icon: '📈', label: 'БДДС', editOnly: true },
   { to: '/tools/unit-economics', icon: '🧮', label: 'Юнит-экономика', adminOnly: true },
   { to: '/users', icon: '👥', label: 'Пользователи', adminOnly: true },
