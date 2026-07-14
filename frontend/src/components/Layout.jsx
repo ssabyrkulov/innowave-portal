@@ -21,6 +21,7 @@ const SECONDARY = [
   { to: '/payments', icon: '📋', label: 'Платежи' },
   { to: '/analytics', icon: '📊', label: 'Аналитика' },
   { to: '/agents', icon: '🧑‍💼', label: 'Агенты' },
+  { to: '/budget', icon: '📈', label: 'БДДС', editOnly: true },
   { to: '/tools/unit-economics', icon: '🧮', label: 'Юнит-экономика', adminOnly: true },
   { to: '/users', icon: '👥', label: 'Пользователи', adminOnly: true },
 ]
@@ -60,7 +61,9 @@ export default function Layout() {
     .join('')
     .toUpperCase()
 
-  const secondaryVisible = SECONDARY.filter((i) => !i.adminOnly || can.manageUsers)
+  const secondaryVisible = SECONDARY.filter(
+    (i) => (!i.adminOnly || can.manageUsers) && (!i.editOnly || can.editPayments)
+  )
   // раздел активен по «Ещё», если открыта одна из вторичных страниц
   const inSecondary = secondaryVisible.some((i) => i.to === location.pathname)
 

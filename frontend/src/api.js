@@ -123,4 +123,10 @@ export const api = {
     ).toString()
     return request(`/sales/products${qs ? `?${qs}` : ''}`)
   },
+
+  budgetPlanFact: (period) => request(`/budget/plan-fact?period=${period}`),
+  budgetPlan: (period) => request(`/budget?period=${period}`),
+  budgetUpsert: (body) => request('/budget', { method: 'PUT', body }),
+  budgetDelete: (id) => request(`/budget/${id}`, { method: 'DELETE' }),
+  budgetFactArticles: (period) => request(`/budget/fact-articles?period=${period}`),
 }

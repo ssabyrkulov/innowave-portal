@@ -175,6 +175,26 @@ class AgentTarget(Base):
     __table_args__ = ()
 
 
+class BudgetItem(Base):
+    """План БДДС: сумма по статье движения денег на месяц (план-факт).
+
+    direction: 'in' — поступление, 'out' — выплата.
+    article — статья ДДС (совпадает со статьёй в факте: Receipt.operation /
+    Expense.basis), по ней и сводится план с фактом.
+    """
+
+    __tablename__ = "budget_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default="hygiene", nullable=False)
+    period: Mapped[str] = mapped_column(String(7), nullable=False, index=True)  # YYYY-MM
+    direction: Mapped[str] = mapped_column(String(3), nullable=False)  # in|out
+    article: Mapped[str] = mapped_column(String, nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ImportLog(Base):
     """Журнал загрузок Excel — кто, когда и что импортировал."""
 
