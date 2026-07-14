@@ -79,7 +79,28 @@ RULES = {
         "hint": "Продано больше, чем оприходовано — не введены поступления "
                 "товара или пересорт.",
     },
+    "future_date": {
+        "title": "Дата документа в будущем",
+        "severity": "warning",
+        "hint": "Дата реализации позже сегодняшней — проведение будущим "
+                "числом недопустимо (учётная политика, п. 2.2).",
+    },
+    "empty_responsible": {
+        "title": "Не заполнен «Ответственный»",
+        "severity": "warning",
+        "hint": "У документа не указан ответственный — нарушение дисциплины "
+                "учёта (учётная политика, п. 2.3).",
+    },
+    "wrong_account": {
+        "title": "Реализация не на счёте 1610",
+        "severity": "warning",
+        "hint": "Счёт учёта товара отличается от 1610 — ошибка классификации "
+                "(учётная политика, п. 3).",
+    },
 }
+
+# Счёт учёта товара для реализации (учётная политика, п. 3)
+GOODS_ACCOUNT = "1610"
 
 
 def _vhash(rule: str, key: str) -> str:
@@ -241,6 +262,36 @@ def run_checks(db: Session, date_from: date | None = None,
             violations.append(_v(
                 "discount_over_limit", s.row_hash, s.doc_number, s.date, s.client,
                 f"{s.product}: скидка {float(s.discount_pct):g}%",
+            ))
+
+    # R10–R12: правила из учётной политики (по документам, чтобы не спамить).
+    today = date.today()
+    for key, lines in docs.items():
+        s0 = lines[0]
+        # R10: дата документа в будущем
+        if s0.date and s0.date > today:
+            violations.append(_v(
+                "future_date", key, s0.doc_number, s0.date, s0.client,
+                f"дата документа {s0.date.isoformat()} позже сегодняшней "
+                f"({today.isoformat()})",
+            ))
+        # R11: не заполнен «Ответственный»
+        if all(not (l.responsible or "").strip() for l in lines):
+            violations.append(_v(
+                "empty_responsible", key, s0.doc_number, s0.date, s0.client,
+                "поле «Ответственный» не заполнено",
+            ))
+        # R12: счёт учёта товара ≠ 1610 (проверяем только если счёт есть)
+        bad_accounts = {
+            (l.account or "").strip()
+            for l in lines
+            if (l.account or "").strip() and (l.account or "").strip() != GOODS_ACCOUNT
+        }
+        if bad_accounts:
+            violations.append(_v(
+                "wrong_account", key, s0.doc_number, s0.date, s0.client,
+                f"счёт учёта: {', '.join(sorted(bad_accounts))} "
+                f"(ожидается {GOODS_ACCOUNT})",
             ))
 
     # R9: отрицательные остатки на складах (по последнему снапшоту 1С)
