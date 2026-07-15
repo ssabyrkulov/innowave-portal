@@ -124,9 +124,17 @@ function UserModal({ initial, isSelf, onClose, onSaved }) {
     full_name: initial.full_name || '',
     role: initial.role || 'viewer',
     password: '',
+    agent_name: initial.agent_name || '',
   })
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [agentNames, setAgentNames] = useState([])
+
+  useEffect(() => {
+    api.agentsSummary()
+      .then((d) => setAgentNames((d.agents || []).map((a) => a.name)))
+      .catch(() => {})
+  }, [])
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }))
@@ -138,7 +146,7 @@ function UserModal({ initial, isSelf, onClose, onSaved }) {
     setSaving(true)
     try {
       if (isEdit) {
-        const body = { full_name: form.full_name, role: form.role }
+        const body = { full_name: form.full_name, role: form.role, agent_name: form.agent_name }
         if (form.password) body.password = form.password
         await api.updateUser(initial.id, body)
       } else {
@@ -190,6 +198,18 @@ function UserModal({ initial, isSelf, onClose, onSaved }) {
               onChange={(e) => update('password', e.target.value)}
               placeholder={isEdit ? 'Оставьте пустым, чтобы не менять' : ''}
             />
+          </label>
+          <label>
+            Агент (для доступа к «Мой день»)
+            <select value={form.agent_name} onChange={(e) => update('agent_name', e.target.value)}>
+              <option value="">— не агент —</option>
+              {agentNames.map((a) => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+            <span className="hint-line">
+              Если выбрать агента — пользователь будет видеть только своих клиентов в разделе «Мой день».
+            </span>
           </label>
 
           {error && <div className="error">{error}</div>}

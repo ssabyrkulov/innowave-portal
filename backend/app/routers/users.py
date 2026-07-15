@@ -36,6 +36,7 @@ def create_user(
         full_name=payload.full_name,
         role=payload.role,
         is_active=payload.is_active,
+        agent_name=(payload.agent_name or "").strip() or None,
         hashed_password=hash_password(payload.password),
     )
     db.add(user)
@@ -67,6 +68,9 @@ def update_user(
             raise HTTPException(status_code=400, detail="You cannot disable yourself")
         if data.get("role") and data["role"] != models.Role.admin:
             raise HTTPException(status_code=400, detail="You cannot change your own role")
+
+    if "agent_name" in data:
+        data["agent_name"] = (data["agent_name"] or "").strip() or None
 
     for key, value in data.items():
         setattr(user, key, value)

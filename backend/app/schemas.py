@@ -18,6 +18,7 @@ class UserBase(BaseModel):
     full_name: str
     role: Role = Role.viewer
     is_active: bool = True
+    agent_name: str | None = None
 
 
 class UserCreate(UserBase):
@@ -29,6 +30,7 @@ class UserUpdate(BaseModel):
     role: Role | None = None
     is_active: bool | None = None
     password: str | None = Field(default=None, min_length=6)
+    agent_name: str | None = None
 
 
 class UserOut(UserBase):

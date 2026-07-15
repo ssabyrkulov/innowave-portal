@@ -42,6 +42,9 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String, nullable=False)
     role: Mapped[Role] = mapped_column(Enum(Role), default=Role.viewer, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Если задано — пользователь является торговым агентом (значение совпадает
+    # с именем агента в продажах); он видит только своих клиентов в «Мой день».
+    agent_name: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     payments: Mapped[list["Payment"]] = relationship(
@@ -193,6 +196,27 @@ class BudgetItem(Base):
     amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)
     note: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ClientActivity(Base):
+    """Действие агента по клиенту: визит, звонок, обещание оплаты, коммент.
+
+    Превращает «Агентов» из отчёта в рабочий инструмент — агент фиксирует, что
+    сделал в полях, а обещания оплаты всплывают в срок.
+    """
+
+    __tablename__ = "client_activities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    agent: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    client: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)  # visit|call|promise|order|note
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+    promise_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    creator: Mapped["User"] = relationship()
 
 
 class ImportLog(Base):

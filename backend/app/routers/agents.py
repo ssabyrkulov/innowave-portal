@@ -2,7 +2,7 @@ import calendar
 from collections import defaultdict
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -18,13 +18,11 @@ can_edit = require_roles(models.Role.admin, models.Role.accountant)
 NO_AGENT = "— без агента —"
 SLEEPING_DAYS = 45      # клиент «уснул», если нет отгрузок дольше
 SLEEPING_MIN_REVENUE = 5000  # мелкие разовые покупки не считаем потерей
+VISIT_CADENCE_DAYS = 14  # клиента навещаем не реже, чем раз в N дней
 
 
-@router.get("/summary")
-def agents_summary(
-    db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
-):
+def _compute(db: Session) -> dict:
+    """Общий расчёт по агентам — используется и сводкой, и «Мой день»."""
     sales = db.query(models.Sale).all()
     receipts = db.query(models.Receipt).all()
     return_docs = db.query(models.ReturnDoc).all()
@@ -211,14 +209,208 @@ def agents_summary(
     out.sort(key=lambda x: -x["revenue"])
 
     return {
-        "agents": out,
+        "out": out,
         "no_agent": no_agent,
         "months": months,
-        "current_month": cur_month,
+        "cur_month": cur_month,
         "prev_month": prev_month,
+        "today": today,
+        "agent_clients": agent_clients,
+        "last_shipment_by_client": last_shipment_by_client,
+        "client_agent_rev": client_agent_rev,
+        "debt_by_client": debt_by_client,
+        "last_payment_by_client": last_payment_by_client,
+    }
+
+
+@router.get("/summary")
+def agents_summary(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    ctx = _compute(db)
+    out = ctx["out"]
+    return {
+        "agents": out,
+        "no_agent": ctx["no_agent"],
+        "months": ctx["months"],
+        "current_month": ctx["cur_month"],
+        "prev_month": ctx["prev_month"],
         "total_revenue": round(sum(x["revenue"] for x in out), 2),
         "total_month_revenue": round(sum(x["month_revenue"] for x in out), 2),
     }
+
+
+def _last_activity_map(db: Session, agent: str) -> dict:
+    """Последнее действие по каждому клиенту агента."""
+    acts = (
+        db.query(models.ClientActivity)
+        .filter(models.ClientActivity.agent == agent)
+        .order_by(models.ClientActivity.created_at.desc())
+        .all()
+    )
+    last: dict[str, dict] = {}
+    for a in acts:
+        if a.client in last:
+            continue
+        last[a.client] = {
+            "kind": a.kind,
+            "note": a.note,
+            "promise_date": a.promise_date.isoformat() if a.promise_date else None,
+            "created_at": a.created_at.isoformat(),
+        }
+    return last
+
+
+@router.get("/work")
+def agent_work(
+    agent: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current: models.User = Depends(get_current_user),
+):
+    """«Мой день» агента: собрать долг · пора посетить · разбудить · обещания.
+
+    Агент (пользователь с agent_name) видит только себя; админ — любого.
+    """
+    ctx = _compute(db)
+    out = ctx["out"]
+    names = [x["name"] for x in out]
+
+    fixed = bool(current.agent_name)
+    name = current.agent_name if fixed else (agent or (names[0] if names else None))
+
+    entry = next((x for x in out if x["name"] == name), None)
+    base = {
+        "agent": name,
+        "agents": names,
+        "is_fixed": fixed,
+        "cadence_days": VISIT_CADENCE_DAYS,
+        "sleeping_days": SLEEPING_DAYS,
+    }
+    if entry is None:
+        return {**base, "plan": None, "debtors": [], "to_visit": [],
+                "sleeping": [], "promises": []}
+
+    today = ctx["today"]
+    last_act = _last_activity_map(db, name)
+    last_ship = ctx["last_shipment_by_client"]
+    rev = ctx["client_agent_rev"]
+    debt = ctx["debt_by_client"]
+
+    def enrich(rows):
+        for r in rows:
+            r["last_activity"] = last_act.get(r["name"])
+        return rows
+
+    # Пора посетить: активные клиенты, которых не навещали дольше нормы
+    to_visit = sorted(
+        (
+            {
+                "name": c,
+                "days": (today - last_ship[c]).days,
+                "last_order": last_ship[c].isoformat(),
+                "revenue": round(sum(rev[c].values()), 2),
+                "debt": debt.get(c, 0.0),
+            }
+            for c in ctx["agent_clients"].get(name, [])
+            if VISIT_CADENCE_DAYS <= (today - last_ship[c]).days < SLEEPING_DAYS
+        ),
+        key=lambda x: -x["days"],
+    )
+
+    # Открытые обещания оплаты (за последние 60 дней и вперёд)
+    promises = []
+    for a in (
+        db.query(models.ClientActivity)
+        .filter(
+            models.ClientActivity.agent == name,
+            models.ClientActivity.kind == "promise",
+            models.ClientActivity.promise_date.isnot(None),
+        )
+        .order_by(models.ClientActivity.promise_date.asc())
+        .all()
+    ):
+        if (today - a.promise_date).days > 60:
+            continue
+        promises.append({
+            "client": a.client,
+            "promise_date": a.promise_date.isoformat(),
+            "overdue": a.promise_date < today,
+            "note": a.note,
+        })
+
+    return {
+        **base,
+        "plan": {
+            "target": entry["target"],
+            "month_revenue": entry["month_revenue"],
+            "forecast": entry["forecast"],
+            "target_pct": entry["target_pct"],
+        },
+        "debtors": enrich(entry["debtors"]),
+        "to_visit": enrich(to_visit),
+        "sleeping": enrich(entry["sleeping"]),
+        "promises": promises,
+    }
+
+
+class ActivityIn(BaseModel):
+    client: str
+    kind: str  # visit|call|promise|order|note
+    note: str | None = None
+    promise_date: date | None = None
+    agent: str | None = None  # админ может указать; агент — свой
+
+
+@router.post("/activity")
+def add_activity(
+    body: ActivityIn,
+    db: Session = Depends(get_db),
+    current: models.User = Depends(get_current_user),
+):
+    if body.kind not in ("visit", "call", "promise", "order", "note"):
+        raise HTTPException(status_code=400, detail="Неизвестный тип действия")
+    agent = current.agent_name or body.agent
+    if not agent:
+        raise HTTPException(status_code=400, detail="Не указан агент")
+    # Агент пишет только по своему имени; админ/бухгалтер — по любому.
+    if current.agent_name and agent != current.agent_name and \
+            current.role not in (models.Role.admin, models.Role.accountant):
+        raise HTTPException(status_code=403, detail="Можно фиксировать только своих")
+    act = models.ClientActivity(
+        agent=agent, client=body.client.strip(), kind=body.kind,
+        note=(body.note or "").strip() or None,
+        promise_date=body.promise_date, created_by=current.id,
+    )
+    db.add(act)
+    db.commit()
+    db.refresh(act)
+    return {"id": act.id}
+
+
+@router.get("/activity")
+def list_activity(
+    client: str = Query(...),
+    agent: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current: models.User = Depends(get_current_user),
+):
+    a = current.agent_name or agent
+    q = db.query(models.ClientActivity).filter(models.ClientActivity.client == client)
+    if a:
+        q = q.filter(models.ClientActivity.agent == a)
+    rows = q.order_by(models.ClientActivity.created_at.desc()).limit(50).all()
+    return [
+        {
+            "id": r.id,
+            "kind": r.kind,
+            "note": r.note,
+            "promise_date": r.promise_date.isoformat() if r.promise_date else None,
+            "created_at": r.created_at.isoformat(),
+            "by": r.creator.full_name if r.creator else None,
+        }
+        for r in rows
+    ]
 
 
 class TargetSet(BaseModel):

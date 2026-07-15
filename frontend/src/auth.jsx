@@ -36,6 +36,8 @@ export function AuthProvider({ children }) {
   const can = {
     manageUsers: user?.role === 'admin',
     editPayments: user?.role === 'admin' || user?.role === 'accountant',
+    isAgent: Boolean(user?.agent_name),
+    work: user?.role === 'admin' || Boolean(user?.agent_name),
   }
 
   return (

@@ -18,6 +18,7 @@ const PRIMARY = [
   { to: '/checks', icon: '🛡', label: 'Контроль', badge: true },
 ]
 const SECONDARY = [
+  { to: '/work', icon: '🧭', label: 'Мой день', workOnly: true },
   { to: '/payments', icon: '📋', label: 'Платежи' },
   { to: '/analytics', icon: '📊', label: 'Аналитика' },
   { to: '/agents', icon: '🧑‍💼', label: 'Агенты' },
@@ -63,7 +64,10 @@ export default function Layout() {
     .toUpperCase()
 
   const secondaryVisible = SECONDARY.filter(
-    (i) => (!i.adminOnly || can.manageUsers) && (!i.editOnly || can.editPayments)
+    (i) =>
+      (!i.adminOnly || can.manageUsers) &&
+      (!i.editOnly || can.editPayments) &&
+      (!i.workOnly || can.work)
   )
   // раздел активен по «Ещё», если открыта одна из вторичных страниц
   const inSecondary = secondaryVisible.some((i) => i.to === location.pathname)

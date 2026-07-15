@@ -131,4 +131,11 @@ export const api = {
   budgetFactArticles: (period) => request(`/budget/fact-articles?period=${period}`),
 
   stockBalances: () => request('/balances/stock'),
+
+  agentWork: (agent) => request(`/agents/work${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`),
+  addActivity: (body) => request('/agents/activity', { method: 'POST', body }),
+  listActivity: (client, agent) => {
+    const qs = new URLSearchParams({ client, ...(agent ? { agent } : {}) }).toString()
+    return request(`/agents/activity?${qs}`)
+  },
 }
