@@ -21,6 +21,7 @@ const SECONDARY = [
   { to: '/work', icon: '🧭', label: 'Мой день', workOnly: true },
   { to: '/payments', icon: '📋', label: 'Платежи' },
   { to: '/analytics', icon: '📊', label: 'Аналитика' },
+  { to: '/operations', icon: '🗂', label: 'Операции' },
   { to: '/agents', icon: '🧑‍💼', label: 'Агенты' },
   { to: '/stock', icon: '📦', label: 'Остатки' },
   { to: '/budget', icon: '📈', label: 'БДДС', editOnly: true },

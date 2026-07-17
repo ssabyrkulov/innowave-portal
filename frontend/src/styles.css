@@ -2471,3 +2471,65 @@ button.summary-card {
 @media (max-width: 840px) {
   .work-field input, .work-field textarea, .work-kind { font-size: 16px; }
 }
+
+/* ---------- Операции: единый браузер выгрузок 1С ---------- */
+.ops-count { font-size: 14px; }
+
+.ops-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-bottom: 16px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.ops-tab {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s;
+}
+.ops-tab:hover { color: var(--text); border-color: var(--text); }
+.ops-tab.active {
+  background: var(--action);
+  border-color: var(--action);
+  color: #fff;
+}
+
+.ops-date { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.ops-date input { min-width: 140px; }
+
+.ops-summary { margin-bottom: 14px; }
+
+.ops-table { position: relative; }
+.ops-loading {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255, 255, 255, 0.6);
+  font-size: 14px;
+}
+.ops-empty { text-align: center; padding: 28px 8px; }
+
+.ops-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+.ops-pager-info { font-size: 14px; color: var(--muted); min-width: 120px; text-align: center; }
+
+@media (max-width: 840px) {
+  .ops-filters .product-search-input { flex: 1 1 100%; font-size: 16px; }
+  .ops-date { flex: 1 1 auto; }
+  .ops-date input { min-width: 0; width: 100%; font-size: 16px; }
+}

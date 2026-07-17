@@ -132,6 +132,14 @@ export const api = {
 
   stockBalances: () => request('/balances/stock'),
 
+  operationTypes: () => request('/operations/types'),
+  operations: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString()
+    return request(`/operations${qs ? `?${qs}` : ''}`)
+  },
+
   agentWork: (agent) => request(`/agents/work${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`),
   addActivity: (body) => request('/agents/activity', { method: 'POST', body }),
   listActivity: (client, agent) => {

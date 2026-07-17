@@ -93,6 +93,9 @@ class Receipt(Base):
     amount_kgs: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     payer: Mapped[str] = mapped_column(String, nullable=False, index=True)
     operation: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # Источник денег: банк (ВыгрузкаБанкВх) или касса (ВыгрузкаПКО). Старые
+    # записи без вида считаем банком (историю до разделения не пере-размечаем).
+    kind: Mapped[str | None] = mapped_column(String, default="bank", nullable=True)  # bank|cash
     row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

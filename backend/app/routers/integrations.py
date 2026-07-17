@@ -184,7 +184,11 @@ async def inbox(
     if kind == "sales":
         result = import_sales_workbook(db, content, auto_name, robot.id)
     elif kind == "receipts":
-        result = import_receipts_workbook(db, content, auto_name, robot.id)
+        # ПКО = касса, БанкВх = банк
+        rcpt_kind = "cash" if "пко" in filename.lower() else "bank"
+        result = import_receipts_workbook(
+            db, content, auto_name, robot.id, kind=rcpt_kind
+        )
     elif kind == "return_docs":
         result = import_returns_workbook(db, content, auto_name, robot.id)
     elif kind == "cash_balances":

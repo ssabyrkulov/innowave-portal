@@ -83,8 +83,13 @@ def import_receipts_workbook(
     filename: str,
     user_id: int,
     replace_period: bool = False,
+    kind: str = "bank",
 ) -> dict:
-    """Импорт поступлений из байтов Excel (веб-загрузка и автоприём)."""
+    """Импорт поступлений из байтов Excel (веб-загрузка и автоприём).
+
+    kind — источник денег: 'bank' (ВыгрузкаБанкВх) или 'cash' (ВыгрузкаПКО).
+    В row_hash не входит, поэтому на дедупликацию не влияет.
+    """
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     except Exception:
@@ -173,7 +178,7 @@ def import_receipts_workbook(
             skipped += 1
             continue
         seen.add(h)
-        db.add(models.Receipt(**p, row_hash=h))
+        db.add(models.Receipt(**p, kind=kind, row_hash=h))
         added += 1
 
     db.add(models.ImportLog(
@@ -234,6 +239,7 @@ def list_receipts(
             "amount_kgs": float(r.amount_kgs),
             "payer": r.payer,
             "operation": r.operation,
+            "kind": r.kind or "bank",
         }
         for r in q.limit(limit).all()
     ]

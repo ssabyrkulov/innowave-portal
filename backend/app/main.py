@@ -19,6 +19,7 @@ from .routers import (
     dashboard,
     expenses,
     integrations,
+    operations,
     payments,
     receipts,
     returns,
@@ -140,6 +141,7 @@ app.include_router(returns.router)
 app.include_router(balances.router)
 app.include_router(expenses.router)
 app.include_router(budget.router)
+app.include_router(operations.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the
