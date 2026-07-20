@@ -14,6 +14,20 @@ function fmtDate(iso) {
   return iso ? iso.split('-').reverse().join('.') : '—'
 }
 
+// Дней без оплат: от последней оплаты, а если её не было — от последней
+// отгрузки (долг живёт с момента отгрузки). null — данных нет.
+function daysNoPay(c) {
+  const ref = c.last_payment || c.last_shipment
+  return ref ? daysSince(ref) : null
+}
+
+// Текст метки в активной таблице: показываем именно дни, а не просто «не платил».
+function noPayText(c) {
+  if (c.last_payment) return `>${daysSince(c.last_payment)} дн.`
+  const d = daysNoPay(c)
+  return d != null ? `не платил · ${d} дн.` : 'не платил'
+}
+
 export default function DebtPage() {
   const { can } = useAuth()
   const [data, setData] = useState(null)
@@ -325,7 +339,7 @@ export default function DebtPage() {
                         {/* на телефоне метку «давно не платил» показываем прямо под именем */}
                         {stale && (
                           <span className="badge badge-overdue debt-stale-inline" title={`Оплат не было больше ${STALE_DAYS} дней`}>
-                            {c.last_payment ? `>${daysSince(c.last_payment)} дн. без оплат` : 'не платил'}
+                            {noPayText(c)} без оплат
                           </span>
                         )}
                       </td>
@@ -340,7 +354,7 @@ export default function DebtPage() {
                       <td className="hide-mobile">
                         {stale && (
                           <span className="badge badge-overdue" title={`Оплат не было больше ${STALE_DAYS} дней`}>
-                            {c.last_payment ? `>${daysSince(c.last_payment)} дн.` : 'не платил'}
+                            {noPayText(c)}
                           </span>
                         )}
                       </td>
@@ -409,6 +423,7 @@ export default function DebtPage() {
                     <tr>
                       <th>Клиент</th>
                       <th className="num">Долг</th>
+                      <th className="num">Дней без оплат</th>
                       <th className="hide-mobile">Причина</th>
                       <th className="hide-mobile">Посл. оплата</th>
                       {can.editPayments && <th></th>}
@@ -417,7 +432,7 @@ export default function DebtPage() {
                   <tbody>
                     {badClients.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="muted center">
+                        <td colSpan={can.editPayments ? 6 : 5} className="muted center">
                           Список пуст. {can.editPayments ? 'Добавьте контрагента выше.' : ''}
                         </td>
                       </tr>
@@ -426,6 +441,9 @@ export default function DebtPage() {
                       <tr key={c.client}>
                         <td data-label="Клиент">{c.client}</td>
                         <td className="num neg" data-label="Долг">{formatMoney(c.debt)}</td>
+                        <td className="num" data-label="Дней без оплат">
+                          {daysNoPay(c) != null ? `${daysNoPay(c)} дн.` : '—'}
+                        </td>
                         <td className="muted hide-mobile" data-label="Причина">
                           {data.bad_debt_notes?.[c.client] || '—'}
                         </td>
