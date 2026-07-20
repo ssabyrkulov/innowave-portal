@@ -2533,3 +2533,17 @@ button.summary-card {
   .ops-date { flex: 1 1 auto; }
   .ops-date input { min-width: 0; width: 100%; font-size: 16px; }
 }
+
+/* ---------- Дебиторка: безнадёжные клиенты ---------- */
+.debt-tabs { margin-bottom: 16px; }
+.summary-card.summary-bad { opacity: 0.85; }
+.summary-card.summary-bad .summary-value { color: var(--muted); }
+.bad-add { margin-bottom: 14px; }
+.bad-add-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.bad-add-row .product-search-input { flex: 1 1 200px; }
+.bad-hint { margin: 10px 2px 0; font-size: 13px; }
+@media (max-width: 840px) {
+  .bad-add-row { flex-direction: column; align-items: stretch; }
+  .bad-add-row .product-search-input { font-size: 16px; }
+  .bad-add-row .btn { width: 100%; }
+}

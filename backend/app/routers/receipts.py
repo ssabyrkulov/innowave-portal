@@ -278,6 +278,67 @@ def delete_alias(
     db.commit()
 
 
+class BadDebtCreate(BaseModel):
+    client: str
+    note: str | None = None
+
+
+@router.get("/bad-debt")
+def list_bad_debt(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    rows = (
+        db.query(models.BadDebtClient)
+        .order_by(models.BadDebtClient.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "client": r.client,
+            "note": r.note,
+            "created_at": r.created_at.isoformat(),
+            "created_by": r.creator.full_name if r.creator else None,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/bad-debt", status_code=status.HTTP_201_CREATED)
+def add_bad_debt(
+    payload: BadDebtCreate,
+    db: Session = Depends(get_db),
+    current: models.User = Depends(can_import),
+):
+    client = payload.client.strip()
+    if not client:
+        raise HTTPException(status_code=400, detail="Не указан контрагент")
+    existing = db.query(models.BadDebtClient).filter_by(client=client).first()
+    if existing:
+        existing.note = (payload.note or "").strip() or None
+    else:
+        db.add(models.BadDebtClient(
+            client=client,
+            note=(payload.note or "").strip() or None,
+            created_by=current.id,
+        ))
+    db.commit()
+    return {"status": "ok", "client": client}
+
+
+@router.delete("/bad-debt/{client:path}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_bad_debt(
+    client: str,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_import),
+):
+    row = db.query(models.BadDebtClient).filter_by(client=client).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Клиент не в списке безнадёжных")
+    db.delete(row)
+    db.commit()
+
+
 @router.get("/receivables")
 def receivables(
     db: Session = Depends(get_db),
@@ -288,6 +349,9 @@ def receivables(
     receipts = db.query(models.Receipt).all()
     return_docs = db.query(models.ReturnDoc).all()
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
+    bad_rows = db.query(models.BadDebtClient).all()
+    bad_debt = {b.client for b in bad_rows}
+    bad_notes = {b.client: b.note for b in bad_rows if b.note}
 
     # Отгрузки по клиентам: итог документа (после скидок); документы без
     # номера учитываем по строкам со скидкой.
@@ -372,5 +436,7 @@ def receivables(
         "clients": clients,
         "unmatched": sorted(unmatched.values(), key=lambda u: -u["paid"]),
         "sales_clients": sorted(shipped.keys()),
+        "bad_debt": sorted(bad_debt),
+        "bad_debt_notes": bad_notes,
         "has_receipts": len(receipts) > 0,
     }

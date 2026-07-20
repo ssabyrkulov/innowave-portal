@@ -93,6 +93,11 @@ export const api = {
     request(`/receipts/${id}/rate`, { method: 'PATCH', body: { rate } }),
   createAlias: (payer, client) =>
     request('/receipts/alias', { method: 'POST', body: { payer, client } }),
+  listBadDebt: () => request('/receipts/bad-debt'),
+  addBadDebt: (client, note) =>
+    request('/receipts/bad-debt', { method: 'POST', body: { client, note } }),
+  removeBadDebt: (client) =>
+    request(`/receipts/bad-debt/${encodeURIComponent(client)}`, { method: 'DELETE' }),
 
   dashboard: () => request('/dashboard'),
 

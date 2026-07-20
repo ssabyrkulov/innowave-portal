@@ -24,6 +24,9 @@ export default function DebtPage() {
   const [importResult, setImportResult] = useState(null)
   const [replacePeriod, setReplacePeriod] = useState(false)
   const [aliasDraft, setAliasDraft] = useState({})
+  const [tab, setTab] = useState('active') // active | bad
+  const [pickClient, setPickClient] = useState('')
+  const [pickNote, setPickNote] = useState('')
   const fileRef = useRef(null)
 
   async function load() {
@@ -82,7 +85,35 @@ export default function DebtPage() {
     }
   }
 
-  const debtors = data ? data.clients.filter((c) => c.debt > 0.01) : []
+  async function addBad() {
+    const client = pickClient.trim()
+    if (!client) return
+    try {
+      await api.addBadDebt(client, pickNote.trim() || null)
+      setPickClient('')
+      setPickNote('')
+      await load()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function removeBad(client) {
+    try {
+      await api.removeBadDebt(client)
+      await load()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const badSet = new Set(data?.bad_debt || [])
+  const allDebtors = data ? data.clients.filter((c) => c.debt > 0.01) : []
+  const debtors = allDebtors.filter((c) => !badSet.has(c.client))
+  // Безнадёжные показываем даже с нулевым/погашенным долгом — это ручной список.
+  const badClients = data ? data.clients.filter((c) => badSet.has(c.client)) : []
+  const activeDebt = debtors.reduce((s, c) => s + c.debt, 0)
+  const badDebtTotal = badClients.reduce((s, c) => s + c.debt, 0)
 
   return (
     <div>
@@ -173,16 +204,40 @@ export default function DebtPage() {
               <span className="summary-value">{formatMoney(data.total_paid)}</span>
             </div>
             <div className="summary-card summary-out">
-              <span className="summary-label">Долг</span>
-              <span className="summary-value">{formatMoney(data.total_debt)}</span>
+              <span className="summary-label">Долг{badClients.length > 0 ? ' (к взысканию)' : ''}</span>
+              <span className="summary-value">{formatMoney(activeDebt)}</span>
             </div>
             <div className="summary-card">
               <span className="summary-label">Должников</span>
               <span className="summary-value">{debtors.length}</span>
             </div>
+            {badClients.length > 0 && (
+              <div className="summary-card summary-bad">
+                <span className="summary-label">Безнадёжные</span>
+                <span className="summary-value">
+                  {formatMoney(badDebtTotal)}
+                  <span className="muted"> · {badClients.length}</span>
+                </span>
+              </div>
+            )}
           </div>
 
-          {data.unmatched.length > 0 && can.editPayments && (
+          <div className="ops-tabs debt-tabs">
+            <button
+              className={`ops-tab ${tab === 'active' ? 'active' : ''}`}
+              onClick={() => setTab('active')}
+            >
+              Активные ({debtors.length})
+            </button>
+            <button
+              className={`ops-tab ${tab === 'bad' ? 'active' : ''}`}
+              onClick={() => setTab('bad')}
+            >
+              Безнадёжные ({badClients.length})
+            </button>
+          </div>
+
+          {tab === 'active' && data.unmatched.length > 0 && can.editPayments && (
             <div className="chart-card">
               <h2 className="chart-title">
                 ⚠ Плательщики, не найденные среди клиентов ({data.unmatched.length})
@@ -224,6 +279,7 @@ export default function DebtPage() {
             </div>
           )}
 
+          {tab === 'active' && (
           <div className="table-wrap compact">
             <table>
               <thead>
@@ -280,6 +336,95 @@ export default function DebtPage() {
               </tbody>
             </table>
           </div>
+          )}
+
+          {tab === 'bad' && (
+            <div className="bad-debt">
+              {can.editPayments && (
+                <div className="chart-card bad-add">
+                  <div className="bad-add-row">
+                    <input
+                      list="all-debtors"
+                      className="product-search-input"
+                      placeholder="Выберите контрагента…"
+                      value={pickClient}
+                      onChange={(e) => setPickClient(e.target.value)}
+                    />
+                    <input
+                      className="product-search-input"
+                      placeholder="Причина (необязательно)"
+                      value={pickNote}
+                      onChange={(e) => setPickNote(e.target.value)}
+                    />
+                    <button
+                      className="btn btn-primary"
+                      disabled={!pickClient.trim()}
+                      onClick={addBad}
+                    >
+                      В безнадёжные
+                    </button>
+                  </div>
+                  <datalist id="all-debtors">
+                    {allDebtors.map((c) => (
+                      <option key={c.client} value={c.client}>
+                        {`долг ${formatMoney(c.debt)}`}
+                      </option>
+                    ))}
+                  </datalist>
+                  <p className="muted bad-hint">
+                    Безнадёжные контрагенты убираются из активной дебиторки и не
+                    учитываются в долге к взысканию.
+                  </p>
+                </div>
+              )}
+
+              <div className="table-wrap cards">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Клиент</th>
+                      <th className="num">Долг</th>
+                      <th className="hide-mobile">Причина</th>
+                      <th className="hide-mobile">Посл. оплата</th>
+                      {can.editPayments && <th></th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {badClients.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="muted center">
+                          Список пуст. {can.editPayments ? 'Добавьте контрагента выше.' : ''}
+                        </td>
+                      </tr>
+                    )}
+                    {badClients.map((c) => (
+                      <tr key={c.client}>
+                        <td data-label="Клиент">{c.client}</td>
+                        <td className="num neg" data-label="Долг">{formatMoney(c.debt)}</td>
+                        <td className="muted hide-mobile" data-label="Причина">
+                          {data.bad_debt_notes?.[c.client] || '—'}
+                        </td>
+                        <td className="hide-mobile" data-label="Посл. оплата">
+                          {fmtDate(c.last_payment)}
+                        </td>
+                        {can.editPayments && (
+                          <td className="card-action">
+                            <button
+                              className="btn btn-sm"
+                              onClick={() => removeBad(c.client)}
+                              title="Вернуть в активную дебиторку"
+                            >
+                              Вернуть
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <h2 className="section-title">
             <button

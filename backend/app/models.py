@@ -222,6 +222,24 @@ class ClientActivity(Base):
     creator: Mapped["User"] = relationship()
 
 
+class BadDebtClient(Base):
+    """Клиент, чей долг признан безнадёжным (к взысканию не рассчитываем).
+
+    Такие контрагенты убираются из активной дебиторки в отдельную вкладку —
+    чтобы не искажать «живой» долг и не тревожить агентов пустой работой.
+    """
+
+    __tablename__ = "bad_debt_clients"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    client: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    creator: Mapped["User"] = relationship()
+
+
 class ImportLog(Base):
     """Журнал загрузок Excel — кто, когда и что импортировал."""
 
