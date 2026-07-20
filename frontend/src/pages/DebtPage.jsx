@@ -85,17 +85,30 @@ export default function DebtPage() {
     }
   }
 
-  async function addBad() {
-    const client = pickClient.trim()
+  async function markBad(client, note) {
     if (!client) return
     try {
-      await api.addBadDebt(client, pickNote.trim() || null)
-      setPickClient('')
-      setPickNote('')
+      await api.addBadDebt(client, note || null)
       await load()
     } catch (err) {
       setError(err.message)
     }
+  }
+
+  async function addBad() {
+    const client = pickClient.trim()
+    if (!client) return
+    await markBad(client, pickNote.trim())
+    setPickClient('')
+    setPickNote('')
+  }
+
+  async function markBadInline(c) {
+    const ok = confirm(
+      `Пометить «${c.client}» безнадёжным? Клиент уйдёт из активной дебиторки ` +
+        `(долг ${formatMoney(c.debt)}). Вернуть можно во вкладке «Безнадёжные».`
+    )
+    if (ok) await markBad(c.client, null)
   }
 
   async function removeBad(client) {
@@ -292,12 +305,13 @@ export default function DebtPage() {
                   <th className="hide-mobile">Посл. отгрузка</th>
                   <th className="hide-mobile">Посл. оплата</th>
                   <th className="hide-mobile"></th>
+                  {can.editPayments && <th className="debt-act-col">Безнадёжный</th>}
                 </tr>
               </thead>
               <tbody>
                 {debtors.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="muted center">
+                    <td colSpan={can.editPayments ? 9 : 8} className="muted center">
                       Долгов нет 🎉
                     </td>
                   </tr>
@@ -330,6 +344,17 @@ export default function DebtPage() {
                           </span>
                         )}
                       </td>
+                      {can.editPayments && (
+                        <td className="debt-act-col">
+                          <button
+                            className="btn btn-sm debt-mark-bad"
+                            title="Пометить безнадёжным — убрать из активной дебиторки"
+                            onClick={() => markBadInline(c)}
+                          >
+                            ⛔
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   )
                 })}
