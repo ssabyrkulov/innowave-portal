@@ -21,11 +21,10 @@ function daysNoPay(c) {
   return ref ? daysSince(ref) : null
 }
 
-// Текст метки в активной таблице: показываем именно дни, а не просто «не платил».
+// Метка в активной таблице: только число дней без оплат, без слов.
 function noPayText(c) {
-  if (c.last_payment) return `>${daysSince(c.last_payment)} дн.`
   const d = daysNoPay(c)
-  return d != null ? `не платил · ${d} дн.` : 'не платил'
+  return d != null ? `${d} дн.` : '—'
 }
 
 export default function DebtPage() {
@@ -39,6 +38,7 @@ export default function DebtPage() {
   const [replacePeriod, setReplacePeriod] = useState(false)
   const [aliasDraft, setAliasDraft] = useState({})
   const [tab, setTab] = useState('active') // active | bad
+  const [detailClient, setDetailClient] = useState(null)
   const [pickClient, setPickClient] = useState('')
   const [pickNote, setPickNote] = useState('')
   const fileRef = useRef(null)
@@ -335,7 +335,9 @@ export default function DebtPage() {
                   return (
                     <tr key={c.client}>
                       <td>
-                        {c.client}
+                        <button className="client-link" onClick={() => setDetailClient(c.client)}>
+                          {c.client}
+                        </button>
                         {/* на телефоне метку «давно не платил» показываем прямо под именем */}
                         {stale && (
                           <span className="badge badge-overdue debt-stale-inline" title={`Оплат не было больше ${STALE_DAYS} дней`}>
@@ -439,7 +441,11 @@ export default function DebtPage() {
                     )}
                     {badClients.map((c) => (
                       <tr key={c.client}>
-                        <td data-label="Клиент">{c.client}</td>
+                        <td data-label="Клиент">
+                          <button className="client-link" onClick={() => setDetailClient(c.client)}>
+                            {c.client}
+                          </button>
+                        </td>
                         <td className="num neg" data-label="Долг">{formatMoney(c.debt)}</td>
                         <td className="num" data-label="Дней без оплат">
                           {daysNoPay(c) != null ? `${daysNoPay(c)} дн.` : '—'}
@@ -527,6 +533,138 @@ export default function DebtPage() {
         </>
       ) : (
         <div className="center muted">Загрузка…</div>
+      )}
+
+      {detailClient && (
+        <ClientDetailModal client={detailClient} onClose={() => setDetailClient(null)} />
+      )}
+    </div>
+  )
+}
+
+function ClientDetailModal({ client, onClose }) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    api
+      .clientDetail(client)
+      .then((d) => alive && setData(d))
+      .catch((e) => alive && setError(e.message))
+    return () => {
+      alive = false
+    }
+  }, [client])
+
+  const t = data?.totals
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
+        <div className="cd-head">
+          <h2>{client}</h2>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+
+        {error && <div className="error">{error}</div>}
+        {!data && !error && <div className="center muted">Загрузка…</div>}
+
+        {data && (
+          <>
+            <div className="summary-bar cd-summary">
+              <div className="summary-card">
+                <span className="summary-label">Отгружено</span>
+                <span className="summary-value">{formatMoney(t.shipped)}</span>
+              </div>
+              {t.returned > 0 && (
+                <div className="summary-card">
+                  <span className="summary-label">Возвраты</span>
+                  <span className="summary-value">−{formatMoney(t.returned)}</span>
+                </div>
+              )}
+              <div className="summary-card summary-in">
+                <span className="summary-label">Оплачено</span>
+                <span className="summary-value">{formatMoney(t.paid)}</span>
+              </div>
+              <div className="summary-card summary-out">
+                <span className="summary-label">Долг</span>
+                <span className="summary-value">{formatMoney(t.debt)}</span>
+              </div>
+            </div>
+
+            <CdSection
+              title="Реализации"
+              count={data.shipments.length}
+              head={['Дата', 'Документ', 'Позиций', 'Сумма']}
+              rows={data.shipments.map((s) => [
+                fmtDate(s.date),
+                s.doc_number || '—',
+                s.positions,
+                formatMoney(s.amount),
+              ])}
+              nums={[false, false, true, true]}
+            />
+
+            <CdSection
+              title="Оплаты"
+              count={data.payments.length}
+              head={['Дата', 'Операция', 'Касса/Банк', 'Сумма']}
+              rows={data.payments.map((p) => [
+                fmtDate(p.date),
+                p.operation,
+                p.kind === 'cash' ? 'касса' : 'банк',
+                formatMoney(p.amount_kgs),
+              ])}
+              nums={[false, false, false, true]}
+            />
+
+            {data.returns.length > 0 && (
+              <CdSection
+                title="Возвраты"
+                count={data.returns.length}
+                head={['Дата', 'Сумма']}
+                rows={data.returns.map((r) => [fmtDate(r.date), formatMoney(r.amount)])}
+                nums={[false, true]}
+              />
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function CdSection({ title, count, head, rows, nums }) {
+  return (
+    <div className="cd-section">
+      <div className="cd-section-head">
+        <span>{title}</span>
+        <span className="muted">{count}</span>
+      </div>
+      {rows.length === 0 ? (
+        <div className="muted cd-empty">Нет записей</div>
+      ) : (
+        <div className="table-wrap cd-table">
+          <table>
+            <thead>
+              <tr>
+                {head.map((h, i) => (
+                  <th key={i} className={nums[i] ? 'num' : ''}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  {r.map((cell, j) => (
+                    <td key={j} className={nums[j] ? 'num' : ''}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

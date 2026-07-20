@@ -339,6 +339,115 @@ def remove_bad_debt(
     db.commit()
 
 
+@router.get("/client-detail")
+def client_detail(
+    client: str = Query(..., description="Имя контрагента из продаж"),
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Карточка контрагента: отгрузки, возвраты и оплаты по датам + итоги.
+
+    Оплаты и возвраты сопоставляются с клиентом так же, как в дебиторке —
+    через ручные сопоставления имён (алиасы) и нормализацию названия.
+    """
+    target = client.strip()
+    norm_target = _normalize(target)
+    aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
+
+    def resolves(name: str) -> bool:
+        c = aliases.get(name)
+        if c is not None:
+            return c == target
+        return name == target or _normalize(name) == norm_target
+
+    # --- Отгрузки: сводим строки продаж в документы ---
+    sales = db.query(models.Sale).filter(models.Sale.client == target).all()
+    by_doc: dict = {}
+    loose: list[dict] = []
+    for s in sales:
+        line_amt = float(s.amount) * (1 - float(s.discount_pct or 0) / 100)
+        if s.doc_number:
+            key = (s.doc_number, s.date)
+            d = by_doc.get(key)
+            if d is None:
+                d = by_doc[key] = {
+                    "date": s.date.isoformat(),
+                    "doc_number": s.doc_number,
+                    "amount": 0.0,
+                    "doc_total": float(s.doc_total) if s.doc_total is not None else None,
+                    "positions": 0,
+                }
+            d["positions"] += 1
+            d["amount"] += line_amt
+            if s.doc_total is not None:
+                d["doc_total"] = float(s.doc_total)
+        else:
+            loose.append({
+                "date": s.date.isoformat(),
+                "doc_number": None,
+                "amount": round(line_amt, 2),
+                "doc_total": None,
+                "positions": 1,
+            })
+
+    shipments = []
+    shipped = 0.0
+    for d in list(by_doc.values()) + loose:
+        amt = d["doc_total"] if d["doc_total"] is not None else d["amount"]
+        amt = round(float(amt), 2)
+        shipped += amt
+        shipments.append({
+            "date": d["date"],
+            "doc_number": d["doc_number"],
+            "amount": amt,
+            "positions": d["positions"],
+        })
+    shipments.sort(key=lambda x: x["date"], reverse=True)
+
+    # --- Возвраты ---
+    returns = []
+    returned = 0.0
+    for rd in db.query(models.ReturnDoc).all():
+        if resolves(rd.client):
+            amt = float(rd.amount)
+            returned += amt
+            returns.append({"date": rd.date.isoformat(), "amount": round(amt, 2)})
+    returns.sort(key=lambda x: x["date"], reverse=True)
+
+    # --- Оплаты ---
+    payments = []
+    paid = 0.0
+    for r in db.query(models.Receipt).all():
+        if not r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
+            continue
+        if not resolves(r.payer):
+            continue
+        amt = float(r.amount_kgs)
+        paid += amt
+        payments.append({
+            "date": r.date.isoformat(),
+            "amount": float(r.amount),
+            "amount_kgs": round(amt, 2),
+            "currency": r.currency,
+            "operation": r.operation,
+            "kind": r.kind or "bank",
+        })
+    payments.sort(key=lambda x: x["date"], reverse=True)
+
+    return {
+        "client": target,
+        "totals": {
+            "shipped": round(shipped, 2),
+            "returned": round(returned, 2),
+            "paid": round(paid, 2),
+            "debt": round(shipped - returned - paid, 2),
+        },
+        "shipments": shipments,
+        "returns": returns,
+        "payments": payments,
+    }
+
+
 @router.get("/receivables")
 def receivables(
     db: Session = Depends(get_db),

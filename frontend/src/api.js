@@ -93,6 +93,8 @@ export const api = {
     request(`/receipts/${id}/rate`, { method: 'PATCH', body: { rate } }),
   createAlias: (payer, client) =>
     request('/receipts/alias', { method: 'POST', body: { payer, client } }),
+  clientDetail: (client) =>
+    request(`/receipts/client-detail?client=${encodeURIComponent(client)}`),
   listBadDebt: () => request('/receipts/bad-debt'),
   addBadDebt: (client, note) =>
     request('/receipts/bad-debt', { method: 'POST', body: { client, note } }),
