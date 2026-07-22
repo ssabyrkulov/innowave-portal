@@ -194,6 +194,9 @@ def fetch_clients() -> list[dict]:
 
 
 ORDER_STATUS = {1: "Новый", 2: "Отправлен", 3: "Доставлен", 4: "Закрыт", 5: "Отменён"}
+# В сумму реализаций идут только отгруженные: Отправлен/Доставлен/Закрыт.
+# «Новый» ещё не отгружен, «Отменён» — не продажа.
+SHIPPED_STATUSES = {2, 3, 4}
 
 
 def _client_ref(sd_id: str | None, code_1c: str | None) -> dict:
@@ -232,23 +235,27 @@ def fetch_client_orders(sd_id, code_1c, date_from, date_to) -> dict:
         },
     }
     rows = call_all("getOrder", ("orders", "order"), params)
-    items, total = [], 0.0
+    items, total, counted = [], 0.0, 0
     for o in rows:
         if not _client_matches(o.get("client"), sd_id, code_1c):
             continue
         amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
-        total += amt
         st = o.get("status")
+        is_counted = st in SHIPPED_STATUSES
+        if is_counted:
+            total += amt
+            counted += 1
         items.append({
             "date": _day(o.get("dateDocument") or o.get("dateCreate")),
             "code_1C": o.get("code_1C"),
             "status": st,
             "status_label": ORDER_STATUS.get(st, str(st)),
             "amount": round(amt, 2),
+            "counted": is_counted,
             "returns": round(float(o.get("totalReturnsSumma") or 0), 2),
         })
     items.sort(key=lambda x: x["date"], reverse=True)
-    return {"total": round(total, 2), "count": len(items), "items": items}
+    return {"total": round(total, 2), "count": counted, "items": items}
 
 
 def fetch_client_returns(sd_id, code_1c, date_from, date_to) -> dict:
@@ -289,13 +296,15 @@ def fetch_orders_total(date_from: str, date_to: str) -> dict:
     """Сумма заказов (реализаций) за период и разбивка по клиентам (по имени)."""
     params = {"filter": {
         "include": "all",
-        "status": [1, 2, 3, 4],  # без «Отменён»
+        "status": sorted(SHIPPED_STATUSES),  # только отгруженные
         "period": {"date": {"from": date_from, "to": date_to}},
     }}
     rows = call_all("getOrder", ("orders", "order"), params)
     total = 0.0
     by_client: dict[str, float] = {}
     for o in rows:
+        if o.get("status") not in SHIPPED_STATUSES:
+            continue
         amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
         total += amt
         cli = (o.get("client") or {})

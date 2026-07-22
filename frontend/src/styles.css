@@ -2621,3 +2621,5 @@ button.summary-card {
 .rc-period { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -2px 0 14px; font-size: 13px; }
 .rc-period .filter-select { padding: 5px 8px; }
 .rc-period-hint { font-size: 12px; }
+.rc-row-muted { opacity: .42; }
+.rc-row-muted td { text-decoration: line-through; }

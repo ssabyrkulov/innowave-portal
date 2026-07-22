@@ -279,7 +279,10 @@ function ReconcileDetailModal({ row, onClose }) {
           <div className="rc-col">
             <div className="rc-col-title">SalesDoc {row.in_sd ? '' : '· нет'}</div>
             <RcSection title="Реализации" total={sd?.orders?.total} count={sd?.orders?.count}
-              rows={(sd?.orders?.items || []).map((o) => [o.date, o.status_label, money(o.amount)])}
+              rows={(sd?.orders?.items || []).map((o) => ({
+                cells: [o.date, o.status_label, money(o.amount)],
+                muted: !o.counted,
+              }))}
               head={['Дата', 'Статус', 'Сумма']} />
             <RcSection title="Оплаты" total={sd?.payments?.total} count={sd?.payments?.count}
               rows={(sd?.payments?.items || []).map((p) => [p.date, money(p.amount)])}
@@ -311,13 +314,17 @@ function RcSection({ title, total, count, rows, head }) {
               <tr>{head.map((h, i) => <th key={i} className={i > 0 && i === head.length - 1 ? 'num' : ''}>{h}</th>)}</tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  {r.map((c, j) => (
-                    <td key={j} className={j === r.length - 1 ? 'num' : ''}>{j === 0 ? fdate(c) : c}</td>
-                  ))}
-                </tr>
-              ))}
+              {rows.map((r, i) => {
+                const cells = Array.isArray(r) ? r : r.cells
+                const muted = !Array.isArray(r) && r.muted
+                return (
+                  <tr key={i} className={muted ? 'rc-row-muted' : ''}>
+                    {cells.map((c, j) => (
+                      <td key={j} className={j === cells.length - 1 ? 'num' : ''}>{j === 0 ? fdate(c) : c}</td>
+                    ))}
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
