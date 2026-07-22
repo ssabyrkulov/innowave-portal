@@ -126,6 +126,7 @@ def reconcile_debt(
             "in_1c": True,
             "in_sd": entry is not None,
             "code_1C": entry["code_1C"] if entry else None,
+            "sd_id": entry["sd_id"] if entry else sid,
         })
 
     # Клиенты, которые есть только в SalesDoc и там висит долг.
@@ -140,6 +141,7 @@ def reconcile_debt(
             "in_1c": False,
             "in_sd": True,
             "code_1C": entry["code_1C"],
+            "sd_id": entry["sd_id"],
         })
 
     rows.sort(key=lambda x: -abs(x["diff"]))
@@ -202,4 +204,40 @@ def reconcile_period(
             "diff": round(our_pay_total - sd_payments["total"], 2),
             "sd_count": sd_payments["count"],
         },
+    }
+
+
+@router.get("/client-detail")
+def client_detail(
+    _: models.User = Depends(can_view),
+    sd_id: str | None = Query(default=None),
+    code_1c: str | None = Query(default=None),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+):
+    """Детализация клиента в SalesDoc за период: реализации (со статусами),
+    оплаты, возвраты. Каждый блок изолирован — сбой одного не рушит остальные."""
+    _require_configured()
+    if not sd_id and not code_1c:
+        raise HTTPException(status_code=400, detail="Нужен sd_id или code_1c клиента")
+    df, dt = date_from.isoformat(), date_to.isoformat()
+
+    def safe(fn):
+        try:
+            return fn(sd_id, code_1c, df, dt), None
+        except salesdoc.SalesDocError as e:
+            return None, str(e)
+
+    orders, e1 = safe(salesdoc.fetch_client_orders)
+    payments, e2 = safe(salesdoc.fetch_client_payments)
+    returns, e3 = safe(salesdoc.fetch_client_returns)
+    return {
+        "sd_id": sd_id,
+        "code_1c": code_1c,
+        "date_from": df,
+        "date_to": dt,
+        "orders": orders,
+        "payments": payments,
+        "returns": returns,
+        "errors": [e for e in (e1, e2, e3) if e],
     }

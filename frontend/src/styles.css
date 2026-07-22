@@ -2599,3 +2599,22 @@ button.summary-card {
 .sd-counts { font-size: 16px; }
 .sd-toolbar { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 8px; }
 .sd-check { font-size: 14px; cursor: pointer; }
+
+/* ---------- Сверка SD: детализация клиента 1С vs SalesDoc ---------- */
+.rc-period { font-size: 13px; margin: -4px 0 12px; }
+.rc-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.rc-col { min-width: 0; }
+.rc-col-title {
+  font-weight: 800; font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
+  padding-bottom: 6px; border-bottom: 2px solid var(--action); margin-bottom: 10px;
+}
+.rc-section { margin-bottom: 14px; }
+.rc-section-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-weight: 700; font-size: 13.5px; margin-bottom: 4px;
+}
+.rc-table table { font-size: 12.5px; }
+.rc-empty { padding: 6px 2px; font-size: 12.5px; }
+@media (max-width: 720px) {
+  .rc-cols { grid-template-columns: 1fr; }
+}

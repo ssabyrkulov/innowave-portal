@@ -144,6 +144,12 @@ export const api = {
     request(`/salesdoc/debt${onlyDiff ? '?only_diff=true' : ''}`),
   salesdocPeriod: (dateFrom, dateTo) =>
     request(`/salesdoc/period?date_from=${dateFrom}&date_to=${dateTo}`),
+  salesdocClientDetail: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString()
+    return request(`/salesdoc/client-detail${qs ? `?${qs}` : ''}`)
+  },
 
   operationTypes: () => request('/operations/types'),
   operations: (params = {}) => {

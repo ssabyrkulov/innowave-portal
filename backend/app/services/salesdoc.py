@@ -124,8 +124,21 @@ def call(method: str, params: dict | None = None, _retry: bool = True) -> tuple[
     return resp["result"], resp.get("pagination")
 
 
-def call_all(method: str, key: str, params: dict | None = None, page_limit: int = 1000) -> list:
-    """Собирает все страницы GET-метода в один список по ключу key в result."""
+def _pick(result: dict, keys: tuple[str, ...]) -> list:
+    """Первый непустой список из result по одному из возможных имён ключа."""
+    if not isinstance(result, dict):
+        return []
+    for k in keys:
+        v = result.get(k)
+        if isinstance(v, list):
+            return v
+    return []
+
+
+def call_all(method: str, key, params: dict | None = None, page_limit: int = 1000) -> list:
+    """Собирает все страницы GET-метода в один список. key — имя массива в
+    result или кортеж возможных имён (у разных методов оно разное)."""
+    keys = (key,) if isinstance(key, str) else tuple(key)
     params = dict(params or {})
     params.setdefault("limit", page_limit)
     out: list = []
@@ -133,7 +146,7 @@ def call_all(method: str, key: str, params: dict | None = None, page_limit: int 
     while True:
         params["page"] = page
         result, pagination = call(method, params)
-        chunk = result.get(key, []) if isinstance(result, dict) else []
+        chunk = _pick(result, keys)
         out.extend(chunk)
         if not pagination:
             break
@@ -178,6 +191,81 @@ def fetch_clients() -> list[dict]:
         }
         for r in rows
     ]
+
+
+ORDER_STATUS = {1: "Новый", 2: "Отправлен", 3: "Доставлен", 4: "Закрыт", 5: "Отменён"}
+
+
+def _client_ref(sd_id: str | None, code_1c: str | None) -> dict:
+    """Ссылка на клиента для фильтра: предпочитаем SD_id (он есть всегда)."""
+    if sd_id:
+        return {"SD_id": sd_id}
+    if code_1c:
+        return {"code_1C": code_1c}
+    return {}
+
+
+def _day(value) -> str:
+    return str(value or "").split(" ")[0]
+
+
+def fetch_client_orders(sd_id, code_1c, date_from, date_to) -> dict:
+    """Заказы (реализации) клиента за период со статусами."""
+    params = {
+        "client": _client_ref(sd_id, code_1c),
+        "filter": {"include": "all", "period": {"date": {"from": date_from, "to": date_to}}},
+    }
+    rows = call_all("getOrder", ("orders", "order"), params)
+    items, total = [], 0.0
+    for o in rows:
+        amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
+        total += amt
+        st = o.get("status")
+        items.append({
+            "date": _day(o.get("dateDocument") or o.get("dateCreate")),
+            "code_1C": o.get("code_1C"),
+            "status": st,
+            "status_label": ORDER_STATUS.get(st, str(st)),
+            "amount": round(amt, 2),
+            "returns": round(float(o.get("totalReturnsSumma") or 0), 2),
+        })
+    items.sort(key=lambda x: x["date"], reverse=True)
+    return {"total": round(total, 2), "count": len(items), "items": items}
+
+
+def fetch_client_returns(sd_id, code_1c, date_from, date_to) -> dict:
+    """Возвраты клиента за период."""
+    params = {
+        "client": _client_ref(sd_id, code_1c),
+        "filter": {"period": {"date": {"from": date_from, "to": date_to}}},
+    }
+    rows = call_all("getOrderDefect", ("defects", "orderDefects", "defect", "orderDefect", "orders"), params)
+    items, total = [], 0.0
+    for r in rows:
+        amt = float(r.get("summa") or r.get("totalSumma") or 0)
+        total += amt
+        items.append({"date": _day(r.get("date") or r.get("dateLoad")), "amount": round(amt, 2)})
+    items.sort(key=lambda x: x["date"], reverse=True)
+    return {"total": round(total, 2), "count": len(items), "items": items}
+
+
+def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
+    """Оплаты клиента за период. У getPayment фильтра по клиенту в доке нет —
+    тянем период и фильтруем локально по ИД/коду клиента."""
+    params = {"filter": {"period": {"date": {"from": date_from, "to": date_to}}}}
+    rows = call_all("getPayment", ("payments", "payment"), params)
+    items, total = [], 0.0
+    for p in rows:
+        cli = p.get("client") or {}
+        if sd_id and str(cli.get("SD_id") or "").lower() != str(sd_id).lower():
+            continue
+        if not sd_id and code_1c and str(cli.get("code_1C") or "") != str(code_1c):
+            continue
+        amt = float(p.get("amount") or 0)
+        total += amt
+        items.append({"date": _day(p.get("paymentDate")), "amount": round(amt, 2)})
+    items.sort(key=lambda x: x["date"], reverse=True)
+    return {"total": round(total, 2), "count": len(items), "items": items}
 
 
 def fetch_orders_total(date_from: str, date_to: str) -> dict:

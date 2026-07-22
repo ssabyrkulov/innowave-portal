@@ -21,6 +21,7 @@ export default function SalesDocPage() {
   const [onlyDiff, setOnlyDiff] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [detail, setDetail] = useState(null)
 
   useEffect(() => {
     api.salesdocStatus()
@@ -168,7 +169,11 @@ export default function SalesDocPage() {
                 )}
                 {debt.rows.map((r, i) => (
                   <tr key={i}>
-                    <td data-label="Клиент">{r.name}</td>
+                    <td data-label="Клиент">
+                      <button className="client-link" onClick={() => setDetail(r)}>
+                        {r.name}
+                      </button>
+                    </td>
                     <td className="num" data-label="Долг 1С">{money(r.our_debt)}</td>
                     <td className="num" data-label="Долг SD">{money(r.sd_debt)}</td>
                     <td className={`num ${cls(r.diff)}`} data-label="Разница">{money(r.diff)}</td>
@@ -187,6 +192,123 @@ export default function SalesDocPage() {
             </table>
           </div>
         </>
+      )}
+
+      {detail && (
+        <ReconcileDetailModal row={detail} range={range} onClose={() => setDetail(null)} />
+      )}
+    </div>
+  )
+}
+
+function inRange(iso, r) {
+  return iso && iso >= r.from && iso <= r.to
+}
+
+function ReconcileDetailModal({ row, range, onClose }) {
+  const [oneC, setOneC] = useState(null)
+  const [sd, setSd] = useState(null)
+  const [err, setErr] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    const jobs = [
+      row.in_1c
+        ? api.clientDetail(row.name).then((d) => alive && setOneC(d)).catch(() => {})
+        : Promise.resolve(),
+      (row.sd_id || row.code_1C)
+        ? api.salesdocClientDetail({
+            sd_id: row.sd_id, code_1c: row.code_1C,
+            date_from: range.from, date_to: range.to,
+          }).then((d) => alive && setSd(d)).catch((e) => alive && setErr(e.message))
+        : Promise.resolve(),
+    ]
+    Promise.all(jobs).finally(() => alive && setLoading(false))
+    return () => { alive = false }
+  }, [row, range])
+
+  // 1С за тот же период, что и SD — для сопоставимости.
+  const cShip = (oneC?.shipments || []).filter((s) => inRange(s.date, range))
+  const cPay = (oneC?.payments || []).filter((p) => inRange(p.date, range))
+  const cRet = (oneC?.returns || []).filter((r) => inRange(r.date, range))
+  const sum = (arr, k) => arr.reduce((s, x) => s + Number(x[k] || 0), 0)
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
+        <div className="cd-head">
+          <h2>{row.name}</h2>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="muted rc-period">
+          Период {range.from.split('-').reverse().join('.')} — {range.to.split('-').reverse().join('.')}
+        </div>
+        {loading && <div className="center muted">Загрузка…</div>}
+        {err && <div className="error">SalesDoc: {err}</div>}
+        {sd?.errors?.length > 0 && <div className="error">SalesDoc: {sd.errors.join('; ')}</div>}
+
+        <div className="rc-cols">
+          {/* ---- 1С ---- */}
+          <div className="rc-col">
+            <div className="rc-col-title">1С {row.in_1c ? '' : '· нет'}</div>
+            <RcSection title="Реализации" total={sum(cShip, 'amount')} count={cShip.length}
+              rows={cShip.map((s) => [s.date, s.doc_number || '—', money(s.amount)])}
+              head={['Дата', 'Документ', 'Сумма']} />
+            <RcSection title="Оплаты" total={sum(cPay, 'amount_kgs')} count={cPay.length}
+              rows={cPay.map((p) => [p.date, p.kind === 'cash' ? 'касса' : 'банк', money(p.amount_kgs)])}
+              head={['Дата', 'Тип', 'Сумма']} />
+            <RcSection title="Возвраты" total={sum(cRet, 'amount')} count={cRet.length}
+              rows={cRet.map((r) => [r.date, money(r.amount)])} head={['Дата', 'Сумма']} />
+          </div>
+
+          {/* ---- SalesDoc ---- */}
+          <div className="rc-col">
+            <div className="rc-col-title">SalesDoc {row.in_sd ? '' : '· нет'}</div>
+            <RcSection title="Реализации" total={sd?.orders?.total} count={sd?.orders?.count}
+              rows={(sd?.orders?.items || []).map((o) => [o.date, o.status_label, money(o.amount)])}
+              head={['Дата', 'Статус', 'Сумма']} />
+            <RcSection title="Оплаты" total={sd?.payments?.total} count={sd?.payments?.count}
+              rows={(sd?.payments?.items || []).map((p) => [p.date, money(p.amount)])}
+              head={['Дата', 'Сумма']} />
+            <RcSection title="Возвраты" total={sd?.returns?.total} count={sd?.returns?.count}
+              rows={(sd?.returns?.items || []).map((r) => [r.date, money(r.amount)])}
+              head={['Дата', 'Сумма']} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RcSection({ title, total, count, rows, head }) {
+  const fdate = (v) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v.split('-').reverse().join('.') : v)
+  return (
+    <div className="rc-section">
+      <div className="rc-section-head">
+        <span>{title}</span>
+        <span className="muted">{total != null ? money(total) : '—'}{count ? ` · ${count}` : ''}</span>
+      </div>
+      {(!rows || rows.length === 0) ? (
+        <div className="muted rc-empty">Нет записей</div>
+      ) : (
+        <div className="table-wrap rc-table">
+          <table>
+            <thead>
+              <tr>{head.map((h, i) => <th key={i} className={i > 0 && i === head.length - 1 ? 'num' : ''}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  {r.map((c, j) => (
+                    <td key={j} className={j === r.length - 1 ? 'num' : ''}>{j === 0 ? fdate(c) : c}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
