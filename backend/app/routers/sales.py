@@ -1,5 +1,6 @@
 import hashlib
 import io
+from collections import defaultdict
 from datetime import date, datetime
 
 import openpyxl
@@ -242,6 +243,105 @@ def import_sales_workbook(
         "replaced_rows": replaced,
         "errors": errors,
         "total_in_db": total,
+    }
+
+
+# Документная реализация (Innowave): Дата / Сумма / Валюта / Контрагент.
+DOC_HEADERS = {"Дата": "date", "Сумма": "amount", "Валюта": "currency", "Контрагент": "client"}
+
+
+def import_sales_docs_workbook(
+    db: Session, content: bytes, filename: str, user_id: int,
+    org: str = models.DEFAULT_ORG,
+) -> dict:
+    """Импорт документной реализации (одна строка = документ с итогом, без
+    номенклатуры). Товар подставляем плейсдержателем, кол-во=1, цена=сумма —
+    чтобы дебиторка и обороты считались, а товарные проверки такие строки
+    игнорировали."""
+    org = models.normalize_org(org)
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Не удалось открыть файл Excel")
+
+    ws = wb[wb.sheetnames[0]]
+    rows_iter = ws.iter_rows(values_only=True)
+    header_idx, columns, buffered = None, {}, []
+    for i, row in enumerate(rows_iter):
+        buffered.append(row)
+        if i >= 20:
+            break
+        matched = {
+            j: DOC_HEADERS[str(c).strip()]
+            for j, c in enumerate(row)
+            if c is not None and str(c).strip() in DOC_HEADERS
+        }
+        if {"date", "amount", "client"} <= set(matched.values()):
+            header_idx, columns = i, matched
+            break
+    if header_idx is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Не найдены колонки документной реализации (Дата, Сумма, "
+                   "Валюта, Контрагент)",
+        )
+
+    parsed, errors = [], []
+
+    def process(row, line_no):
+        data = {f: (row[j] if j < len(row) else None) for j, f in columns.items()}
+        if all(v is None for v in data.values()):
+            return
+        dt = _parse_date(data.get("date"))
+        amount = _parse_float(data.get("amount"))
+        client = str(data.get("client") or "").strip()
+        if not dt or amount is None or not client:
+            if len(errors) < 20:
+                errors.append(f"Строка {line_no}: нет даты, суммы или контрагента")
+            return
+        parsed.append({
+            "src_dt": str(data.get("date")),
+            "date": dt,
+            "amount": amount,
+            "currency": (str(data.get("currency") or "KGS").strip() or "KGS")[:3],
+            "client": client,
+        })
+
+    line_no = header_idx + 1
+    for line_no, row in enumerate(buffered[header_idx + 1:], start=header_idx + 2):
+        process(row, line_no)
+    for line_no, row in enumerate(rows_iter, start=line_no + 1):
+        process(row, line_no)
+
+    existing = {h for (h,) in db.query(models.Sale.row_hash).all()}
+    seen: set[str] = set()
+    occurrences: dict[str, int] = defaultdict(int)
+    added = skipped = 0
+    for p in parsed:
+        base = "|".join(str(p[f]) for f in ("src_dt", "amount", "currency", "client"))
+        occurrences[base] += 1
+        h = hashlib.sha256(f"{org}|{base}#{occurrences[base]}".encode()).hexdigest()
+        if h in existing or h in seen:
+            skipped += 1
+            continue
+        seen.add(h)
+        db.add(models.Sale(
+            date=p["date"], client=p["client"], product=models.DOC_SALE_PRODUCT,
+            qty=1, price=p["amount"], amount=p["amount"], currency=p["currency"],
+            doc_total=p["amount"], organization=org, row_hash=h,
+        ))
+        added += 1
+
+    db.add(models.ImportLog(
+        filename=f"[реализация-док] {filename}", user_id=user_id,
+        added=added, skipped=skipped, errors_count=len(errors),
+    ))
+    db.commit()
+    return {
+        "added": added,
+        "skipped_duplicates": skipped,
+        "errors": errors,
+        "total_in_db": db.query(models.Sale).count(),
     }
 
 

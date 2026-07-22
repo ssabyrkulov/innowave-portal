@@ -131,6 +131,9 @@ def run_checks(db: Session, date_from: date | None = None,
     if not sales:
         # Продаж нет — но складские проверки всё равно выполняем ниже
         sales = []
+    # Документные реализации (без номенклатуры) исключаем из товарных правил —
+    # у них нет цены/товара/скидки по смыслу.
+    line_sales = [s for s in sales if s.product != models.DOC_SALE_PRODUCT]
 
     # Группировка по документам (номер + дата — как в summary)
     docs: dict[str, list] = defaultdict(list)
@@ -203,13 +206,13 @@ def run_checks(db: Session, date_from: date | None = None,
     # (цены законно меняются со временем — сравнение со «всей историей»
     # даёт ложные срабатывания).
     prices: dict[tuple, list[float]] = defaultdict(list)
-    for s in sales:
+    for s in line_sales:
         if s.qty and float(s.qty) > 0 and s.price:
             prices[(s.product, s.date.year)].append(float(s.price))
     medians = {
         k: statistics.median(v) for k, v in prices.items() if len(v) >= 5
     }
-    for s in sales:
+    for s in line_sales:
         med = medians.get((s.product, s.date.year))
         if not med or not s.price:
             continue
@@ -239,7 +242,7 @@ def run_checks(db: Session, date_from: date | None = None,
             ))
 
     # R5: нулевые/отрицательные значения
-    for s in sales:
+    for s in line_sales:
         if float(s.qty) <= 0 or float(s.amount) <= 0:
             violations.append(_v(
                 "nonpositive", s.row_hash, s.doc_number, s.date, s.client,
@@ -248,7 +251,7 @@ def run_checks(db: Session, date_from: date | None = None,
             ))
 
     # R6: не базовая валюта
-    for s in sales:
+    for s in line_sales:
         if s.currency != BASE_CURRENCY:
             violations.append(_v(
                 "foreign_currency", s.row_hash, s.doc_number, s.date, s.client,
@@ -257,7 +260,7 @@ def run_checks(db: Session, date_from: date | None = None,
             ))
 
     # R8: скидка выше лимита
-    for s in sales:
+    for s in line_sales:
         if s.discount_pct is not None and float(s.discount_pct) > DISCOUNT_LIMIT:
             violations.append(_v(
                 "discount_over_limit", s.row_hash, s.doc_number, s.date, s.client,

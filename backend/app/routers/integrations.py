@@ -25,7 +25,12 @@ from .balances import (
 from .expenses import import_expenses_workbook
 from .receipts import import_receipts_workbook
 from .returns import import_return_lines_workbook, import_returns_workbook
-from .sales import _row_hash, import_sales_workbook, parse_sales_workbook
+from .sales import (
+    _row_hash,
+    import_sales_docs_workbook,
+    import_sales_workbook,
+    parse_sales_workbook,
+)
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
@@ -113,6 +118,22 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     return None
 
 
+def _is_line_sales(content: bytes) -> bool:
+    """True — реализация построчная (есть «НоменклатураНаименование»), False —
+    документная (Дата/Сумма/Контрагент). Определяет, каким импортёром грузить."""
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+    except Exception:
+        return True
+    ws = wb[wb.sheetnames[0]]
+    for i, row in enumerate(ws.iter_rows(values_only=True)):
+        if i >= 20:
+            break
+        if any(c is not None and str(c).strip() == "НоменклатураНаименование" for c in row):
+            return True
+    return False
+
+
 def sniff_kind(content: bytes) -> str:
     """Определяет тип выгрузки по заголовкам колонок в первых 20 строках."""
     try:
@@ -192,7 +213,12 @@ async def inbox(
 
     auto_name = f"[авто:{org}] {filename}"
     if kind == "sales":
-        result = import_sales_workbook(db, content, auto_name, robot.id, org=org)
+        # Формат реализации: построчный (есть «НоменклатураНаименование») или
+        # документный (Дата/Сумма/Контрагент, как у Innowave).
+        if _is_line_sales(content):
+            result = import_sales_workbook(db, content, auto_name, robot.id, org=org)
+        else:
+            result = import_sales_docs_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "receipts":
         # ПКО = касса, БанкВх = банк
         rcpt_kind = "cash" if "пко" in filename.lower() else "bank"

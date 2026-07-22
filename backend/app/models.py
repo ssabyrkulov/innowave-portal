@@ -29,6 +29,11 @@ class Role(str, enum.Enum):
 DEFAULT_ORG = "hygiene"
 ORGS = ("hygiene", "innowave")
 
+# Плейсхолдер номенклатуры для документных реализаций (выгрузка без разбивки
+# по товарам — только Дата/Сумма/Контрагент, как у Innowave). По нему такие
+# продажи отличаются от построчных и исключаются из товарных проверок.
+DOC_SALE_PRODUCT = "Реализация (документ)"
+
 
 def normalize_org(value: str | None) -> str:
     v = (value or "").strip().lower()
