@@ -198,6 +198,96 @@ def _store_ok(store: dict | None, store_ids: set | None) -> bool:
     return sid in store_ids
 
 
+def analyze(date_from, date_to, store_org: dict) -> dict:
+    """Разбор структуры SalesDoc по фактическим данным: склады, филиалы
+    (по префиксу CS_id), покрытие заказов складом, и — главное — торгуют ли
+    точки с одним складом/фирмой или с несколькими (пересечение фирм)."""
+    warehouses = fetch_warehouses()
+    wh_name = {str(w["sd_id"]).lower(): w["name"] for w in warehouses}
+
+    params = {"filter": {
+        "include": "all",
+        "status": [1, 2, 3, 4, 5],
+        "period": {"date": {"from": date_from, "to": date_to}},
+    }}
+    orders = call_all("getOrder", ("orders", "order"), params)
+
+    store_stat: dict = {}
+    client_stores: dict = {}
+    filials: dict = {}
+    with_store = without_store = 0
+    for o in orders:
+        cs = str(o.get("CS_id") or "")
+        pref = cs.split("-", 1)[0] if "-" in cs else "(без префикса)"
+        filials[pref] = filials.get(pref, 0) + 1
+        st = str((o.get("store") or {}).get("SD_id") or "").lower()
+        amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
+        if st:
+            with_store += 1
+            d = store_stat.setdefault(st, {"name": wh_name.get(st, st), "count": 0, "sum": 0.0})
+            d["count"] += 1
+            d["sum"] += amt
+        else:
+            without_store += 1
+        cli = str((o.get("client") or {}).get("SD_id") or "").lower()
+        if cli and st:
+            client_stores.setdefault(cli, set()).add(st)
+
+    multi_store = sum(1 for v in client_stores.values() if len(v) > 1)
+    cross_firm = 0
+    firm_sum: dict = {}
+    unmapped_stores = set()
+    for v in client_stores.values():
+        orgs = set()
+        for s in v:
+            if s in store_org:
+                orgs.add(store_org[s])
+            else:
+                unmapped_stores.add(s)
+        if len(orgs) > 1:
+            cross_firm += 1
+    for st, d in store_stat.items():
+        org = store_org.get(st)
+        if org:
+            firm_sum[org] = round(firm_sum.get(org, 0.0) + d["sum"], 2)
+        else:
+            unmapped_stores.add(st)
+
+    try:
+        clients_total = len(fetch_clients())
+    except SalesDocError:
+        clients_total = None
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "warehouses": [
+            {"sd_id": w["sd_id"], "name": w["name"], "code_1C": w["code_1C"],
+             "org": store_org.get(str(w["sd_id"]).lower())}
+            for w in warehouses
+        ],
+        "orders_total": len(orders),
+        "orders_with_store": with_store,
+        "orders_without_store": without_store,
+        "stores": sorted(
+            ({"sd_id": k, "name": v["name"], "org": store_org.get(k),
+              "orders": v["count"], "sum": round(v["sum"], 2)}
+             for k, v in store_stat.items()),
+            key=lambda x: -x["sum"],
+        ),
+        "filials": sorted(
+            ({"prefix": k, "orders": v} for k, v in filials.items()),
+            key=lambda x: -x["orders"],
+        ),
+        "clients_ordered": len(client_stores),
+        "clients_multi_store": multi_store,
+        "clients_cross_firm": cross_firm,
+        "clients_total": clients_total,
+        "firm_sum": firm_sum,
+        "unmapped_stores": sorted(unmapped_stores),
+    }
+
+
 def fetch_client_store_orgs(store_org: dict, date_from, date_to) -> dict:
     """По заказам SalesDoc определяет фирму каждого клиента: SD_id клиента
     (в нижнем регистре) → множество организаций (по складам его заказов).

@@ -2672,3 +2672,13 @@ button.summary-card {
 .match-link { display: flex; gap: 8px; align-items: center; }
 .match-link .filter-select { flex: 1; min-width: 0; }
 @media (max-width: 720px) { .match-cols { grid-template-columns: 1fr; } }
+
+/* ---------- Сверка SD: диагностика структуры ---------- */
+.an-grid { margin-top: 6px; }
+.an-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.an-label { color: var(--muted); }
+.an-hint { font-size: 12px; }
+.an-val { font-weight: 700; white-space: nowrap; }
+.an-warn { color: var(--out); }
+.an-sub { font-weight: 700; margin: 12px 0 4px; font-size: 13px; }
+.an-store { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }

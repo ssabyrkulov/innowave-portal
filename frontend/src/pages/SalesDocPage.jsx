@@ -96,6 +96,8 @@ export default function SalesDocPage() {
 
       <StoreMapping />
 
+      <AnalyzePanel />
+
       <MatchingPanel onLinked={() => loadAll(range, onlyDiff)} />
 
       {debt?.sd_account_wide && (
@@ -351,6 +353,92 @@ function RcSection({ title, total, count, rows, head }) {
           </table>
         </div>
       )}
+    </div>
+  )
+}
+
+function AnalyzePanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const today = toISODate(new Date())
+  const from = toISODate(new Date(Date.now() - 90 * 86400000))
+
+  function load() {
+    setLoading(true)
+    setError(null)
+    api.salesdocAnalyze(from, today)
+      .then(setData)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false))
+  }
+
+  function toggle() {
+    const n = !open
+    setOpen(n)
+    if (n && data === null) load()
+  }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🔬 Диагностика структуры SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">За последние 90 дней. Показывает, как реально
+            устроены склады/филиалы и можно ли честно делить по фирме.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Считаю по вашей базе…</div>}
+          {data && (
+            <div className="an-grid">
+              <AnRow label="Заказов за период" value={data.orders_total} />
+              <AnRow label="Из них со складом"
+                value={`${data.orders_with_store} (${pct(data.orders_with_store, data.orders_total)}%)`} />
+              <AnRow label="Без склада"
+                value={data.orders_without_store}
+                warn={data.orders_without_store > 0} />
+              <AnRow label="Филиалы (по CS_id)"
+                value={data.filials.map((f) => `${f.prefix}: ${f.orders}`).join(' · ')}
+                warn={data.filials.length > 1} />
+              <AnRow label="Точек заказывало" value={data.clients_ordered} />
+              <AnRow label="Точек с >1 складом"
+                value={data.clients_multi_store}
+                warn={data.clients_multi_store > 0} />
+              <AnRow label="Точек, пересекающих ФИРМЫ"
+                value={data.clients_cross_firm}
+                warn={data.clients_cross_firm > 0}
+                hint="если 0 — деление по складу честное; если >0 — у этих точек баланс общий на обе фирмы" />
+              {data.unmapped_stores.length > 0 && (
+                <AnRow label="Склады без привязки"
+                  value={data.unmapped_stores.length} warn />
+              )}
+              <div className="an-sub">Склады (заказы · сумма · фирма)</div>
+              {data.stores.map((s) => (
+                <div key={s.sd_id} className="an-store">
+                  <span>{s.name} <span className="muted">· {s.sd_id}</span></span>
+                  <span className="num">{s.orders} · {money(s.sum)} · {ORG_LABELS[s.org] || '—'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function pct(a, b) {
+  return b ? Math.round((a / b) * 100) : 0
+}
+
+function AnRow({ label, value, warn, hint }) {
+  return (
+    <div className="an-row">
+      <span className="an-label">{label}{hint && <span className="muted an-hint"> — {hint}</span>}</span>
+      <span className={`an-val ${warn ? 'an-warn' : ''}`}>{value}</span>
     </div>
   )
 }
