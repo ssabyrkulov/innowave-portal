@@ -36,11 +36,11 @@ export default function SalesDocPage() {
     setLoading(true)
     setError(null)
     try {
-      const [p, d] = await Promise.all([
-        api.salesdocPeriod(r.from, r.to),
-        api.salesdocDebt(od),
-      ])
+      // Последовательно, а не Promise.all: параллельные запросы к SalesDoc
+      // провоцируют повторный логин, который гасит токен предыдущего.
+      const p = await api.salesdocPeriod(r.from, r.to)
       setPeriod(p)
+      const d = await api.salesdocDebt(od)
       setDebt(d)
     } catch (e) {
       setError(e.message)

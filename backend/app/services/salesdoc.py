@@ -10,10 +10,13 @@
 
 import json
 import re
+import threading
 import urllib.error
 import urllib.request
 
 from ..config import settings
+
+_login_lock = threading.Lock()
 
 
 def _clean(text: str) -> str:
@@ -79,13 +82,30 @@ def _login() -> None:
     _session["token"] = res.get("token")
 
 
+def _ensure_session() -> tuple[str, str]:
+    """Гарантирует наличие токена. Логинимся под замком, чтобы параллельные
+    запросы не устроили двойной логин (новый логин гасит прежний токен)."""
+    if not _session["token"]:
+        with _login_lock:
+            if not _session["token"]:
+                _login()
+    return _session["userId"], _session["token"]
+
+
+def _refresh_if_stale(used_token: str) -> None:
+    """Перелогин на 401 — но только если токеном ещё никто не занялся, иначе
+    параллельные 401 будут бесконечно гасить токены друг друга."""
+    with _login_lock:
+        if _session["token"] == used_token:
+            _login()
+
+
 def call(method: str, params: dict | None = None, _retry: bool = True) -> tuple[dict, dict | None]:
     """Вызов метода SalesDoc. Возвращает (result, pagination)."""
-    if not _session["token"]:
-        _login()
+    user_id, token = _ensure_session()
     payload: dict = {
         "method": method,
-        "auth": {"userId": _session["userId"], "token": _session["token"]},
+        "auth": {"userId": user_id, "token": token},
     }
     if settings.salesdoc_filial:
         payload["filial"] = {"filial_id": settings.salesdoc_filial}
@@ -95,9 +115,9 @@ def call(method: str, params: dict | None = None, _retry: bool = True) -> tuple[
     status, resp = _raw_post(payload)
     if not (isinstance(resp, dict) and resp.get("status")):
         code = str(resp.get("code")) if isinstance(resp, dict) else ""
-        # 401 — токен протух: перелогиниваемся один раз.
+        # 401 — токен протух/погашен: перелогиниваемся один раз.
         if _retry and (code == "401" or status == 401):
-            _session["token"] = None
+            _refresh_if_stale(token)
             return call(method, params, _retry=False)
         msg = (resp or {}).get("message") or (resp or {}).get("error") or resp
         raise SalesDocError(f"SalesDoc: ошибка метода {method}: {msg}")
