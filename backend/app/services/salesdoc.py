@@ -209,6 +209,17 @@ def _day(value) -> str:
     return str(value or "").split(" ")[0]
 
 
+def _client_matches(cli: dict | None, sd_id, code_1c) -> bool:
+    """Серверный фильтр getOrder/getPayment по клиенту SalesDoc не соблюдает —
+    сверяем принадлежность записи клиенту сами по SD_id (или коду 1С)."""
+    cli = cli or {}
+    if sd_id:
+        return str(cli.get("SD_id") or "").lower() == str(sd_id).lower()
+    if code_1c:
+        return str(cli.get("code_1C") or "") == str(code_1c)
+    return False
+
+
 def fetch_client_orders(sd_id, code_1c, date_from, date_to) -> dict:
     """Заказы (реализации) клиента за период со статусами. Явно запрашиваем все
     статусы — иначе getOrder отдаёт только «Новые» и теряет отгруженные."""
@@ -223,6 +234,8 @@ def fetch_client_orders(sd_id, code_1c, date_from, date_to) -> dict:
     rows = call_all("getOrder", ("orders", "order"), params)
     items, total = [], 0.0
     for o in rows:
+        if not _client_matches(o.get("client"), sd_id, code_1c):
+            continue
         amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
         total += amt
         st = o.get("status")
@@ -247,6 +260,8 @@ def fetch_client_returns(sd_id, code_1c, date_from, date_to) -> dict:
     rows = call_all("getOrderDefect", ("defects", "orderDefects", "defect", "orderDefect", "orders"), params)
     items, total = [], 0.0
     for r in rows:
+        if not _client_matches(r.get("client"), sd_id, code_1c):
+            continue
         amt = float(r.get("summa") or r.get("totalSumma") or 0)
         total += amt
         items.append({"date": _day(r.get("date") or r.get("dateLoad")), "amount": round(amt, 2)})
@@ -261,10 +276,7 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
     rows = call_all("getPayment", ("payments", "payment"), params)
     items, total = [], 0.0
     for p in rows:
-        cli = p.get("client") or {}
-        if sd_id and str(cli.get("SD_id") or "").lower() != str(sd_id).lower():
-            continue
-        if not sd_id and code_1c and str(cli.get("code_1C") or "") != str(code_1c):
+        if not _client_matches(p.get("client"), sd_id, code_1c):
             continue
         amt = float(p.get("amount") or 0)
         total += amt
