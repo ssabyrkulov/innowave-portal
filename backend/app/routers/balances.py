@@ -5,6 +5,7 @@
 """
 
 import io
+from collections import Counter
 from datetime import datetime
 
 import openpyxl
@@ -101,11 +102,21 @@ def import_stock_balances_workbook(
     if not known_warehouses:  # продажи этой фирмы ещё не загружены — берём все
         known_warehouses = {w for (w,) in db.query(models.Sale.warehouse).distinct() if w}
 
+    # Структурный запас: в иерархии склад повторяется под многими товарами, а
+    # товар уникален. Имена, встречающиеся ≥2 раз, считаем складами — тогда
+    # разбор не зависит от того, загружены ли уже продажи.
+    data_rows = rows[header_idx + 1:]
+    counts = Counter(
+        str(r[0]).strip() for r in data_rows
+        if r and r[0] is not None and str(r[0]).strip() not in ("", "Итог")
+    )
+    known_warehouses |= {n for n, c in counts.items() if c >= 2}
+
     db.query(models.StockBalance).filter(models.StockBalance.organization == org).delete()
     added = 0
     now = datetime.utcnow()
     current_product = None
-    for row in rows[header_idx + 1:]:
+    for row in data_rows:
         if not row or row[0] is None:
             continue
         name = str(row[0]).strip()
