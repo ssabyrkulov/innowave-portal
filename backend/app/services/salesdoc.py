@@ -210,10 +210,15 @@ def _day(value) -> str:
 
 
 def fetch_client_orders(sd_id, code_1c, date_from, date_to) -> dict:
-    """Заказы (реализации) клиента за период со статусами."""
+    """Заказы (реализации) клиента за период со статусами. Явно запрашиваем все
+    статусы — иначе getOrder отдаёт только «Новые» и теряет отгруженные."""
     params = {
         "client": _client_ref(sd_id, code_1c),
-        "filter": {"include": "all", "period": {"date": {"from": date_from, "to": date_to}}},
+        "filter": {
+            "include": "all",
+            "status": [1, 2, 3, 4, 5],
+            "period": {"date": {"from": date_from, "to": date_to}},
+        },
     }
     rows = call_all("getOrder", ("orders", "order"), params)
     items, total = [], 0.0
@@ -270,8 +275,12 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
 
 def fetch_orders_total(date_from: str, date_to: str) -> dict:
     """Сумма заказов (реализаций) за период и разбивка по клиентам (по имени)."""
-    params = {"filter": {"include": "all", "period": {"date": {"from": date_from, "to": date_to}}}}
-    rows = call_all("getOrder", "orders", params) or call_all("getOrder", "order", params)
+    params = {"filter": {
+        "include": "all",
+        "status": [1, 2, 3, 4],  # без «Отменён»
+        "period": {"date": {"from": date_from, "to": date_to}},
+    }}
+    rows = call_all("getOrder", ("orders", "order"), params)
     total = 0.0
     by_client: dict[str, float] = {}
     for o in rows:
@@ -286,7 +295,7 @@ def fetch_orders_total(date_from: str, date_to: str) -> dict:
 def fetch_payments_total(date_from: str, date_to: str) -> dict:
     """Сумма оплат за период (по paymentDate)."""
     params = {"filter": {"period": {"date": {"from": date_from, "to": date_to}}}}
-    rows = call_all("getPayment", "payments", params) or call_all("getPayment", "payment", params)
+    rows = call_all("getPayment", ("payments", "payment"), params)
     total = 0.0
     for p in rows:
         total += float(p.get("amount") or 0)
