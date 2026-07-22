@@ -50,12 +50,12 @@ def _parse_date(value):
     return None
 
 
-def _hash(d: dict, occurrence: int) -> str:
-    # В ключе — исходная дата с точным временем (в 1С это разные документы,
-    # даже если сумма и день совпадают) плюс порядковый номер повтора на
-    # случай полностью идентичных строк выгрузки.
+def _hash(d: dict, occurrence: int, org: str = models.DEFAULT_ORG) -> str:
+    # В ключе — организация + исходная дата с точным временем (в 1С это разные
+    # документы, даже если сумма и день совпадают) плюс порядковый номер
+    # повтора на случай полностью идентичных строк выгрузки.
     key = "|".join(str(d[f]) for f in ("src_dt", "amount", "currency", "payer", "operation"))
-    return hashlib.sha256(f"{key}#{occurrence}".encode()).hexdigest()
+    return hashlib.sha256(f"{org}|{key}#{occurrence}".encode()).hexdigest()
 
 
 def _normalize(name: str) -> str:
@@ -66,6 +66,7 @@ def _normalize(name: str) -> str:
 async def import_receipts(
     file: UploadFile,
     replace_period: bool = Form(default=False),
+    org: str = Form(default=models.DEFAULT_ORG),
     db: Session = Depends(get_db),
     current: models.User = Depends(can_import),
 ):
@@ -73,7 +74,7 @@ async def import_receipts(
         raise HTTPException(status_code=400, detail="Ожидается файл Excel (.xlsx)")
     content = await file.read()
     return import_receipts_workbook(
-        db, content, file.filename, current.id, replace_period
+        db, content, file.filename, current.id, replace_period, org=org
     )
 
 
@@ -84,12 +85,16 @@ def import_receipts_workbook(
     user_id: int,
     replace_period: bool = False,
     kind: str = "bank",
+    org: str = models.DEFAULT_ORG,
 ) -> dict:
     """Импорт поступлений из байтов Excel (веб-загрузка и автоприём).
 
     kind — источник денег: 'bank' (ВыгрузкаБанкВх) или 'cash' (ВыгрузкаПКО).
     В row_hash не входит, поэтому на дедупликацию не влияет.
+    org — организация (в хэш входит, чтобы одинаковые строки разных фирм не
+    считались дублями).
     """
+    org = models.normalize_org(org)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     except Exception:
@@ -161,7 +166,8 @@ def import_receipts_workbook(
         dmax = max(p["date"] for p in parsed_rows)
         replaced = (
             db.query(models.Receipt)
-            .filter(models.Receipt.date >= dmin, models.Receipt.date <= dmax)
+            .filter(models.Receipt.organization == org,
+                    models.Receipt.date >= dmin, models.Receipt.date <= dmax)
             .delete(synchronize_session=False)
         )
         db.flush()
@@ -172,13 +178,13 @@ def import_receipts_workbook(
     for p in parsed_rows:
         base = "|".join(str(p[f]) for f in ("src_dt", "amount", "currency", "payer", "operation"))
         occurrences[base] += 1
-        h = _hash(p, occurrences[base])
+        h = _hash(p, occurrences[base], org)
         p = {k: v for k, v in p.items() if k != "src_dt"}
         if h in existing or h in seen:
             skipped += 1
             continue
         seen.add(h)
-        db.add(models.Receipt(**p, kind=kind, row_hash=h))
+        db.add(models.Receipt(**p, kind=kind, organization=org, row_hash=h))
         added += 1
 
     db.add(models.ImportLog(
@@ -225,8 +231,9 @@ def list_receipts(
     _: models.User = Depends(get_current_user),
     operation: str | None = Query(default=None),
     limit: int = Query(default=300, le=1000),
+    org: str = Query(default="all"),
 ):
-    q = db.query(models.Receipt).order_by(models.Receipt.date.desc())
+    q = models.org_scope(db.query(models.Receipt), models.Receipt, org).order_by(models.Receipt.date.desc())
     if operation:
         q = q.filter(models.Receipt.operation == operation)
     return [
@@ -344,6 +351,7 @@ def client_detail(
     client: str = Query(..., description="Имя контрагента из продаж"),
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
 ):
     """Карточка контрагента: отгрузки, возвраты и оплаты по датам + итоги.
 
@@ -361,7 +369,9 @@ def client_detail(
         return name == target or _normalize(name) == norm_target
 
     # --- Отгрузки: сводим строки продаж в документы ---
-    sales = db.query(models.Sale).filter(models.Sale.client == target).all()
+    sales = models.org_scope(
+        db.query(models.Sale).filter(models.Sale.client == target), models.Sale, org
+    ).all()
     by_doc: dict = {}
     loose: list[dict] = []
     for s in sales:
@@ -407,7 +417,7 @@ def client_detail(
     # --- Возвраты ---
     returns = []
     returned = 0.0
-    for rd in db.query(models.ReturnDoc).all():
+    for rd in models.org_scope(db.query(models.ReturnDoc), models.ReturnDoc, org).all():
         if resolves(rd.client):
             amt = float(rd.amount)
             returned += amt
@@ -417,7 +427,7 @@ def client_detail(
     # --- Оплаты ---
     payments = []
     paid = 0.0
-    for r in db.query(models.Receipt).all():
+    for r in models.org_scope(db.query(models.Receipt), models.Receipt, org).all():
         if not r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
             continue
         if not resolves(r.payer):
@@ -452,11 +462,12 @@ def client_detail(
 def receivables(
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
 ):
     """Дебиторка: отгружено − возвраты − оплачено по каждому клиенту."""
-    sales = db.query(models.Sale).all()
-    receipts = db.query(models.Receipt).all()
-    return_docs = db.query(models.ReturnDoc).all()
+    sales = models.org_scope(db.query(models.Sale), models.Sale, org).all()
+    receipts = models.org_scope(db.query(models.Receipt), models.Receipt, org).all()
+    return_docs = models.org_scope(db.query(models.ReturnDoc), models.ReturnDoc, org).all()
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
     bad_rows = db.query(models.BadDebtClient).all()
     bad_debt = {b.client for b in bad_rows}

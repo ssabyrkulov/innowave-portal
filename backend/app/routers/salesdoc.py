@@ -65,6 +65,7 @@ def reconcile_debt(
     db: Session = Depends(get_db),
     user: models.User = Depends(can_view),
     only_diff: bool = Query(default=False, description="Только строки с расхождением"),
+    org: str = Query(default="all"),
 ):
     """Дебиторка: наш долг (из 1С) против баланса SalesDoc, по каждому клиенту."""
     _require_configured()
@@ -101,7 +102,7 @@ def reconcile_debt(
         if k:
             sd_by_name.setdefault(k, entry)
 
-    rec = receivables(db=db, _=user)
+    rec = receivables(db=db, _=user, org=org)
     rows = []
     matched_ids: set[str] = set()
 
@@ -168,6 +169,7 @@ def reconcile_period(
     user: models.User = Depends(can_view),
     date_from: date = Query(...),
     date_to: date = Query(...),
+    org: str = Query(default="all"),
 ):
     """Итоги за период: реализации и оплаты — 1С против SalesDoc."""
     _require_configured()
@@ -178,12 +180,12 @@ def reconcile_period(
     except salesdoc.SalesDocError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-    our_sales = sales_summary(db=db, _=user, date_from=date_from, date_to=date_to, top=1)
+    our_sales = sales_summary(db=db, _=user, date_from=date_from, date_to=date_to, top=1, org=org)
     our_sales_total = round(float(our_sales["revenue"]), 2)
 
     # Наши оплаты клиентов за период (в сомах).
     q = (
-        db.query(models.Receipt)
+        models.org_scope(db.query(models.Receipt), models.Receipt, org)
         .filter(models.Receipt.date >= date_from, models.Receipt.date <= date_to)
         .filter(models.Receipt.operation.like(f"{CUSTOMER_PAYMENT_PREFIX}%"))
     )

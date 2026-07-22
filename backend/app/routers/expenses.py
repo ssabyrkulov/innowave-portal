@@ -67,8 +67,10 @@ def _parse_date(value):
 
 
 def import_expenses_workbook(
-    db: Session, content: bytes, filename: str, user_id: int, kind: str = "bank"
+    db: Session, content: bytes, filename: str, user_id: int, kind: str = "bank",
+    org: str = models.DEFAULT_ORG,
 ) -> dict:
+    org = models.normalize_org(org)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     except Exception:
@@ -155,13 +157,13 @@ def import_expenses_workbook(
         base = "|".join(str(p[f]) for f in
                         ("src_dt", "amount", "currency", "counterparty", "kind", "doc_number"))
         occurrences[base] += 1
-        h = hashlib.sha256(f"{base}#{occurrences[base]}".encode()).hexdigest()
+        h = hashlib.sha256(f"{org}|{base}#{occurrences[base]}".encode()).hexdigest()
         p = {k: v for k, v in p.items() if k != "src_dt"}
         if h in existing or h in seen:
             skipped += 1
             continue
         seen.add(h)
-        db.add(models.Expense(**p, row_hash=h))
+        db.add(models.Expense(**p, organization=org, row_hash=h))
         added += 1
 
     db.add(models.ImportLog(
@@ -186,8 +188,9 @@ def list_expenses(
     _: models.User = Depends(get_current_user),
     kind: str | None = Query(default=None),
     limit: int = Query(default=300, le=1000),
+    org: str = Query(default="all"),
 ):
-    q = db.query(models.Expense).order_by(models.Expense.date.desc())
+    q = models.org_scope(db.query(models.Expense), models.Expense, org).order_by(models.Expense.date.desc())
     if kind:
         q = q.filter(models.Expense.kind == kind)
     return [
@@ -211,8 +214,9 @@ def expenses_summary(
     _: models.User = Depends(get_current_user),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
+    org: str = Query(default="all"),
 ):
-    q = db.query(models.Expense)
+    q = models.org_scope(db.query(models.Expense), models.Expense, org)
     if date_from:
         q = q.filter(models.Expense.date >= date_from)
     if date_to:

@@ -224,6 +224,7 @@ def list_operations(
     q: str | None = Query(default=None, description="Поиск по тексту (клиент/товар и т.п.)"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=10, le=500),
+    org: str = Query(default="all"),
 ):
     cfg = TYPES.get(type)
     if cfg is None:
@@ -232,7 +233,7 @@ def list_operations(
     M = cfg["model"]
     date_col = cfg["date_col"](M)
 
-    query = db.query(M)
+    query = models.org_scope(db.query(M), M, org)
     if cfg["base"] is not None:
         query = query.filter(cfg["base"](M))
     if date_from:

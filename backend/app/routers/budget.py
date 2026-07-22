@@ -31,13 +31,13 @@ def _month_bounds(period: str) -> tuple[date, date]:
     return start, end
 
 
-def _fact_maps(db: Session, period: str) -> tuple[dict, dict]:
+def _fact_maps(db: Session, period: str, org: str = "all") -> tuple[dict, dict]:
     """Факт по статьям за месяц: (поступления, выплаты) — в сомах."""
     start, end = _month_bounds(period)
 
     incoming: dict[str, float] = defaultdict(float)
     for r in (
-        db.query(models.Receipt)
+        models.org_scope(db.query(models.Receipt), models.Receipt, org)
         .filter(models.Receipt.date >= start, models.Receipt.date < end)
         .all()
     ):
@@ -45,7 +45,7 @@ def _fact_maps(db: Session, period: str) -> tuple[dict, dict]:
 
     outgoing: dict[str, float] = defaultdict(float)
     for e in (
-        db.query(models.Expense)
+        models.org_scope(db.query(models.Expense), models.Expense, org)
         .filter(models.Expense.date >= start, models.Expense.date < end)
         .all()
     ):
@@ -65,11 +65,12 @@ class PlanUpsert(BaseModel):
 @router.get("")
 def list_plan(
     period: str = Query(..., description="Месяц YYYY-MM"),
+    org: str = Query(default="all"),
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
 ):
     items = (
-        db.query(models.BudgetItem)
+        models.org_scope(db.query(models.BudgetItem), models.BudgetItem, org)
         .filter(models.BudgetItem.period == period)
         .order_by(models.BudgetItem.direction, models.BudgetItem.article)
         .all()
@@ -90,6 +91,7 @@ def list_plan(
 @router.put("")
 def upsert_plan(
     body: PlanUpsert,
+    org: str = Query(default=models.DEFAULT_ORG),
     db: Session = Depends(get_db),
     _: models.User = Depends(can_edit),
 ):
@@ -99,9 +101,11 @@ def upsert_plan(
     if not article:
         raise HTTPException(status_code=400, detail="Пустая статья")
 
+    org = models.normalize_org(org)  # план привязан к конкретной фирме
     item = (
         db.query(models.BudgetItem)
         .filter(
+            models.BudgetItem.organization == org,
             models.BudgetItem.period == body.period,
             models.BudgetItem.direction == body.direction,
             models.BudgetItem.article == article,
@@ -110,7 +114,8 @@ def upsert_plan(
     )
     if item is None:
         item = models.BudgetItem(
-            period=body.period, direction=body.direction, article=article
+            period=body.period, direction=body.direction, article=article,
+            organization=org,
         )
         db.add(item)
     item.amount = round(body.amount, 2)
@@ -134,12 +139,13 @@ def delete_plan(
 @router.get("/fact-articles")
 def fact_articles(
     period: str = Query(...),
+    org: str = Query(default="all"),
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
 ):
     """Статьи, реально встречающиеся в факте за месяц — для подсказки при
     заполнении плана."""
-    incoming, outgoing = _fact_maps(db, period)
+    incoming, outgoing = _fact_maps(db, period, org)
     return {
         "in": sorted(incoming.keys()),
         "out": sorted(outgoing.keys()),
@@ -149,15 +155,16 @@ def fact_articles(
 @router.get("/plan-fact")
 def plan_fact(
     period: str = Query(..., description="Месяц YYYY-MM"),
+    org: str = Query(default="all"),
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
 ):
-    incoming, outgoing = _fact_maps(db, period)
+    incoming, outgoing = _fact_maps(db, period, org)
 
     plan_in: dict[str, float] = defaultdict(float)
     plan_out: dict[str, float] = defaultdict(float)
     for i in (
-        db.query(models.BudgetItem)
+        models.org_scope(db.query(models.BudgetItem), models.BudgetItem, org)
         .filter(models.BudgetItem.period == period)
         .all()
     ):

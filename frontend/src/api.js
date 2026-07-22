@@ -3,6 +3,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
 const TOKEN_KEY = 'pc_token'
+const ORG_KEY = 'pc_org'
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY)
@@ -11,6 +12,16 @@ export function getToken() {
 export function setToken(token) {
   if (token) localStorage.setItem(TOKEN_KEY, token)
   else localStorage.removeItem(TOKEN_KEY)
+}
+
+// Выбранная организация ('all' | 'hygiene' | 'innowave') — добавляется ко всем
+// запросам как ?org=; эндпоинты, которым она не нужна, её игнорируют.
+export function getOrg() {
+  return localStorage.getItem(ORG_KEY) || 'all'
+}
+
+export function setOrg(org) {
+  localStorage.setItem(ORG_KEY, org)
 }
 
 async function request(path, { method = 'GET', body, form, formData } = {}) {
@@ -29,7 +40,9 @@ async function request(path, { method = 'GET', body, form, formData } = {}) {
     headers['Content-Type'] = 'application/json'
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { method, headers, body: payload })
+  const sep = path.includes('?') ? '&' : '?'
+  const url = `${API_BASE}${path}${sep}org=${encodeURIComponent(getOrg())}`
+  const res = await fetch(url, { method, headers, body: payload })
 
   if (res.status === 401) {
     setToken(null)

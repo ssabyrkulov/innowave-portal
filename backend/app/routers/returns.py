@@ -21,7 +21,8 @@ HEADERS = {"Дата": "date", "Сумма": "amount", "Валюта": "currency
 
 
 def import_return_lines_workbook(
-    db: Session, content: bytes, filename: str, user_id: int
+    db: Session, content: bytes, filename: str, user_id: int,
+    org: str = models.DEFAULT_ORG,
 ) -> dict:
     """Возвраты из построчного файла ВыгрузкаТовВозв (формат продаж).
 
@@ -35,20 +36,22 @@ def import_return_lines_workbook(
     """
     from .sales import _row_hash, parse_sales_workbook
 
+    org = models.normalize_org(org)
     parsed, errors = parse_sales_workbook(content)
 
-    # 1. Очистка продаж от возвратных строк
-    hashes = [_row_hash(p) for p in parsed]
+    # 1. Очистка продаж от возвратных строк (в рамках своей организации)
+    hashes = [_row_hash(p, org) for p in parsed]
     removed = 0
     if hashes:
         removed = (
             db.query(models.Sale)
-            .filter(models.Sale.row_hash.in_(hashes))
+            .filter(models.Sale.organization == org,
+                    models.Sale.row_hash.in_(hashes))
             .delete(synchronize_session=False)
         )
 
     # 2. Возвраты по документам: один ReturnDoc на документ по СуммаДокумента.
-    db.query(models.ReturnDoc).delete()
+    db.query(models.ReturnDoc).filter(models.ReturnDoc.organization == org).delete()
     db.flush()
     seen_docs: set = set()
     fallback: dict[tuple, dict] = {}  # документы без номера/итога — по строкам
@@ -78,11 +81,12 @@ def import_return_lines_workbook(
     added = 0
     for i, d in enumerate(docs):
         h = hashlib.sha256(
-            f"{d['date']}|{d['client']}|{d['amount']}|{i}".encode()
+            f"{org}|{d['date']}|{d['client']}|{d['amount']}|{i}".encode()
         ).hexdigest()
         db.add(models.ReturnDoc(
             date=d["date"], amount=round(d["amount"], 2),
-            currency=d["currency"], client=d["client"], row_hash=h,
+            currency=d["currency"], client=d["client"],
+            organization=org, row_hash=h,
         ))
         added += 1
 
@@ -116,7 +120,9 @@ def import_returns_workbook(
     content: bytes,
     filename: str,
     user_id: int,
+    org: str = models.DEFAULT_ORG,
 ) -> dict:
+    org = models.normalize_org(org)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     except Exception:
@@ -175,9 +181,9 @@ def import_returns_workbook(
         process(row, line_no)
 
     # Возвраты — полная выгрузка за всю историю, поэтому грузим «заменой
-    # целиком»: это самоисцеляет таблицу, если в неё раньше по ошибке попал
-    # чужой файл (напр. исходящие платежи).
-    db.query(models.ReturnDoc).delete()
+    # целиком» в рамках своей организации: это самоисцеляет таблицу, если в
+    # неё раньше по ошибке попал чужой файл (напр. исходящие платежи).
+    db.query(models.ReturnDoc).filter(models.ReturnDoc.organization == org).delete()
     db.flush()
     existing: set[str] = set()
     seen: set[str] = set()
@@ -186,13 +192,13 @@ def import_returns_workbook(
     for p in parsed:
         base = "|".join(str(p[f]) for f in ("src_dt", "amount", "currency", "client"))
         occurrences[base] += 1
-        h = hashlib.sha256(f"{base}#{occurrences[base]}".encode()).hexdigest()
+        h = hashlib.sha256(f"{org}|{base}#{occurrences[base]}".encode()).hexdigest()
         p = {k: v for k, v in p.items() if k != "src_dt"}
         if h in existing or h in seen:
             skipped += 1
             continue
         seen.add(h)
-        db.add(models.ReturnDoc(**p, row_hash=h))
+        db.add(models.ReturnDoc(**p, organization=org, row_hash=h))
         added += 1
 
     db.add(models.ImportLog(
@@ -216,9 +222,10 @@ def list_returns(
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
     limit: int = Query(default=300, le=1000),
+    org: str = Query(default="all"),
 ):
     rows = (
-        db.query(models.ReturnDoc)
+        models.org_scope(db.query(models.ReturnDoc), models.ReturnDoc, org)
         .order_by(models.ReturnDoc.date.desc())
         .limit(limit)
         .all()

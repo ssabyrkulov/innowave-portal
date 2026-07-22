@@ -120,8 +120,8 @@ def _v(rule, key, doc, dt, client, detail):
 
 
 def run_checks(db: Session, date_from: date | None = None,
-               date_to: date | None = None) -> list[dict]:
-    query = db.query(models.Sale)
+               date_to: date | None = None, org: str | None = None) -> list[dict]:
+    query = models.org_scope(db.query(models.Sale), models.Sale, org)
     if date_from:
         query = query.filter(models.Sale.date >= date_from)
     if date_to:
@@ -295,7 +295,7 @@ def run_checks(db: Session, date_from: date | None = None,
             ))
 
     # R9: отрицательные остатки на складах (по последнему снапшоту 1С)
-    for sb in db.query(models.StockBalance).all():
+    for sb in models.org_scope(db.query(models.StockBalance), models.StockBalance, org).all():
         if float(sb.qty) < 0 or float(sb.amount) < 0:
             violations.append(_v(
                 "negative_stock",

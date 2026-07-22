@@ -22,6 +22,27 @@ class Role(str, enum.Enum):
     viewer = "viewer"
 
 
+# Организации группы. Данные 1С грузятся по фирмам (разные папки Drive) и
+# нигде не смешиваются: разрез по organization есть во всех выгружаемых
+# таблицах. hygiene — Innowave Hygiene (единый налог), innowave — Innowave
+# (общий налог).
+DEFAULT_ORG = "hygiene"
+ORGS = ("hygiene", "innowave")
+
+
+def normalize_org(value: str | None) -> str:
+    v = (value or "").strip().lower()
+    return v if v in ORGS else DEFAULT_ORG
+
+
+def org_scope(query, model, org: str | None):
+    """Фильтрует запрос по организации. 'all'/пусто → обе фирмы вместе."""
+    o = (org or "").strip().lower()
+    if o in ORGS:
+        return query.filter(model.organization == o)
+    return query
+
+
 class Direction(str, enum.Enum):
     incoming = "incoming"
     outgoing = "outgoing"
@@ -58,6 +79,7 @@ class Sale(Base):
     __tablename__ = "sales"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     client: Mapped[str] = mapped_column(String, nullable=False, index=True)
     warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -85,6 +107,7 @@ class Receipt(Base):
     __tablename__ = "receipts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
@@ -106,6 +129,7 @@ class Expense(Base):
     __tablename__ = "expenses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
@@ -125,6 +149,7 @@ class ReturnDoc(Base):
     __tablename__ = "return_docs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
@@ -139,6 +164,7 @@ class CashBalance(Base):
     __tablename__ = "cash_balances"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     account: Mapped[str] = mapped_column(String, nullable=False)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -150,6 +176,7 @@ class StockBalance(Base):
     __tablename__ = "stock_balances"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     product: Mapped[str] = mapped_column(String, nullable=False)
     warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)

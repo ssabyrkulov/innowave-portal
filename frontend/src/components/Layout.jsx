@@ -1,7 +1,30 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { api } from '../api'
+import { api, getOrg, setOrg } from '../api'
 import { useAuth } from '../auth'
+
+const ORG_OPTIONS = [
+  { value: 'all', label: 'Обе фирмы' },
+  { value: 'hygiene', label: 'Innowave Hygiene' },
+  { value: 'innowave', label: 'Innowave' },
+]
+
+function OrgSwitch() {
+  const [org, setOrgState] = useState(getOrg())
+  function change(v) {
+    setOrgState(v)
+    setOrg(v)
+    // Полная перезагрузка — надёжно применяет выбор во всех разделах сразу.
+    window.location.reload()
+  }
+  return (
+    <select className="org-switch" value={org} onChange={(e) => change(e.target.value)}>
+      {ORG_OPTIONS.map((o) => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+    </select>
+  )
+}
 
 const ROLE_LABELS = {
   admin: 'Администратор',
@@ -86,6 +109,8 @@ export default function Layout() {
           </div>
         </div>
 
+        <OrgSwitch />
+
         <nav className="nav">
           {PRIMARY.map((i) => (
             <NavLink key={i.to} to={i.to} end={i.end} className="nav-link">
@@ -122,6 +147,7 @@ export default function Layout() {
           <div className="brand-mark">IW</div>
           <span className="appbar-title">InnoWave Group</span>
         </div>
+        <OrgSwitch />
       </header>
 
       <main className="content">

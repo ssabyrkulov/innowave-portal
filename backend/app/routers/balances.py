@@ -8,7 +8,7 @@ import io
 from datetime import datetime
 
 import openpyxl
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -40,8 +40,10 @@ def _load_rows(content: bytes):
 
 
 def import_cash_balances_workbook(
-    db: Session, content: bytes, filename: str, user_id: int
+    db: Session, content: bytes, filename: str, user_id: int,
+    org: str = models.DEFAULT_ORG,
 ) -> dict:
+    org = models.normalize_org(org)
     rows = _load_rows(content)
     header_idx = None
     for i, row in enumerate(rows[:20]):
@@ -52,7 +54,7 @@ def import_cash_balances_workbook(
     if header_idx is None:
         raise HTTPException(status_code=400, detail="Не найдены колонки остатков денег")
 
-    db.query(models.CashBalance).delete()
+    db.query(models.CashBalance).filter(models.CashBalance.organization == org).delete()
     added = 0
     now = datetime.utcnow()
     for row in rows[header_idx + 1:]:
@@ -62,7 +64,8 @@ def import_cash_balances_workbook(
         if amount is None:
             continue
         db.add(models.CashBalance(
-            account=str(row[0]).strip(), amount=amount, updated_at=now
+            account=str(row[0]).strip(), amount=amount,
+            organization=org, updated_at=now,
         ))
         added += 1
 
@@ -75,8 +78,10 @@ def import_cash_balances_workbook(
 
 
 def import_stock_balances_workbook(
-    db: Session, content: bytes, filename: str, user_id: int
+    db: Session, content: bytes, filename: str, user_id: int,
+    org: str = models.DEFAULT_ORG,
 ) -> dict:
+    org = models.normalize_org(org)
     rows = _load_rows(content)
     header_idx = None
     for i, row in enumerate(rows[:20]):
@@ -88,12 +93,15 @@ def import_stock_balances_workbook(
         raise HTTPException(status_code=400, detail="Не найдены колонки остатков товаров")
 
     # Файл иерархический: строка товара, затем строки его складов.
-    # Склад узнаём по справочнику складов из продаж.
+    # Склад узнаём по справочнику складов из продаж этой организации.
     known_warehouses = {
-        w for (w,) in db.query(models.Sale.warehouse).distinct() if w
+        w for (w,) in db.query(models.Sale.warehouse)
+        .filter(models.Sale.organization == org).distinct() if w
     }
+    if not known_warehouses:  # продажи этой фирмы ещё не загружены — берём все
+        known_warehouses = {w for (w,) in db.query(models.Sale.warehouse).distinct() if w}
 
-    db.query(models.StockBalance).delete()
+    db.query(models.StockBalance).filter(models.StockBalance.organization == org).delete()
     added = 0
     now = datetime.utcnow()
     current_product = None
@@ -110,7 +118,8 @@ def import_stock_balances_workbook(
         if name in known_warehouses and current_product:
             db.add(models.StockBalance(
                 product=current_product, warehouse=name,
-                amount=amount or 0, qty=qty or 0, updated_at=now,
+                amount=amount or 0, qty=qty or 0,
+                organization=org, updated_at=now,
             ))
             added += 1
         else:
@@ -128,8 +137,9 @@ def import_stock_balances_workbook(
 def cash_balances(
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
 ):
-    rows = db.query(models.CashBalance).all()
+    rows = models.org_scope(db.query(models.CashBalance), models.CashBalance, org).all()
     return {
         "total": round(sum(float(r.amount) for r in rows), 2),
         "updated_at": rows[0].updated_at.isoformat() if rows else None,
@@ -143,8 +153,9 @@ def cash_balances(
 def stock_balances(
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
 ):
-    rows = db.query(models.StockBalance).all()
+    rows = models.org_scope(db.query(models.StockBalance), models.StockBalance, org).all()
     return {
         "total_amount": round(sum(float(r.amount) for r in rows), 2),
         "total_qty": round(sum(float(r.qty) for r in rows), 3),

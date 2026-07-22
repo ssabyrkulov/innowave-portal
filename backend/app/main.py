@@ -98,11 +98,30 @@ def wait_for_db(attempts: int = 12, base_delay: float = 2.0) -> None:
     ) from last_err
 
 
+def backfill_organization() -> None:
+    """Проставляет organization='hygiene' существующим строкам (данные,
+    загруженные до появления мультиучёта). Идемпотентно."""
+    tables = ["sales", "receipts", "expenses", "return_docs",
+              "cash_balances", "stock_balances"]
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for t in tables:
+            if not inspector.has_table(t):
+                continue
+            cols = {c["name"] for c in inspector.get_columns(t)}
+            if "organization" not in cols:
+                continue
+            conn.execute(text(
+                f"UPDATE {t} SET organization='hygiene' WHERE organization IS NULL"
+            ))
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     wait_for_db()
     Base.metadata.create_all(bind=engine)
     run_mini_migrations()
+    backfill_organization()
     seed_initial_admin()
 
 

@@ -24,9 +24,13 @@ Key `INBOX_TOKEN`, Value — любая длинная случайная стр
 
 ```javascript
 // ===== Настройки =====
-const FOLDER_ID = '1HBmmRwmxPnxkbtr_x4bkKnQdc1F9wNhD'; // папка выгрузок 1С
-const ENDPOINT  = 'https://innowave-group.com/integrations/inbox';
-const TOKEN     = 'ВСТАВЬТЕ_INBOX_TOKEN_СЮДА';
+// По одной строке на организацию: id папки Drive + код фирмы (org).
+const FOLDERS = [
+  { id: '1HBmmRwmxPnxkbtr_x4bkKnQdc1F9wNhD', org: 'hygiene'  }, // Innowave Hygiene (единый)
+  { id: '1L9LuCJ0lOPit7ABkV_zLxPY8Jtp3uPLi', org: 'innowave' }, // Innowave (общий)
+];
+const ENDPOINT = 'https://innowave-group.com/integrations/inbox';
+const TOKEN    = 'ВСТАВЬТЕ_INBOX_TOKEN_СЮДА';
 // =====================
 
 // Запустите ОДИН РАЗ: проверит связь с порталом и сам создаст
@@ -43,37 +47,48 @@ function setup() {
 
 function syncNewFiles() {
   const props = PropertiesService.getScriptProperties();
-  const files = DriveApp.getFolderById(FOLDER_ID).getFiles();
 
-  while (files.hasNext()) {
-    const f = files.next();
-    if (!/\.(xlsx|xlsm)$/i.test(f.getName())) continue;
+  FOLDERS.forEach(function (folder) {
+    const files = DriveApp.getFolderById(folder.id).getFiles();
 
-    const key = 'sent_' + f.getId();
-    const mod = String(f.getLastUpdated().getTime());
-    if (props.getProperty(key) === mod) continue; // не менялся — пропускаем
+    while (files.hasNext()) {
+      const f = files.next();
+      if (!/\.(xlsx|xlsm)$/i.test(f.getName())) continue;
 
-    try {
-      const res = UrlFetchApp.fetch(ENDPOINT, {
-        method: 'post',
-        headers: { Authorization: 'Bearer ' + TOKEN },
-        // fname — имя файла отдельным полем (кириллица в заголовке multipart
-        // портится, а в поле формы приходит корректно)
-        payload: { file: f.getBlob(), fname: f.getName() },
-        muteHttpExceptions: true,
-      });
-      const code = res.getResponseCode();
-      if (code === 200) {
-        props.setProperty(key, mod); // запомнили — файл доставлен
-        console.log(f.getName() + ' -> ' + res.getContentText());
-      } else {
-        console.warn(f.getName() + ' -> HTTP ' + code + ': ' + res.getContentText());
-        // не помечаем как отправленный — попробуем в следующий запуск
+      // Ключ памяти включает org — файлы из разных папок не путаются.
+      const key = 'sent_' + folder.org + '_' + f.getId();
+      const mod = String(f.getLastUpdated().getTime());
+      if (props.getProperty(key) === mod) continue; // не менялся — пропускаем
+
+      try {
+        const res = UrlFetchApp.fetch(ENDPOINT, {
+          method: 'post',
+          headers: { Authorization: 'Bearer ' + TOKEN },
+          // fname — имя файла отдельным полем (кириллица в заголовке multipart
+          // портится); org — какой фирме принадлежит файл.
+          payload: { file: f.getBlob(), fname: f.getName(), org: folder.org },
+          muteHttpExceptions: true,
+        });
+        const code = res.getResponseCode();
+        if (code === 200) {
+          props.setProperty(key, mod); // запомнили — файл доставлен
+          console.log('[' + folder.org + '] ' + f.getName() + ' -> ' + res.getContentText());
+        } else {
+          console.warn('[' + folder.org + '] ' + f.getName() + ' -> HTTP ' + code + ': ' + res.getContentText());
+          // не помечаем как отправленный — попробуем в следующий запуск
+        }
+      } catch (e) {
+        console.error('[' + folder.org + '] ' + f.getName() + ' -> ' + e);
       }
-    } catch (e) {
-      console.error(f.getName() + ' -> ' + e); // сервер спал/сеть — повторим позже
     }
-  }
+  });
+}
+
+// Разовая переотправка ВСЕХ файлов обеих папок (после включения мультиучёта
+// или смены логики): очищает память скрипта и шлёт всё заново.
+function resendAll() {
+  PropertiesService.getScriptProperties().deleteAllProperties();
+  syncNewFiles();
 }
 ```
 
@@ -99,23 +114,49 @@ Google спросит разрешения (это ваш скрипт в ваш
 Render может не успеть (таймаут) — скрипт просто доставит файл со
 следующей попытки через 15 минут.
 
-## Каноничные файлы (важно про дубли)
+## Две фирмы (мультиучёт)
 
-В папке лежат разные варианты одних и тех же выгрузок (тестировались с 1С).
-Портал грузит по одному каноничному файлу на тип, дубли-варианты пропускает:
+Данные грузятся по фирмам — по папке Drive. Скрипт помечает каждый файл
+полем `org`, портал раскладывает по организациям, и они **нигде не
+смешиваются**. На сайте вверху — переключатель «Обе фирмы / Innowave
+Hygiene / Innowave».
 
-| Тип | Грузится | Пропускается как дубль |
-|-----|----------|------------------------|
-| Продажи | `ВыгрузкаРеал2` | `ВыгрузкаРеал` (старый) |
-| Возвраты | `ВыгрузкаТовВозв` | `ВыгрузкаВозв` |
-| Приход денег | `ВыгрузкаБанкВХ`, `ВыгрузкаПКО` | — |
-| Расход денег | `ВыгрузкаППИсход`, `ВыгрузкаРКО` | — |
-| Остатки денег | `ВыгрузкаБанкКасса` | — |
-| Остатки товаров | `ВыгрузкаОст…` | — |
+| Фирма | `org` | Папка Drive | Реализация | Возвраты |
+|-------|-------|-------------|-----------|----------|
+| Innowave Hygiene (единый) | `hygiene` | `1HBmmRwmxPnxkbtr_x4bkKnQdc1F9wNhD` | `ВыгрузкаРеал2` | `ВыгрузкаТовВозв` |
+| Innowave (общий) | `innowave` | `1L9LuCJ0lOPit7ABkV_zLxPY8Jtp3uPLi` | `ВыгрузкаРеал` | `ВыгрузкаВозв` |
 
-Дубли видны в журнале со статусом «Дубль-вариант выгрузки». Чтобы сменить
-каноничный файл — правится `classify_by_name` в
-`backend/app/routers/integrations.py`.
+Остальные файлы (`ВыгрузкаБанкВХ`, `ВыгрузкаПКО`, `ВыгрузкаППИсход`,
+`ВыгрузкаРКО`, `ВыгрузкаБанкКасса`, `ВыгрузкаОст…`) — одинаковы у обеих
+фирм и грузятся из своей папки со своим `org`.
+
+### Каноничные файлы (про дубли)
+
+Портал берёт по одному каноничному файлу на тип; каноничный **зависит от
+фирмы** (см. таблицу выше). У Hygiene реализация — `Реал2` (а `Реал`
+пропускается как дубль), возвраты — построчный `ТовВозв`. У Innowave
+каноничны обычный `Реал` и документный `Возв`. Логика — `classify_by_name`
+в `backend/app/routers/integrations.py`.
+
+## Включение второй фирмы (разовая активация)
+
+Порядок, чтобы данные Hygiene не задвоились (у строк изменился ключ
+дедупликации — теперь с учётом фирмы):
+
+1. **Дождитесь деплоя** новой версии (в `/healthz` модуль `operations`,
+   переключатель фирм виден на сайте).
+2. **Очистите импортированные данные 1С:** на портале под админом —
+   раздел загрузок → «Сбросить данные 1С» (или `POST /integrations/reset`).
+   Ручные данные (пользователи, платежи, планы, сопоставления имён,
+   принятые нарушения) сохраняются.
+3. **Обновите Apps Script** кодом выше (две папки + `org` + `resendAll`),
+   сохраните.
+4. Запустите функцию **`resendAll`** — она перешлёт все файлы обеих папок.
+   В журнале появятся строки `[hygiene] …` и `[innowave] …`.
+5. Проверьте на сайте: переключатель «Обе / Hygiene / Innowave» — цифры
+   меняются по фирме.
+
+Дальше синхронизация обеих папок идёт сама каждые 15 минут.
 
 ## Как это устроено со стороны портала
 

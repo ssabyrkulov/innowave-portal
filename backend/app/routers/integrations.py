@@ -77,21 +77,29 @@ def _robot_user(db: Session) -> models.User:
 # данных, которые тестировали с 1С. Грузим ТОЛЬКО каноничный, дубли-варианты
 # явно пропускаем, чтобы не задваивать выручку/возвраты.
 # Чтобы сменить каноничный файл — поправьте условия ниже.
-def classify_by_name(filename: str) -> str | None:
-    """Тип выгрузки по имени файла — самый надёжный сигнал. None → sniff_kind."""
+def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None:
+    """Тип выгрузки по имени файла — самый надёжный сигнал. None → sniff_kind.
+
+    Каноничные файлы зависят от организации: у Hygiene реализация = Реал2, а
+    возвраты — построчный ТовВозв; у Innowave выгружается только Реал (без «2»)
+    и документный Возв. Поэтому логика ветвится по org.
+    """
     name = (filename or "").lower()
     if name.startswith("~$"):
         return "ignore"  # временный файл Excel
 
-    # --- Продажи: каноничный = Реал2, старый Реал → дубль ---
+    # --- Продажи ---
     if "реал" in name:
+        if org == "innowave":
+            return "sales"  # у Innowave каноничен обычный Реал
         return "sales" if "реал2" in name else "dup_sales"
 
-    # --- Возвраты: каноничный = ТовВозв (построчный), Возв → дубль ---
+    # --- Возвраты ---
     if "товвозв" in name:
         return "return_lines"
     if "возв" in name:
-        return "dup_returns"
+        # У Innowave нет построчного ТовВозв — значит документный Возв каноничен
+        return "return_docs" if org == "innowave" else "dup_returns"
 
     # --- Остальные типы (по одному файлу) ---
     if "банккасса" in name:
@@ -150,16 +158,18 @@ async def inbox(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
     fname: str | None = Form(default=None),
+    org: str = Form(default=models.DEFAULT_ORG),
 ):
     _require_token(authorization)
 
+    org = models.normalize_org(org)
     content = await file.read()
     # Имя из поля формы (fname) — приходит корректным UTF-8, в отличие от
     # имени в заголовке multipart, где кириллица портится. Заголовок —
     # запасной вариант с попыткой восстановления.
     filename = fname or _recover_filename(file.filename or "file.xlsx")
     # Имя файла — первичный сигнал; колонки — запасной для незнакомых имён.
-    kind = classify_by_name(filename) or sniff_kind(content)
+    kind = classify_by_name(filename, org) or sniff_kind(content)
     if kind == "ignore":
         return {"type": "ignore", "status": "skipped", "detail": "Временный файл"}
     if kind in ("dup_sales", "dup_returns"):
@@ -180,28 +190,28 @@ async def inbox(
     # пишем в журнал для аудита.
     file_hash = hashlib.sha256(content).hexdigest()
 
-    auto_name = f"[авто] {filename}"
+    auto_name = f"[авто:{org}] {filename}"
     if kind == "sales":
-        result = import_sales_workbook(db, content, auto_name, robot.id)
+        result = import_sales_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "receipts":
         # ПКО = касса, БанкВх = банк
         rcpt_kind = "cash" if "пко" in filename.lower() else "bank"
         result = import_receipts_workbook(
-            db, content, auto_name, robot.id, kind=rcpt_kind
+            db, content, auto_name, robot.id, kind=rcpt_kind, org=org
         )
     elif kind == "return_docs":
-        result = import_returns_workbook(db, content, auto_name, robot.id)
+        result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":
-        result = import_cash_balances_workbook(db, content, auto_name, robot.id)
+        result = import_cash_balances_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "stock_balances":
-        result = import_stock_balances_workbook(db, content, auto_name, robot.id)
+        result = import_stock_balances_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "expense":
         # РКО = касса, ППИсход = банк
         exp_kind = "cash" if "рко" in filename.lower() else "bank"
-        result = import_expenses_workbook(db, content, auto_name, robot.id, exp_kind)
+        result = import_expenses_workbook(db, content, auto_name, robot.id, exp_kind, org=org)
     elif kind == "return_lines":
         # ТовВозв: очистка продаж + запись сумм возвратов по клиентам.
-        result = import_return_lines_workbook(db, content, auto_name, robot.id)
+        result = import_return_lines_workbook(db, content, auto_name, robot.id, org=org)
         log = db.query(models.ImportLog).order_by(models.ImportLog.id.desc()).first()
         if log and log.file_hash is None:
             log.file_hash = file_hash

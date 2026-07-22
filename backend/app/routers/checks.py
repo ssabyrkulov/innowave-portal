@@ -25,8 +25,9 @@ def list_violations(
     date_to: date | None = Query(default=None),
     rule: str | None = Query(default=None),
     include_acked: bool = Query(default=False),
+    org: str = Query(default="all"),
 ):
-    violations = run_checks(db, date_from, date_to)
+    violations = run_checks(db, date_from, date_to, org=org)
     acked = _acked_map(db)
 
     items = []
@@ -57,8 +58,9 @@ def list_violations(
 def violations_count(
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
 ):
-    violations = run_checks(db)
+    violations = run_checks(db, org=org)
     acked = _acked_map(db)
     critical = warning = 0
     for v in violations:

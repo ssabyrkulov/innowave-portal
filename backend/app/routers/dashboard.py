@@ -1,7 +1,7 @@
 from collections import defaultdict
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -17,6 +17,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 def dashboard(
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
 ):
     today = date.today()
     cur_month = today.strftime("%Y-%m")
@@ -26,15 +27,15 @@ def dashboard(
     ).strftime("%Y-%m")
 
     # --- Продажи ---
-    sales = db.query(models.Sale).all()
+    sales = models.org_scope(db.query(models.Sale), models.Sale, org).all()
     monthly_sales: dict[str, float] = defaultdict(float)
     for s in sales:
         monthly_sales[s.date.strftime("%Y-%m")] += float(s.amount)
     months = sorted(monthly_sales)[-12:]
 
     # --- Дебиторка (та же логика, что в /receipts/receivables) ---
-    receipts = db.query(models.Receipt).all()
-    return_docs = db.query(models.ReturnDoc).all()
+    receipts = models.org_scope(db.query(models.Receipt), models.Receipt, org).all()
+    return_docs = models.org_scope(db.query(models.ReturnDoc), models.ReturnDoc, org).all()
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
 
     shipped: dict[str, float] = defaultdict(float)
@@ -89,7 +90,7 @@ def dashboard(
     # --- Расходы текущего/прошлого месяца (в сомах) ---
     expense_month = 0.0
     expense_prev = 0.0
-    for e in db.query(models.Expense).all():
+    for e in models.org_scope(db.query(models.Expense), models.Expense, org).all():
         em = e.date.strftime("%Y-%m")
         if em == cur_month:
             expense_month += float(e.amount_kgs)
@@ -97,7 +98,7 @@ def dashboard(
             expense_prev += float(e.amount_kgs)
 
     # --- Деньги на счетах (снапшот из 1С) ---
-    cash_rows = db.query(models.CashBalance).all()
+    cash_rows = models.org_scope(db.query(models.CashBalance), models.CashBalance, org).all()
     cash = {
         "total": round(sum(float(r.amount) for r in cash_rows), 2),
         "updated_at": cash_rows[0].updated_at.isoformat() if cash_rows else None,
@@ -112,7 +113,7 @@ def dashboard(
     # --- Контроль ---
     acked = {a.vhash for a in db.query(models.ViolationAck).all()}
     critical = warning = 0
-    for v in run_checks(db):
+    for v in run_checks(db, org=org):
         if v["vhash"] in acked:
             continue
         if v["severity"] == "critical":

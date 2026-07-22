@@ -21,11 +21,11 @@ SLEEPING_MIN_REVENUE = 5000  # мелкие разовые покупки не �
 VISIT_CADENCE_DAYS = 14  # клиента навещаем не реже, чем раз в N дней
 
 
-def _compute(db: Session) -> dict:
+def _compute(db: Session, org: str = "all") -> dict:
     """Общий расчёт по агентам — используется и сводкой, и «Мой день»."""
-    sales = db.query(models.Sale).all()
-    receipts = db.query(models.Receipt).all()
-    return_docs = db.query(models.ReturnDoc).all()
+    sales = models.org_scope(db.query(models.Sale), models.Sale, org).all()
+    receipts = models.org_scope(db.query(models.Receipt), models.Receipt, org).all()
+    return_docs = models.org_scope(db.query(models.ReturnDoc), models.ReturnDoc, org).all()
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
     today = date.today()
     cur_month = today.strftime("%Y-%m")
@@ -227,8 +227,9 @@ def _compute(db: Session) -> dict:
 def agents_summary(
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
 ):
-    ctx = _compute(db)
+    ctx = _compute(db, org)
     out = ctx["out"]
     return {
         "agents": out,
@@ -265,6 +266,7 @@ def _last_activity_map(db: Session, agent: str) -> dict:
 @router.get("/work")
 def agent_work(
     agent: str | None = Query(default=None),
+    org: str = Query(default="all"),
     db: Session = Depends(get_db),
     current: models.User = Depends(get_current_user),
 ):
@@ -272,7 +274,7 @@ def agent_work(
 
     Агент (пользователь с agent_name) видит только себя; админ — любого.
     """
-    ctx = _compute(db)
+    ctx = _compute(db, org)
     out = ctx["out"]
     names = [x["name"] for x in out]
 

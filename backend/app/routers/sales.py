@@ -70,7 +70,7 @@ def _parse_float(value) -> float | None:
         return None
 
 
-def _row_hash(d: dict) -> str:
+def _row_hash(d: dict, org: str = models.DEFAULT_ORG) -> str:
     key = "|".join(
         str(d.get(f, ""))
         for f in (
@@ -78,13 +78,14 @@ def _row_hash(d: dict) -> str:
             "amount", "doc_number", "warehouse", "doc_total",
         )
     )
-    return hashlib.sha256(key.encode()).hexdigest()
+    return hashlib.sha256(f"{org}|{key}".encode()).hexdigest()
 
 
 @router.post("/import")
 async def import_sales(
     file: UploadFile,
     replace_period: bool = Form(default=False),
+    org: str = Form(default=models.DEFAULT_ORG),
     db: Session = Depends(get_db),
     current: models.User = Depends(can_import),
 ):
@@ -95,7 +96,7 @@ async def import_sales(
         )
     content = await file.read()
     return import_sales_workbook(
-        db, content, file.filename, current.id, replace_period
+        db, content, file.filename, current.id, replace_period, org
     )
 
 
@@ -190,36 +191,39 @@ def import_sales_workbook(
     filename: str,
     user_id: int,
     replace_period: bool = False,
+    org: str = models.DEFAULT_ORG,
 ) -> dict:
     """Импорт выгрузки продаж из байтов Excel (используется и веб-загрузкой,
     и автоприёмом из Google Drive)."""
+    org = models.normalize_org(org)
     parsed_rows, errors = parse_sales_workbook(content)
 
     replaced = 0
     if replace_period and parsed_rows:
-        # Заменяем период, который покрывает файл: правки задним числом в 1С
-        # корректно попадут в базу, а не останутся дублями.
+        # Заменяем период ТОЛЬКО в рамках своей организации: правки задним
+        # числом в 1С корректно попадут в базу, а не останутся дублями.
         dmin = min(p["date"] for p in parsed_rows)
         dmax = max(p["date"] for p in parsed_rows)
         replaced = (
             db.query(models.Sale)
-            .filter(models.Sale.date >= dmin, models.Sale.date <= dmax)
+            .filter(models.Sale.organization == org,
+                    models.Sale.date >= dmin, models.Sale.date <= dmax)
             .delete(synchronize_session=False)
         )
         db.flush()
 
-    # --- Фаза 2: вставка с защитой от дублей ---
+    # --- Фаза 2: вставка с защитой от дублей (хэш учитывает организацию) ---
     existing_hashes = {h for (h,) in db.query(models.Sale.row_hash).all()}
     seen_in_file: set[str] = set()
     added = 0
     skipped = 0
     for parsed in parsed_rows:
-        h = _row_hash(parsed)
+        h = _row_hash(parsed, org)
         if h in existing_hashes or h in seen_in_file:
             skipped += 1
             continue
         seen_in_file.add(h)
-        db.add(models.Sale(**parsed, row_hash=h))
+        db.add(models.Sale(**parsed, organization=org, row_hash=h))
         added += 1
 
     db.add(models.ImportLog(
@@ -275,8 +279,9 @@ def sales_summary(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     top: int = Query(default=10, le=50),
+    org: str = Query(default="all"),
 ):
-    query = db.query(models.Sale)
+    query = models.org_scope(db.query(models.Sale), models.Sale, org)
     if date_from:
         query = query.filter(models.Sale.date >= date_from)
     if date_to:
@@ -357,12 +362,13 @@ def sales_products(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     limit: int = Query(default=200, le=1000),
+    org: str = Query(default="all"),
 ):
     """Продажи в разрезе номенклатуры: сколько штук и на какую сумму продано
     каждого товара за период. Поддерживает поиск по подстроке названия —
     под вопросы вида «сколько продали туалетной бумаги по сегодня».
     """
-    query = db.query(models.Sale)
+    query = models.org_scope(db.query(models.Sale), models.Sale, org)
     if date_from:
         query = query.filter(models.Sale.date >= date_from)
     if date_to:
