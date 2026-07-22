@@ -285,8 +285,11 @@ function ReconcileDetailModal({ row, onClose }) {
               }))}
               head={['Дата', 'Статус', 'Сумма']} />
             <RcSection title="Оплаты" total={sd?.payments?.total} count={sd?.payments?.count}
-              rows={(sd?.payments?.items || []).map((p) => [p.date, money(p.amount)])}
-              head={['Дата', 'Сумма']} />
+              rows={(sd?.payments?.items || []).map((p) => ({
+                cells: [p.date, p.type_name ? `${p.txn_label} · ${p.type_name}` : p.txn_label, money(p.amount)],
+                muted: !p.counted,
+              }))}
+              head={['Дата', 'Вид', 'Сумма']} />
             <RcSection title="Возвраты" total={sd?.returns?.total} count={sd?.returns?.count}
               rows={(sd?.returns?.items || []).map((r) => [r.date, money(r.amount)])}
               head={['Дата', 'Сумма']} />

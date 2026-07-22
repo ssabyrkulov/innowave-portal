@@ -276,20 +276,70 @@ def fetch_client_returns(sd_id, code_1c, date_from, date_to) -> dict:
     return {"total": round(total, 2), "count": len(items), "items": items}
 
 
+PAY_TXN = {
+    1: "Заказ", 2: "Долг", 3: "Оплата", 4: "Конверсия",
+    6: "Нач. остаток", 7: "Выплата клиенту", 8: "Списание долга", 9: "Возврат с полки",
+}
+# В «оплаты» (деньги от клиента) идёт только транзакция типа «Оплата».
+PAYMENT_TXN = 3
+
+
+def fetch_payment_types() -> dict:
+    """Справочник типов оплат: ключ (code/sd) → название (Наличные/Банк…)."""
+    try:
+        rows = call_all("getPaymentType", ("currency", "paymentType", "paymentTypes", "types"))
+    except SalesDocError:
+        return {}
+    m: dict = {}
+    for r in rows:
+        name = r.get("name") or r.get("short") or ""
+        if r.get("code_1C"):
+            m[("code", str(r["code_1C"]))] = name
+        if r.get("SD_id"):
+            m[("sd", str(r["SD_id"]).lower())] = name
+    return m
+
+
+def _to_int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
-    """Оплаты клиента за период. У getPayment фильтра по клиенту в доке нет —
-    тянем период и фильтруем локально по ИД/коду клиента."""
+    """Оплаты клиента за период. getPayment — общий журнал операций (заказы,
+    долги, конверсии…); в сумму берём только «Оплата» (transactionType=3).
+    У getPayment фильтра по клиенту в доке нет — фильтруем локально."""
     params = {"filter": {"period": {"date": {"from": date_from, "to": date_to}}}}
     rows = call_all("getPayment", ("payments", "payment"), params)
-    items, total = [], 0.0
+    ptypes = fetch_payment_types()
+    items, total, counted = [], 0.0, 0
     for p in rows:
         if not _client_matches(p.get("client"), sd_id, code_1c):
             continue
         amt = float(p.get("amount") or 0)
-        total += amt
-        items.append({"date": _day(p.get("paymentDate")), "amount": round(amt, 2)})
+        txn = _to_int(p.get("transactionType"))
+        is_counted = txn == PAYMENT_TXN
+        if is_counted:
+            total += amt
+            counted += 1
+        pt = p.get("paymentType") or {}
+        type_name = (
+            ptypes.get(("code", str(pt.get("code_1C"))))
+            or ptypes.get(("sd", str(pt.get("SD_id") or "").lower()))
+            or ""
+        )
+        items.append({
+            "date": _day(p.get("paymentDate")),
+            "amount": round(amt, 2),
+            "txn": txn,
+            "txn_label": PAY_TXN.get(txn, str(txn) if txn is not None else "—"),
+            "type_name": type_name,
+            "counted": is_counted,
+        })
     items.sort(key=lambda x: x["date"], reverse=True)
-    return {"total": round(total, 2), "count": len(items), "items": items}
+    return {"total": round(total, 2), "count": counted, "items": items}
 
 
 def fetch_orders_total(date_from: str, date_to: str) -> dict:
@@ -317,7 +367,10 @@ def fetch_payments_total(date_from: str, date_to: str) -> dict:
     """Сумма оплат за период (по paymentDate)."""
     params = {"filter": {"period": {"date": {"from": date_from, "to": date_to}}}}
     rows = call_all("getPayment", ("payments", "payment"), params)
-    total = 0.0
+    total, count = 0.0, 0
     for p in rows:
+        if _to_int(p.get("transactionType")) != PAYMENT_TXN:  # только «Оплата»
+            continue
         total += float(p.get("amount") or 0)
-    return {"total": round(total, 2), "count": len(rows)}
+        count += 1
+    return {"total": round(total, 2), "count": count}
