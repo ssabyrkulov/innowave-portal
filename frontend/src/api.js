@@ -139,6 +139,12 @@ export const api = {
 
   stockBalances: () => request('/balances/stock'),
 
+  salesdocStatus: () => request('/salesdoc/status'),
+  salesdocDebt: (onlyDiff = false) =>
+    request(`/salesdoc/debt${onlyDiff ? '?only_diff=true' : ''}`),
+  salesdocPeriod: (dateFrom, dateTo) =>
+    request(`/salesdoc/period?date_from=${dateFrom}&date_to=${dateTo}`),
+
   operationTypes: () => request('/operations/types'),
   operations: (params = {}) => {
     const qs = new URLSearchParams(

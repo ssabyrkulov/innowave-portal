@@ -24,6 +24,7 @@ from .routers import (
     receipts,
     returns,
     sales,
+    salesdoc,
     users,
 )
 from .seed import seed_initial_admin
@@ -142,6 +143,7 @@ app.include_router(balances.router)
 app.include_router(expenses.router)
 app.include_router(budget.router)
 app.include_router(operations.router)
+app.include_router(salesdoc.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

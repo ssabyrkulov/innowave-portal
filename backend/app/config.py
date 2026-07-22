@@ -20,5 +20,13 @@ class Settings(BaseSettings):
     first_admin_password: str = "admin123"
     first_admin_name: str = "Administrator"
 
+    # --- Интеграция SalesDoc (сверка учёта) ---
+    # Заполняются переменными окружения на Render; в репозиторий не коммитим.
+    # Пустой salesdoc_url = интеграция выключена.
+    salesdoc_url: str = ""          # напр. https://innowave.salesdoc.io
+    salesdoc_login: str = ""
+    salesdoc_password: str = ""
+    salesdoc_filial: str = ""       # filial_id; пусто = без филиальной структуры
+
 
 settings = Settings()
