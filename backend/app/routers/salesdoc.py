@@ -172,6 +172,25 @@ def reconcile_debt(
         if k:
             sd_by_name.setdefault(k, entry)
 
+    # Фирма клиента SalesDoc — по складам его заказов. Нужна, чтобы при выборе
+    # одной фирмы показывать только её точки (в т.ч. «только SD»).
+    o = (org or "").strip().lower()
+    client_orgs = None
+    if o in models.ORGS:
+        store_org = {
+            s.store_id.lower(): s.organization
+            for s in db.query(models.SalesDocStore).all()
+            if s.store_id and s.organization
+        }
+        if store_org:
+            today = date.today()
+            try:
+                client_orgs = salesdoc.fetch_client_store_orgs(
+                    store_org, f"{today.year - 3}-01-01", today.isoformat()
+                )
+            except salesdoc.SalesDocError:
+                client_orgs = None
+
     rec = receivables(db=db, _=user, org=org)
     rows = []
     matched_ids: set[str] = set()
@@ -206,6 +225,12 @@ def reconcile_debt(
     for entry in sd_by_id.values():
         if entry["sd_id"] in matched_ids or abs(entry["debt"]) < 0.5:
             continue
+        entry_orgs = client_orgs.get(entry["sd_id"]) if client_orgs is not None else None
+        # При выбранной фирме показываем только её точки.
+        if o in models.ORGS and client_orgs is not None:
+            if not entry_orgs or o not in entry_orgs:
+                continue
+        row_org = list(entry_orgs)[0] if entry_orgs and len(entry_orgs) == 1 else None
         rows.append({
             "name": entry["name"],
             "our_debt": 0.0,
@@ -215,7 +240,7 @@ def reconcile_debt(
             "in_sd": True,
             "code_1C": entry["code_1C"],
             "sd_id": entry["sd_id"],
-            "organization": None,  # только в SalesDoc — фирма из 1С неизвестна
+            "organization": row_org,  # фирма по складам заказов SalesDoc
         })
 
     rows.sort(key=lambda x: -abs(x["diff"]))

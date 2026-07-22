@@ -198,6 +198,28 @@ def _store_ok(store: dict | None, store_ids: set | None) -> bool:
     return sid in store_ids
 
 
+def fetch_client_store_orgs(store_org: dict, date_from, date_to) -> dict:
+    """По заказам SalesDoc определяет фирму каждого клиента: SD_id клиента
+    (в нижнем регистре) → множество организаций (по складам его заказов).
+    store_org: {store_sd_id(lower): org}."""
+    params = {"filter": {
+        "include": "all",
+        "status": [1, 2, 3, 4, 5],
+        "period": {"date": {"from": date_from, "to": date_to}},
+    }}
+    rows = call_all("getOrder", ("orders", "order"), params)
+    out: dict[str, set] = {}
+    for o in rows:
+        cli = (o.get("client") or {}).get("SD_id")
+        st = (o.get("store") or {}).get("SD_id")
+        if not cli:
+            continue
+        org = store_org.get(str(st or "").lower())
+        if org:
+            out.setdefault(str(cli).lower(), set()).add(org)
+    return out
+
+
 def fetch_clients() -> list[dict]:
     """Справочник клиентов SalesDoc: [{sd_id, code_1C, name}] — вся вселенная
     точек, в т.ч. с нулевым балансом (их нет в getBalance)."""
