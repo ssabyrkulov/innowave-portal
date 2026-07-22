@@ -9,10 +9,17 @@
 """
 
 import json
+import re
 import urllib.error
 import urllib.request
 
 from ..config import settings
+
+
+def _clean(text: str) -> str:
+    """Сжимает HTML-страницы ошибок (nginx 403 и т.п.) в короткую строку."""
+    text = re.sub(r"<[^>]+>", " ", text or "")
+    return re.sub(r"\s+", " ", text).strip()[:160]
 
 
 class SalesDocError(Exception):
@@ -36,7 +43,13 @@ def _raw_post(payload: dict) -> tuple[int, dict]:
     req = urllib.request.Request(
         _endpoint(),
         data=data,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # nginx/WAF SalesDoc отбивает дефолтный Python-urllib UA → 403.
+            # Представляемся обычным клиентом.
+            "User-Agent": "Mozilla/5.0 (compatible; InnoWavePortal/1.0)",
+        },
         method="POST",
     )
     try:
@@ -48,7 +61,7 @@ def _raw_post(payload: dict) -> tuple[int, dict]:
         try:
             return e.code, json.loads(body)
         except json.JSONDecodeError:
-            return e.code, {"message": body[:300]}
+            return e.code, {"message": f"HTTP {e.code}: {_clean(body)}"}
     except Exception as e:  # noqa: BLE001 — сеть/DNS/таймаут
         raise SalesDocError(f"SalesDoc недоступен: {e}") from e
 
