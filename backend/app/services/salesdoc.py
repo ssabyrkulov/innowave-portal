@@ -149,13 +149,14 @@ def call_all(method: str, key: str, params: dict | None = None, page_limit: int 
 # Готовые выборки под сверку
 # ---------------------------------------------------------------------------
 def fetch_balance() -> list[dict]:
-    """Текущая дебиторка по точкам: [{code_1C, name, balance}]. В SalesDoc
+    """Текущая дебиторка по точкам: [{sd_id, code_1C, name, debt}]. В SalesDoc
     отрицательный баланс = клиент должен нам, поэтому долг = -balance."""
     rows = call_all("getBalance", "balance")
     out = []
     for r in rows:
         bal = float(r.get("balance") or 0)
         out.append({
+            "sd_id": r.get("SD_id"),
             "code_1C": r.get("code_1C"),
             "name": r.get("name") or "",
             "balance": bal,
@@ -163,6 +164,20 @@ def fetch_balance() -> list[dict]:
             "active": bool(r.get("active", True)),
         })
     return out
+
+
+def fetch_clients() -> list[dict]:
+    """Справочник клиентов SalesDoc: [{sd_id, code_1C, name}] — вся вселенная
+    точек, в т.ч. с нулевым балансом (их нет в getBalance)."""
+    rows = call_all("getClient", "client")
+    return [
+        {
+            "sd_id": r.get("SD_id"),
+            "code_1C": r.get("code_1C"),
+            "name": r.get("name") or "",
+        }
+        for r in rows
+    ]
 
 
 def fetch_orders_total(date_from: str, date_to: str) -> dict:

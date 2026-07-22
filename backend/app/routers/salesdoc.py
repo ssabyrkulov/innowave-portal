@@ -25,15 +25,21 @@ _CODE_RE = re.compile(r"[a-zа-я]{0,3}\d*_\d+", re.IGNORECASE)
 
 
 def _match_key(name: str) -> str:
-    """Ключ сопоставления клиента: имя без кодов, скобок, кавычек и лишних
-    пробелов. Не идеально, но склеивает «z8_1249 rahat minimarket» с «rahat
-    minimarket»."""
+    """Ключ сопоставления клиента по имени: без кодов, скобок, кавычек и лишних
+    пробелов. Запасной вариант, если не удалось связать по ИД SalesDoc."""
     s = (name or "").lower().replace("ё", "е")
     s = re.sub(r"\([^)]*\)", " ", s)          # (…)
     s = _CODE_RE.sub(" ", s)                   # z8_1249 и т.п.
     s = re.sub(r"[\"“”«»']", " ", s)          # кавычки
     s = re.sub(r"[^\w\s-]", " ", s)            # прочая пунктуация
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _extract_sd_id(name: str) -> str | None:
+    """Достаёт ИД клиента SalesDoc (напр. z8_1249) из имени контрагента 1С —
+    самый надёжный ключ, т.к. он присутствует и там, и там."""
+    m = _CODE_RE.search(name or "")
+    return m.group(0).lower() if m else None
 
 router = APIRouter(prefix="/salesdoc", tags=["salesdoc"])
 
@@ -63,42 +69,77 @@ def reconcile_debt(
     """Дебиторка: наш долг (из 1С) против баланса SalesDoc, по каждому клиенту."""
     _require_configured()
     try:
-        sd_rows = salesdoc.fetch_balance()
+        sd_balance = salesdoc.fetch_balance()
+        sd_clients = salesdoc.fetch_clients()
     except salesdoc.SalesDocError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
+    # Долг SalesDoc по ИД клиента (нет в списке долгов = 0).
+    debt_by_id: dict[str, float] = {}
+    for r in sd_balance:
+        sid = (r["sd_id"] or "").lower()
+        if sid:
+            debt_by_id[sid] = debt_by_id.get(sid, 0.0) + r["debt"]
+
+    # Справочник SalesDoc: индексы по ИД, коду 1С и по имени.
+    sd_by_id: dict[str, dict] = {}
+    sd_by_code: dict[str, dict] = {}
+    sd_by_name: dict[str, dict] = {}
+    for c in sd_clients:
+        sid = (c["sd_id"] or "").lower()
+        entry = {
+            "sd_id": sid,
+            "name": c["name"],
+            "code_1C": c["code_1C"],
+            "debt": round(debt_by_id.get(sid, 0.0), 2),
+        }
+        if sid:
+            sd_by_id[sid] = entry
+        if c["code_1C"]:
+            sd_by_code[str(c["code_1C"])] = entry
+        k = _match_key(c["name"])
+        if k:
+            sd_by_name.setdefault(k, entry)
+
     rec = receivables(db=db, _=user)
-    our_by_norm: dict[str, dict] = {}
-    for c in rec["clients"]:
-        key = _match_key(c["client"])
-        if not key:
-            continue
-        agg = our_by_norm.setdefault(key, {"name": c["client"], "debt": 0.0})
-        agg["debt"] += c["debt"]
-
-    sd_by_norm: dict[str, dict] = {}
-    for r in sd_rows:
-        key = _match_key(r["name"]) if r["name"] else (r["code_1C"] or "")
-        if not key:
-            continue
-        agg = sd_by_norm.setdefault(key, {"name": r["name"], "debt": 0.0, "code_1C": r["code_1C"]})
-        agg["debt"] += r["debt"]
-
     rows = []
-    for key in set(our_by_norm) | set(sd_by_norm):
-        ours = our_by_norm.get(key)
-        sd = sd_by_norm.get(key)
-        our_debt = round(ours["debt"], 2) if ours else 0.0
-        sd_debt = round(sd["debt"], 2) if sd else 0.0
-        diff = round(our_debt - sd_debt, 2)
+    matched_ids: set[str] = set()
+
+    for c in rec["clients"]:
+        name = c["client"]
+        our_debt = round(c["debt"], 2)
+        # 1) по ИД SalesDoc из имени, 2) по коду 1С, 3) по имени
+        entry = None
+        sid = _extract_sd_id(name)
+        if sid and sid in sd_by_id:
+            entry = sd_by_id[sid]
+        if entry is None:
+            entry = sd_by_name.get(_match_key(name))
+        if entry:
+            matched_ids.add(entry["sd_id"])
+        sd_debt = entry["debt"] if entry else 0.0
         rows.append({
-            "name": (ours or sd)["name"],
+            "name": name,
             "our_debt": our_debt,
             "sd_debt": sd_debt,
-            "diff": diff,
-            "in_1c": ours is not None,
-            "in_sd": sd is not None,
-            "code_1C": sd["code_1C"] if sd else None,
+            "diff": round(our_debt - sd_debt, 2),
+            "in_1c": True,
+            "in_sd": entry is not None,
+            "code_1C": entry["code_1C"] if entry else None,
+        })
+
+    # Клиенты, которые есть только в SalesDoc и там висит долг.
+    for entry in sd_by_id.values():
+        if entry["sd_id"] in matched_ids or abs(entry["debt"]) < 0.5:
+            continue
+        rows.append({
+            "name": entry["name"],
+            "our_debt": 0.0,
+            "sd_debt": entry["debt"],
+            "diff": round(-entry["debt"], 2),
+            "in_1c": False,
+            "in_sd": True,
+            "code_1C": entry["code_1C"],
         })
 
     rows.sort(key=lambda x: -abs(x["diff"]))
