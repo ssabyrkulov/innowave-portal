@@ -5,6 +5,7 @@
 кода контрагента, а в SalesDoc имя приходит рядом с балансом).
 """
 
+import re
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,8 +15,25 @@ from .. import models
 from ..database import get_db
 from ..deps import require_roles
 from ..services import salesdoc
-from .receipts import CUSTOMER_PAYMENT_PREFIX, _normalize, receivables
+from .receipts import CUSTOMER_PAYMENT_PREFIX, receivables
 from .sales import sales_summary
+
+# Технические коды-хвосты вида z8_1249 / e4_1252 / (j1_129), которыми SalesDoc
+# и 1С помечают контрагентов по-разному и из-за которых точное имя не
+# совпадает. Для сопоставления их убираем.
+_CODE_RE = re.compile(r"[a-zа-я]{0,3}\d*_\d+", re.IGNORECASE)
+
+
+def _match_key(name: str) -> str:
+    """Ключ сопоставления клиента: имя без кодов, скобок, кавычек и лишних
+    пробелов. Не идеально, но склеивает «z8_1249 rahat minimarket» с «rahat
+    minimarket»."""
+    s = (name or "").lower().replace("ё", "е")
+    s = re.sub(r"\([^)]*\)", " ", s)          # (…)
+    s = _CODE_RE.sub(" ", s)                   # z8_1249 и т.п.
+    s = re.sub(r"[\"“”«»']", " ", s)          # кавычки
+    s = re.sub(r"[^\w\s-]", " ", s)            # прочая пунктуация
+    return re.sub(r"\s+", " ", s).strip()
 
 router = APIRouter(prefix="/salesdoc", tags=["salesdoc"])
 
@@ -52,11 +70,15 @@ def reconcile_debt(
     rec = receivables(db=db, _=user)
     our_by_norm: dict[str, dict] = {}
     for c in rec["clients"]:
-        our_by_norm[_normalize(c["client"])] = {"name": c["client"], "debt": c["debt"]}
+        key = _match_key(c["client"])
+        if not key:
+            continue
+        agg = our_by_norm.setdefault(key, {"name": c["client"], "debt": 0.0})
+        agg["debt"] += c["debt"]
 
     sd_by_norm: dict[str, dict] = {}
     for r in sd_rows:
-        key = _normalize(r["name"]) if r["name"] else (r["code_1C"] or "")
+        key = _match_key(r["name"]) if r["name"] else (r["code_1C"] or "")
         if not key:
             continue
         agg = sd_by_norm.setdefault(key, {"name": r["name"], "debt": 0.0, "code_1C": r["code_1C"]})
