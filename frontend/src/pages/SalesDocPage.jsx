@@ -5,6 +5,14 @@ import { formatMoney, toISODate } from '../utils'
 
 const ORG_LABELS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave' }
 
+// Подсказка фирмы по названию склада (Хайджин→hygiene, Инновейв→innowave).
+function guessOrg(name) {
+  const n = (name || '').toLowerCase()
+  if (n.includes('хайджин') || n.includes('hygiene') || n.includes('хайдж')) return 'hygiene'
+  if (n.includes('инновейв') || n.includes('innowave')) return 'innowave'
+  return ''
+}
+
 function monthRange() {
   const now = new Date()
   const y = now.getFullYear()
@@ -576,7 +584,9 @@ function StoreMapping() {
   function load() {
     setError(null)
     api.salesdocWarehouses()
-      .then((d) => setRows(d.warehouses))
+      // Непривязанным складам подставляем подсказку по названию — юзер
+      // проверяет и сохраняет.
+      .then((d) => setRows(d.warehouses.map((r) => ({ ...r, org: r.org || guessOrg(r.name) }))))
       .catch((e) => setError(e.message))
   }
 
@@ -615,7 +625,9 @@ function StoreMapping() {
         <div className="store-map-body">
           <p className="muted">
             В SalesDoc одна база на обе фирмы. Укажите, какой склад к какой
-            фирме относится — по этому реализации будут делиться.
+            фирме относится — по этому реализации будут делиться. Фирма
+            предзаполнена по названию склада (Хайджин→Hygiene, Инновейв→
+            Innowave) — проверьте и сохраните.
           </p>
           {error && <div className="error">{error}</div>}
           {rows === null && !error && <div className="muted">Загрузка…</div>}
