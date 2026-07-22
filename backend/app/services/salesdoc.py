@@ -198,6 +198,61 @@ def _store_ok(store: dict | None, store_ids: set | None) -> bool:
     return sid in store_ids
 
 
+def warehouse_report(date_from, date_to, store_org: dict) -> dict:
+    """По каждому складу за период: реализации, возвраты (из заказов) и текущий
+    остаток (количество). Приход/списания в API SalesDoc — методы записи, через
+    GET не читаются, поэтому их здесь нет."""
+    warehouses = fetch_warehouses()
+    base: dict = {}
+    for w in warehouses:
+        k = str(w["sd_id"]).lower()
+        base[k] = {
+            "sd_id": w["sd_id"], "name": w["name"],
+            "org": store_org.get(k),
+            "sales": 0.0, "returns": 0.0, "orders": 0,
+            "stock_qty": 0.0, "stock_pos": 0,
+        }
+
+    params = {"filter": {
+        "include": "all",
+        "status": [1, 2, 3, 4, 5],
+        "period": {"date": {"from": date_from, "to": date_to}},
+    }}
+    for o in call_all("getOrder", ("orders", "order"), params):
+        k = str((o.get("store") or {}).get("SD_id") or "").lower()
+        if not k:
+            continue
+        d = base.get(k)
+        if d is None:
+            d = base[k] = {"sd_id": k, "name": k, "org": store_org.get(k),
+                           "sales": 0.0, "returns": 0.0, "orders": 0,
+                           "stock_qty": 0.0, "stock_pos": 0}
+        st = o.get("status")
+        if st in SHIPPED_STATUSES:
+            d["sales"] += float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
+            d["orders"] += 1
+        if st != 5:
+            d["returns"] += float(o.get("totalReturnsSumma") or 0)
+
+    try:
+        for w in call_all("getStock", ("warehouse", "warehouses")):
+            k = str(w.get("SD_id") or "").lower()
+            d = base.get(k)
+            if d is None:
+                continue
+            prods = w.get("products") or []
+            d["stock_pos"] = len(prods)
+            d["stock_qty"] = round(sum(float(p.get("quantity") or 0) for p in prods), 3)
+    except SalesDocError:
+        pass
+
+    rows = sorted(base.values(), key=lambda x: -x["sales"])
+    for d in rows:
+        d["sales"] = round(d["sales"], 2)
+        d["returns"] = round(d["returns"], 2)
+    return {"date_from": date_from, "date_to": date_to, "warehouses": rows}
+
+
 def analyze(date_from, date_to, store_org: dict) -> dict:
     """Разбор структуры SalesDoc по фактическим данным: склады, филиалы
     (по префиксу CS_id), покрытие заказов складом, и — главное — торгуют ли

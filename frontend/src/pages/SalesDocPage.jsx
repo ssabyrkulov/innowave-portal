@@ -106,6 +106,8 @@ export default function SalesDocPage() {
 
       <AnalyzePanel />
 
+      <WarehouseReportPanel />
+
       <MatchingPanel onLinked={() => loadAll(range, onlyDiff)} />
 
       {debt?.sd_account_wide && (
@@ -359,6 +361,88 @@ function RcSection({ title, total, count, rows, head }) {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WarehouseReportPanel() {
+  const [open, setOpen] = useState(false)
+  const [dr, setDr] = useState({
+    from: toISODate(new Date(Date.now() - 90 * 86400000)),
+    to: toISODate(new Date()),
+  })
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load(r) {
+    setLoading(true)
+    setError(null)
+    api.salesdocWarehouseReport(r.from, r.to)
+      .then(setData)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false))
+  }
+
+  function toggle() {
+    const n = !open
+    setOpen(n)
+    if (n && data === null) load(dr)
+  }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 📦 Отчёт по складам SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <div className="filters">
+            <label className="ops-date"><span>с</span>
+              <input type="date" className="filter-select" value={dr.from}
+                onChange={(e) => setDr((d) => ({ ...d, from: e.target.value }))} />
+            </label>
+            <label className="ops-date"><span>по</span>
+              <input type="date" className="filter-select" value={dr.to}
+                onChange={(e) => setDr((d) => ({ ...d, to: e.target.value }))} />
+            </label>
+            <button className="btn btn-sm" disabled={loading} onClick={() => load(dr)}>Обновить</button>
+          </div>
+          <p className="muted">Приход/закладка и списания через API SalesDoc не
+            читаются (это методы записи) — показываю реализации, возвраты и
+            текущий остаток (количество).</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Считаю…</div>}
+          {data && (
+            <div className="table-wrap cd-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Склад</th>
+                    <th>Фирма</th>
+                    <th className="num">Реализации</th>
+                    <th className="num">Возвраты</th>
+                    <th className="num">Заказов</th>
+                    <th className="num">Остаток, шт</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.warehouses.map((w) => (
+                    <tr key={w.sd_id}>
+                      <td>{w.name}</td>
+                      <td className="muted">{ORG_LABELS[w.org] || '—'}</td>
+                      <td className="num">{money(w.sales)}</td>
+                      <td className="num">{w.returns ? money(w.returns) : '—'}</td>
+                      <td className="num">{w.orders}</td>
+                      <td className="num">{w.stock_qty ? w.stock_qty.toLocaleString('ru-RU') : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

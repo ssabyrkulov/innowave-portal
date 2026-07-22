@@ -275,6 +275,26 @@ def reconcile_debt(
     }
 
 
+@router.get("/warehouse-report")
+def warehouse_report(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+):
+    """Отчёт по складам SalesDoc: реализации, возвраты, остаток за период."""
+    _require_configured()
+    store_org = {
+        s.store_id.lower(): s.organization
+        for s in db.query(models.SalesDocStore).all()
+        if s.store_id and s.organization
+    }
+    try:
+        return salesdoc.warehouse_report(date_from.isoformat(), date_to.isoformat(), store_org)
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @router.get("/analyze")
 def analyze_structure(
     db: Session = Depends(get_db),

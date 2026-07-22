@@ -159,6 +159,8 @@ export const api = {
     request(`/salesdoc/period?date_from=${dateFrom}&date_to=${dateTo}`),
   salesdocAnalyze: (dateFrom, dateTo) =>
     request(`/salesdoc/analyze?date_from=${dateFrom}&date_to=${dateTo}`),
+  salesdocWarehouseReport: (dateFrom, dateTo) =>
+    request(`/salesdoc/warehouse-report?date_from=${dateFrom}&date_to=${dateTo}`),
   salesdocMatching: () => request('/salesdoc/matching'),
   salesdocLink: (client_1c, sd_id) =>
     request('/salesdoc/link', { method: 'POST', body: { client_1c, sd_id } }),
