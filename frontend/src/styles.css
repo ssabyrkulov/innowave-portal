@@ -2618,3 +2618,6 @@ button.summary-card {
 @media (max-width: 720px) {
   .rc-cols { grid-template-columns: 1fr; }
 }
+.rc-period { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -2px 0 14px; font-size: 13px; }
+.rc-period .filter-select { padding: 5px 8px; }
+.rc-period-hint { font-size: 12px; }

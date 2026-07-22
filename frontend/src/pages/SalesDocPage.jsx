@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import { formatMoney } from '../utils'
+import { formatMoney, toISODate } from '../utils'
 
 function monthRange() {
   const now = new Date()
@@ -195,7 +195,7 @@ export default function SalesDocPage() {
       )}
 
       {detail && (
-        <ReconcileDetailModal row={detail} range={range} onClose={() => setDetail(null)} />
+        <ReconcileDetailModal row={detail} onClose={() => setDetail(null)} />
       )}
     </div>
   )
@@ -205,7 +205,10 @@ function inRange(iso, r) {
   return iso && iso >= r.from && iso <= r.to
 }
 
-function ReconcileDetailModal({ row, range, onClose }) {
+function ReconcileDetailModal({ row, onClose }) {
+  // По умолчанию — вся история (долг накопительный): с начала данных до сегодня.
+  const today = toISODate(new Date())
+  const [dr, setDr] = useState({ from: `${new Date().getFullYear() - 3}-01-01`, to: today })
   const [oneC, setOneC] = useState(null)
   const [sd, setSd] = useState(null)
   const [err, setErr] = useState(null)
@@ -214,25 +217,28 @@ function ReconcileDetailModal({ row, range, onClose }) {
   useEffect(() => {
     let alive = true
     setLoading(true)
+    setErr(null)
+    setSd(null)
     const jobs = [
-      row.in_1c
+      row.in_1c && !oneC
         ? api.clientDetail(row.name).then((d) => alive && setOneC(d)).catch(() => {})
         : Promise.resolve(),
       (row.sd_id || row.code_1C)
         ? api.salesdocClientDetail({
             sd_id: row.sd_id, code_1c: row.code_1C,
-            date_from: range.from, date_to: range.to,
+            date_from: dr.from, date_to: dr.to,
           }).then((d) => alive && setSd(d)).catch((e) => alive && setErr(e.message))
         : Promise.resolve(),
     ]
     Promise.all(jobs).finally(() => alive && setLoading(false))
     return () => { alive = false }
-  }, [row, range])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row, dr])
 
   // 1С за тот же период, что и SD — для сопоставимости.
-  const cShip = (oneC?.shipments || []).filter((s) => inRange(s.date, range))
-  const cPay = (oneC?.payments || []).filter((p) => inRange(p.date, range))
-  const cRet = (oneC?.returns || []).filter((r) => inRange(r.date, range))
+  const cShip = (oneC?.shipments || []).filter((s) => inRange(s.date, dr))
+  const cPay = (oneC?.payments || []).filter((p) => inRange(p.date, dr))
+  const cRet = (oneC?.returns || []).filter((r) => inRange(r.date, dr))
   const sum = (arr, k) => arr.reduce((s, x) => s + Number(x[k] || 0), 0)
 
   return (
@@ -242,8 +248,14 @@ function ReconcileDetailModal({ row, range, onClose }) {
           <h2>{row.name}</h2>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
-        <div className="muted rc-period">
-          Период {range.from.split('-').reverse().join('.')} — {range.to.split('-').reverse().join('.')}
+        <div className="rc-period">
+          <span className="muted">Период:</span>
+          <input type="date" className="filter-select" value={dr.from}
+            onChange={(e) => setDr((d) => ({ ...d, from: e.target.value }))} />
+          <span className="muted">—</span>
+          <input type="date" className="filter-select" value={dr.to}
+            onChange={(e) => setDr((d) => ({ ...d, to: e.target.value }))} />
+          <span className="muted rc-period-hint">по умолчанию — вся история</span>
         </div>
         {loading && <div className="center muted">Загрузка…</div>}
         {err && <div className="error">SalesDoc: {err}</div>}
