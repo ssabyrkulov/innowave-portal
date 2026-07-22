@@ -477,9 +477,11 @@ def receivables(
     # номера учитываем по строкам со скидкой.
     shipped: dict[str, float] = defaultdict(float)
     last_shipment: dict[str, date] = {}
+    client_org: dict[str, str] = {}
     seen_docs: set = set()
     for s in sales:
         client = s.client
+        client_org.setdefault(client, s.organization)
         if s.doc_number:
             key = (s.doc_number, s.date, client)
             if key in seen_docs:
@@ -540,6 +542,7 @@ def receivables(
             "returned": round(ret, 2),
             "paid": round(pd, 2),
             "debt": round(sh - ret - pd, 2),
+            "organization": client_org.get(client),
             "last_shipment": last_shipment.get(client) and last_shipment[client].isoformat(),
             "last_payment": last_payment.get(client) and last_payment[client].isoformat(),
         })

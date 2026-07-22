@@ -170,6 +170,7 @@ export default function SalesDocPage() {
               <thead>
                 <tr>
                   <th>Клиент</th>
+                  <th>Фирма</th>
                   <th className="num">Долг 1С</th>
                   <th className="num">Долг SD</th>
                   <th className="num">Разница</th>
@@ -178,7 +179,7 @@ export default function SalesDocPage() {
               </thead>
               <tbody>
                 {debt.rows.length === 0 && (
-                  <tr><td colSpan={5} className="muted center">Расхождений нет 🎉</td></tr>
+                  <tr><td colSpan={6} className="muted center">Расхождений нет 🎉</td></tr>
                 )}
                 {debt.rows.map((r, i) => (
                   <tr key={i}>
@@ -186,6 +187,9 @@ export default function SalesDocPage() {
                       <button className="client-link" onClick={() => setDetail(r)}>
                         {r.name}
                       </button>
+                    </td>
+                    <td data-label="Фирма" className="muted">
+                      {ORG_LABELS[r.organization] || '—'}
                     </td>
                     <td className="num" data-label="Долг 1С">{money(r.our_debt)}</td>
                     <td className="num" data-label="Долг SD">{money(r.sd_debt)}</td>

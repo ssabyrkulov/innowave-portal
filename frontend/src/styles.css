@@ -2639,7 +2639,6 @@ button.summary-card {
   cursor: pointer;
 }
 .org-switch:focus { outline: none; border-color: var(--text); }
-.appbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .appbar .org-switch {
   width: auto;
   margin: 0;

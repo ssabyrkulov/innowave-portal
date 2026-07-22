@@ -179,6 +179,7 @@ def reconcile_debt(
     for c in rec["clients"]:
         name = c["client"]
         our_debt = round(c["debt"], 2)
+        client_org = c.get("organization")
         # 1) по ИД SalesDoc из имени, 2) по коду 1С, 3) по имени
         entry = None
         sid = _extract_sd_id(name)
@@ -198,6 +199,7 @@ def reconcile_debt(
             "in_sd": entry is not None,
             "code_1C": entry["code_1C"] if entry else None,
             "sd_id": entry["sd_id"] if entry else sid,
+            "organization": client_org,
         })
 
     # Клиенты, которые есть только в SalesDoc и там висит долг.
@@ -213,6 +215,7 @@ def reconcile_debt(
             "in_sd": True,
             "code_1C": entry["code_1C"],
             "sd_id": entry["sd_id"],
+            "organization": None,  # только в SalesDoc — фирма из 1С неизвестна
         })
 
     rows.sort(key=lambda x: -abs(x["diff"]))
