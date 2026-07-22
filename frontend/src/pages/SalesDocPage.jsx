@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { useAuth } from '../auth'
 import { formatMoney, toISODate } from '../utils'
+
+const ORG_LABELS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave' }
 
 function monthRange() {
   const now = new Date()
@@ -90,6 +93,16 @@ export default function SalesDocPage() {
         наличные оплаты). «только 1С» / «только SD» — точку не удалось связать
         (разные имена без ИД).
       </p>
+
+      <StoreMapping />
+
+      {debt?.sd_account_wide && (
+        <p className="note-readonly sd-warn">
+          Выбрана одна фирма. Реализации SalesDoc делятся по складу, а <b>баланс
+          и оплаты в SalesDoc — общие по клиенту на обе фирмы</b> (так устроен их
+          API). Поэтому «Долг SalesDoc» здесь может быть выше долга выбранной фирмы.
+        </p>
+      )}
 
       {error && <div className="error">{error}</div>}
 
@@ -330,6 +343,93 @@ function RcSection({ title, total, count, rows, head }) {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StoreMapping() {
+  const { can } = useAuth()
+  const [open, setOpen] = useState(false)
+  const [rows, setRows] = useState(null)
+  const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [savedMsg, setSavedMsg] = useState(null)
+
+  function load() {
+    setError(null)
+    api.salesdocWarehouses()
+      .then((d) => setRows(d.warehouses))
+      .catch((e) => setError(e.message))
+  }
+
+  function toggle() {
+    const n = !open
+    setOpen(n)
+    if (n && rows === null) load()
+  }
+
+  function setOrg(i, org) {
+    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, org: org || null } : r)))
+    setSavedMsg(null)
+  }
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      await api.salesdocSaveWarehouses(
+        rows.map((r) => ({ store_id: r.store_id, name: r.name, org: r.org }))
+      )
+      setSavedMsg('Сохранено. Обновите страницу, чтобы применить.')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🏬 Склады SalesDoc → фирмы
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">
+            В SalesDoc одна база на обе фирмы. Укажите, какой склад к какой
+            фирме относится — по этому реализации будут делиться.
+          </p>
+          {error && <div className="error">{error}</div>}
+          {rows === null && !error && <div className="muted">Загрузка…</div>}
+          {rows && rows.length === 0 && <div className="muted">Складов не найдено.</div>}
+          {rows && rows.map((r, i) => (
+            <div key={r.store_id} className="store-row">
+              <span className="store-name">
+                {r.name || r.store_id}
+                <span className="muted"> · {r.store_id}</span>
+              </span>
+              <select
+                className="filter-select"
+                value={r.org || ''}
+                disabled={!can.editPayments}
+                onChange={(e) => setOrg(i, e.target.value)}
+              >
+                <option value="">— не задано —</option>
+                <option value="hygiene">{ORG_LABELS.hygiene}</option>
+                <option value="innowave">{ORG_LABELS.innowave}</option>
+              </select>
+            </div>
+          ))}
+          {rows && rows.length > 0 && can.editPayments && (
+            <div className="store-map-actions">
+              <button className="btn btn-primary btn-sm" disabled={saving} onClick={save}>
+                {saving ? 'Сохранение…' : 'Сохранить привязку'}
+              </button>
+              {savedMsg && <span className="muted">{savedMsg}</span>}
+            </div>
+          )}
         </div>
       )}
     </div>

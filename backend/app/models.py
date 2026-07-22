@@ -267,6 +267,22 @@ class BadDebtClient(Base):
     creator: Mapped["User"] = relationship()
 
 
+class SalesDocStore(Base):
+    """Привязка склада SalesDoc к организации портала.
+
+    В SalesDoc одна база на обе фирмы; склады (2+2) относятся к разным
+    организациям. По этой карте реализации из SalesDoc делятся по фирмам.
+    """
+
+    __tablename__ = "salesdoc_stores"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    store_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)  # SD_id
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    organization: Mapped[str | None] = mapped_column(String, nullable=True)  # hygiene|innowave|None
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ImportLog(Base):
     """Журнал загрузок Excel — кто, когда и что импортировал."""
 

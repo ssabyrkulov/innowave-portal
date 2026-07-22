@@ -9,6 +9,7 @@ import re
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -46,9 +47,78 @@ router = APIRouter(prefix="/salesdoc", tags=["salesdoc"])
 can_view = require_roles(models.Role.admin, models.Role.accountant)
 
 
+can_edit = require_roles(models.Role.admin, models.Role.accountant)
+
+
 @router.get("/status")
 def status(_: models.User = Depends(can_view)):
     return {"configured": salesdoc.is_configured()}
+
+
+def _store_ids_for_org(db: Session, org: str) -> set | None:
+    """SD_id складов выбранной фирмы (в нижнем регистре). None — фильтр не
+    применяем (выбраны «Обе» или привязка складов ещё не настроена)."""
+    o = (org or "").strip().lower()
+    if o not in models.ORGS:
+        return None
+    ids = {
+        s.store_id.lower()
+        for s in db.query(models.SalesDocStore)
+        .filter(models.SalesDocStore.organization == o).all()
+        if s.store_id
+    }
+    return ids or None
+
+
+class StoreItem(BaseModel):
+    store_id: str
+    name: str | None = None
+    org: str | None = None
+
+
+@router.get("/warehouses")
+def list_warehouses(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+):
+    """Склады SalesDoc + их привязка к фирмам (для настройки разделения)."""
+    _require_configured()
+    try:
+        whs = salesdoc.fetch_warehouses()
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    saved = {s.store_id: s for s in db.query(models.SalesDocStore).all()}
+    return {
+        "warehouses": [
+            {
+                "store_id": w["sd_id"],
+                "code_1C": w["code_1C"],
+                "name": w["name"],
+                "org": saved[w["sd_id"]].organization if w["sd_id"] in saved else None,
+            }
+            for w in whs
+        ],
+        "orgs": list(models.ORGS),
+    }
+
+
+@router.post("/warehouses")
+def save_warehouses(
+    payload: list[StoreItem],
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_edit),
+):
+    for it in payload:
+        if not it.store_id:
+            continue
+        row = db.query(models.SalesDocStore).filter_by(store_id=it.store_id).first()
+        if row is None:
+            row = models.SalesDocStore(store_id=it.store_id)
+            db.add(row)
+        row.name = it.name
+        row.organization = it.org if it.org in models.ORGS else None
+    db.commit()
+    return {"status": "ok"}
 
 
 def _require_configured():
@@ -159,6 +229,9 @@ def reconcile_debt(
         "matched": sum(1 for r in rows if r["in_1c"] and r["in_sd"]),
         "only_1c": sum(1 for r in rows if r["in_1c"] and not r["in_sd"]),
         "only_sd": sum(1 for r in rows if r["in_sd"] and not r["in_1c"]),
+        # Баланс SalesDoc — общий по клиенту (обе фирмы). При выборе одной
+        # фирмы наш долг — только её, а долг SD — суммарный: это ожидаемо.
+        "sd_account_wide": (org or "").strip().lower() in models.ORGS,
         "rows": rows,
     }
 
@@ -174,8 +247,9 @@ def reconcile_period(
     """Итоги за период: реализации и оплаты — 1С против SalesDoc."""
     _require_configured()
     df, dt = date_from.isoformat(), date_to.isoformat()
+    store_ids = _store_ids_for_org(db, org)  # реализации делим по складу
     try:
-        sd_orders = salesdoc.fetch_orders_total(df, dt)
+        sd_orders = salesdoc.fetch_orders_total(df, dt, store_ids)
         sd_payments = salesdoc.fetch_payments_total(df, dt)
     except salesdoc.SalesDocError as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -211,11 +285,13 @@ def reconcile_period(
 
 @router.get("/client-detail")
 def client_detail(
+    db: Session = Depends(get_db),
     _: models.User = Depends(can_view),
     sd_id: str | None = Query(default=None),
     code_1c: str | None = Query(default=None),
     date_from: date = Query(...),
     date_to: date = Query(...),
+    org: str = Query(default="all"),
 ):
     """Детализация клиента в SalesDoc за период: реализации (со статусами),
     оплаты, возвраты. Каждый блок изолирован — сбой одного не рушит остальные."""
@@ -223,14 +299,15 @@ def client_detail(
     if not sd_id and not code_1c:
         raise HTTPException(status_code=400, detail="Нужен sd_id или code_1c клиента")
     df, dt = date_from.isoformat(), date_to.isoformat()
+    store_ids = _store_ids_for_org(db, org)  # реализации делим по складу
 
-    def safe(fn):
+    def safe(fn, *extra):
         try:
-            return fn(sd_id, code_1c, df, dt), None
+            return fn(sd_id, code_1c, df, dt, *extra), None
         except salesdoc.SalesDocError as e:
             return None, str(e)
 
-    orders, e1 = safe(salesdoc.fetch_client_orders)
+    orders, e1 = safe(salesdoc.fetch_client_orders, store_ids)
     payments, e2 = safe(salesdoc.fetch_client_payments)
     returns, e3 = safe(salesdoc.fetch_client_returns)
     return {

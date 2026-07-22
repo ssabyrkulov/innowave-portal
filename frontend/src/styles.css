@@ -2647,3 +2647,16 @@ button.summary-card {
   font-size: 12.5px;
   max-width: 46vw;
 }
+
+/* ---------- Сверка SD: привязка складов к фирмам ---------- */
+.store-map { margin-bottom: 14px; }
+.store-map-toggle { padding-left: 0; font-weight: 700; }
+.store-map-body { margin-top: 8px; }
+.store-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border);
+}
+.store-name { font-size: 14px; }
+.store-row .filter-select { min-width: 180px; }
+.store-map-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.sd-warn { border-left: 3px solid var(--out); }

@@ -157,6 +157,9 @@ export const api = {
     request(`/salesdoc/debt${onlyDiff ? '?only_diff=true' : ''}`),
   salesdocPeriod: (dateFrom, dateTo) =>
     request(`/salesdoc/period?date_from=${dateFrom}&date_to=${dateTo}`),
+  salesdocWarehouses: () => request('/salesdoc/warehouses'),
+  salesdocSaveWarehouses: (list) =>
+    request('/salesdoc/warehouses', { method: 'POST', body: list }),
   salesdocClientDetail: (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v != null && v !== '')

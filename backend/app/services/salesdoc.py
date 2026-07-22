@@ -179,6 +179,25 @@ def fetch_balance() -> list[dict]:
     return out
 
 
+def fetch_warehouses() -> list[dict]:
+    """Справочник складов SalesDoc: [{sd_id, code_1C, name}]."""
+    rows = call_all("getWarehouse", ("warehouse", "warehouses", "stores", "store"))
+    return [
+        {"sd_id": r.get("SD_id"), "code_1C": r.get("code_1C"), "name": r.get("name") or ""}
+        for r in rows
+    ]
+
+
+def _store_ok(store: dict | None, store_ids: set | None) -> bool:
+    """Заказ относится к выбранной фирме, если его склад в наборе store_ids.
+    store_ids=None → фильтр не применяется (все склады)."""
+    if not store_ids:
+        return True
+    store = store or {}
+    sid = str(store.get("SD_id") or "").lower()
+    return sid in store_ids
+
+
 def fetch_clients() -> list[dict]:
     """Справочник клиентов SalesDoc: [{sd_id, code_1C, name}] — вся вселенная
     точек, в т.ч. с нулевым балансом (их нет в getBalance)."""
@@ -223,9 +242,10 @@ def _client_matches(cli: dict | None, sd_id, code_1c) -> bool:
     return False
 
 
-def fetch_client_orders(sd_id, code_1c, date_from, date_to) -> dict:
+def fetch_client_orders(sd_id, code_1c, date_from, date_to, store_ids=None) -> dict:
     """Заказы (реализации) клиента за период со статусами. Явно запрашиваем все
-    статусы — иначе getOrder отдаёт только «Новые» и теряет отгруженные."""
+    статусы — иначе getOrder отдаёт только «Новые» и теряет отгруженные.
+    store_ids — набор складов выбранной фирмы (None = все)."""
     params = {
         "client": _client_ref(sd_id, code_1c),
         "filter": {
@@ -238,6 +258,8 @@ def fetch_client_orders(sd_id, code_1c, date_from, date_to) -> dict:
     items, total, counted = [], 0.0, 0
     for o in rows:
         if not _client_matches(o.get("client"), sd_id, code_1c):
+            continue
+        if not _store_ok(o.get("store"), store_ids):
             continue
         amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
         st = o.get("status")
@@ -342,8 +364,9 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
     return {"total": round(total, 2), "count": counted, "items": items}
 
 
-def fetch_orders_total(date_from: str, date_to: str) -> dict:
-    """Сумма заказов (реализаций) за период и разбивка по клиентам (по имени)."""
+def fetch_orders_total(date_from: str, date_to: str, store_ids=None) -> dict:
+    """Сумма заказов (реализаций) за период и разбивка по клиентам (по имени).
+    store_ids — набор складов выбранной фирмы (None = все)."""
     params = {"filter": {
         "include": "all",
         "status": sorted(SHIPPED_STATUSES),  # только отгруженные
@@ -354,6 +377,8 @@ def fetch_orders_total(date_from: str, date_to: str) -> dict:
     by_client: dict[str, float] = {}
     for o in rows:
         if o.get("status") not in SHIPPED_STATUSES:
+            continue
+        if not _store_ok(o.get("store"), store_ids):
             continue
         amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
         total += amt
