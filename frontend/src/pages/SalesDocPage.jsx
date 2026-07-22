@@ -96,6 +96,8 @@ export default function SalesDocPage() {
 
       <StoreMapping />
 
+      <MatchingPanel onLinked={() => loadAll(range, onlyDiff)} />
+
       {debt?.sd_account_wide && (
         <p className="note-readonly sd-warn">
           Выбрана одна фирма. Реализации SalesDoc делятся по складу, а <b>баланс
@@ -347,6 +349,128 @@ function RcSection({ title, total, count, rows, head }) {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MatchingPanel({ onLinked }) {
+  const { can } = useAuth()
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [pick, setPick] = useState({}) // client_1c -> sd_id
+  const [busy, setBusy] = useState(null)
+
+  function load() {
+    setError(null)
+    setData(null)
+    api.salesdocMatching()
+      .then(setData)
+      .catch((e) => setError(e.message))
+  }
+
+  function toggle() {
+    const n = !open
+    setOpen(n)
+    if (n && data === null) load()
+  }
+
+  async function link(client_1c) {
+    const sd_id = pick[client_1c]
+    if (!sd_id) return
+    setBusy(client_1c)
+    try {
+      await api.salesdocLink(client_1c, sd_id)
+      load()
+      onLinked?.()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🔗 Сопоставление точек 1С ↔ SalesDoc
+        {data && (data.only_1c_count || data.only_sd_count) ? (
+          <span className="match-badge">{data.only_1c_count + data.only_sd_count} не совпало</span>
+        ) : null}
+      </button>
+      {open && (
+        <div className="store-map-body">
+          {error && <div className="error">{error}</div>}
+          {data === null && !error && <div className="muted">Загрузка…</div>}
+          {data && (
+            <>
+              <div className="match-summary">
+                ✅ совпало: <b>{data.matched}</b> · только в 1С:{' '}
+                <b>{data.only_1c_count}</b> · только в SalesDoc:{' '}
+                <b>{data.only_sd_count}</b>
+              </div>
+              <div className="match-cols">
+                <div>
+                  <div className="rc-col-title">Только в 1С ({data.only_1c_count})</div>
+                  {data.only_1c.length === 0 && <div className="muted rc-empty">Нет</div>}
+                  {data.only_1c.map((c) => (
+                    <div key={c.name} className="match-row">
+                      <div className="match-name">
+                        {c.name}
+                        <span className="muted"> · долг {money(c.our_debt)}</span>
+                      </div>
+                      {can.editPayments && (
+                        <div className="match-link">
+                          <select
+                            className="filter-select"
+                            value={pick[c.name] || ''}
+                            onChange={(e) => setPick((p) => ({ ...p, [c.name]: e.target.value }))}
+                          >
+                            <option value="">— выбрать точку SalesDoc —</option>
+                            {c.suggestions.length > 0 && (
+                              <optgroup label="Похожие">
+                                {c.suggestions.map((s) => (
+                                  <option key={s.sd_id} value={s.sd_id}>
+                                    {s.name} ({Math.round(s.score * 100)}%)
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            <optgroup label="Все несопоставленные SalesDoc">
+                              {data.only_sd.map((s) => (
+                                <option key={s.sd_id} value={s.sd_id}>{s.name}</option>
+                              ))}
+                            </optgroup>
+                          </select>
+                          <button
+                            className="btn btn-sm btn-primary"
+                            disabled={!pick[c.name] || busy === c.name}
+                            onClick={() => link(c.name)}
+                          >
+                            {busy === c.name ? '…' : 'Связать'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div className="rc-col-title">Только в SalesDoc ({data.only_sd_count})</div>
+                  {data.only_sd.length === 0 && <div className="muted rc-empty">Нет</div>}
+                  {data.only_sd.map((s) => (
+                    <div key={s.sd_id} className="match-row">
+                      <div className="match-name">
+                        {s.name}
+                        <span className="muted"> · долг {money(s.sd_debt)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

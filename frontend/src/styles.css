@@ -2659,3 +2659,16 @@ button.summary-card {
 .store-row .filter-select { min-width: 180px; }
 .store-map-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .sd-warn { border-left: 3px solid var(--out); }
+
+/* ---------- Сверка SD: сопоставление точек ---------- */
+.match-badge {
+  margin-left: 8px; font-size: 12px; font-weight: 700; color: var(--out);
+  background: var(--primary-soft); padding: 1px 8px; border-radius: 10px;
+}
+.match-summary { font-size: 14px; margin: 4px 0 12px; }
+.match-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.match-row { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.match-name { font-size: 13.5px; margin-bottom: 5px; }
+.match-link { display: flex; gap: 8px; align-items: center; }
+.match-link .filter-select { flex: 1; min-width: 0; }
+@media (max-width: 720px) { .match-cols { grid-template-columns: 1fr; } }

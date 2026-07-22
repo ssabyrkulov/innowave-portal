@@ -5,6 +5,7 @@
 кода контрагента, а в SalesDoc имя приходит рядом с балансом).
 """
 
+import difflib
 import re
 from datetime import date
 
@@ -196,15 +197,24 @@ def reconcile_debt(
     rows = []
     matched_ids: set[str] = set()
 
+    links = {
+        l.client_1c: l.sd_id.lower()
+        for l in db.query(models.SalesDocClientLink).all()
+    }
     for c in rec["clients"]:
         name = c["client"]
         our_debt = round(c["debt"], 2)
         client_org = c.get("organization")
-        # 1) по ИД SalesDoc из имени, 2) по коду 1С, 3) по имени
+        # 0) ручная связка, 1) ИД SalesDoc из имени, 2) код 1С, 3) имя
         entry = None
-        sid = _extract_sd_id(name)
-        if sid and sid in sd_by_id:
-            entry = sd_by_id[sid]
+        if name in links and links[name] in sd_by_id:
+            entry = sd_by_id[links[name]]
+        if entry is None:
+            sid = _extract_sd_id(name)
+            if sid and sid in sd_by_id:
+                entry = sd_by_id[sid]
+        else:
+            sid = None
         if entry is None:
             entry = sd_by_name.get(_match_key(name))
         if entry:
@@ -263,6 +273,91 @@ def reconcile_debt(
         "sd_account_wide": (org or "").strip().lower() in models.ORGS,
         "rows": rows,
     }
+
+
+class LinkItem(BaseModel):
+    client_1c: str
+    sd_id: str
+
+
+@router.get("/matching")
+def matching(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(can_view),
+    org: str = Query(default="all"),
+):
+    """Сводка сопоставления точек: сколько совпало, и списки несовпавших с
+    обеих сторон + подсказки похожих (для ручной связки)."""
+    data = reconcile_debt(db=db, user=user, only_diff=False, org=org)
+    rows = data["rows"]
+    only_1c = sorted(
+        (r for r in rows if r["in_1c"] and not r["in_sd"]),
+        key=lambda r: -abs(r["our_debt"]),
+    )
+    only_sd = sorted(
+        (r for r in rows if r["in_sd"] and not r["in_1c"]),
+        key=lambda r: -abs(r["sd_debt"]),
+    )
+    sd_keys = [(r, _match_key(r["name"])) for r in only_sd]
+
+    def suggest(name: str):
+        k = _match_key(name)
+        scored = []
+        for r, sk in sd_keys:
+            score = difflib.SequenceMatcher(None, k, sk).ratio()
+            if score >= 0.55:
+                scored.append((score, r))
+        scored.sort(key=lambda x: -x[0])
+        return [
+            {"sd_id": r["sd_id"], "name": r["name"], "sd_debt": r["sd_debt"],
+             "score": round(s, 2)}
+            for s, r in scored[:3]
+        ]
+
+    return {
+        "matched": data["matched"],
+        "only_1c_count": len(only_1c),
+        "only_sd_count": len(only_sd),
+        "only_1c": [
+            {"name": r["name"], "our_debt": r["our_debt"],
+             "organization": r["organization"], "suggestions": suggest(r["name"])}
+            for r in only_1c
+        ],
+        "only_sd": [
+            {"sd_id": r["sd_id"], "name": r["name"], "sd_debt": r["sd_debt"],
+             "organization": r["organization"]}
+            for r in only_sd
+        ],
+    }
+
+
+@router.post("/link")
+def create_link(
+    payload: LinkItem,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_edit),
+):
+    client = payload.client_1c.strip()
+    sd_id = payload.sd_id.strip()
+    if not client or not sd_id:
+        raise HTTPException(status_code=400, detail="Нужны контрагент 1С и клиент SalesDoc")
+    row = db.query(models.SalesDocClientLink).filter_by(client_1c=client).first()
+    if row is None:
+        row = models.SalesDocClientLink(client_1c=client)
+        db.add(row)
+    row.sd_id = sd_id
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.delete("/link/{client_1c:path}", status_code=204)
+def delete_link(
+    client_1c: str,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_edit),
+):
+    db.query(models.SalesDocClientLink).filter_by(client_1c=client_1c).delete()
+    db.commit()
 
 
 @router.get("/period")

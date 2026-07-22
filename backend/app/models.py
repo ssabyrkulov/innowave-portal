@@ -288,6 +288,21 @@ class SalesDocStore(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocClientLink(Base):
+    """Ручная связка контрагента 1С с клиентом SalesDoc (по SD_id).
+
+    Когда имена в системах не совпадают (латиница/кириллица, сокращения),
+    пользователь связывает точки вручную — сверка честно склеивает их.
+    """
+
+    __tablename__ = "salesdoc_client_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    client_1c: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    sd_id: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ImportLog(Base):
     """Журнал загрузок Excel — кто, когда и что импортировал."""
 
