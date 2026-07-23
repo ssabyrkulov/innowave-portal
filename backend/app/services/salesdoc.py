@@ -434,12 +434,18 @@ def _day(value) -> str:
 
 def _client_matches(cli: dict | None, sd_id, code_1c) -> bool:
     """Серверный фильтр getOrder/getPayment по клиенту SalesDoc не соблюдает —
-    сверяем принадлежность записи клиенту сами по SD_id (или коду 1С)."""
+    сверяем принадлежность записи клиенту сами. Пробуем по всем ключам: SD_id,
+    CS_id (= F1-<SD_id>) и коду 1С — у оплат клиент бывает записан иначе, чем
+    у заказов."""
     cli = cli or {}
-    if sd_id:
-        return str(cli.get("SD_id") or "").lower() == str(sd_id).lower()
-    if code_1c:
-        return str(cli.get("code_1C") or "") == str(code_1c)
+    csd = str(cli.get("SD_id") or "").lower()
+    ccs = str(cli.get("CS_id") or "").lower()
+    ccode = str(cli.get("code_1C") or "")
+    sid = str(sd_id or "").lower()
+    if sid and (csd == sid or (ccs and ccs.split("-", 1)[-1] == sid)):
+        return True
+    if code_1c and ccode and ccode == str(code_1c):
+        return True
     return False
 
 
@@ -541,6 +547,7 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
     for p in rows:
         if not _client_matches(p.get("client"), sd_id, code_1c):
             continue
+        # (клиент совпал)
         amt = float(p.get("amount") or 0)
         txn = _to_int(p.get("transactionType"))
         is_counted = txn == PAYMENT_TXN
@@ -562,7 +569,10 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
             "counted": is_counted,
         })
     items.sort(key=lambda x: x["date"], reverse=True)
-    return {"total": round(total, 2), "count": counted, "items": items}
+    return {
+        "total": round(total, 2), "count": counted, "items": items,
+        "scanned": len(rows), "matched": len(items),
+    }
 
 
 def fetch_orders_total(date_from: str, date_to: str, store_ids=None) -> dict:

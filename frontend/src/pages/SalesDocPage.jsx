@@ -329,6 +329,13 @@ function ReconcileDetailModal({ row, onClose }) {
                 muted: !p.counted,
               }))}
               head={['Дата', 'Вид', 'Сумма']} />
+            {sd?.payments && sd.payments.matched === 0 && (
+              <div className="muted sd-pay-diag">
+                {sd.payments.scanned > 0
+                  ? `Проверено ${sd.payments.scanned} оплат SalesDoc за период — ни одна не привязана к этому клиенту (оплата записана на другого клиента/кассу).`
+                  : 'SalesDoc не вернул ни одной оплаты за период.'}
+              </div>
+            )}
             <RcSection title="Возвраты" total={sd?.returns?.total} count={sd?.returns?.count}
               rows={(sd?.returns?.items || []).map((r) => [r.date, money(r.amount)])}
               head={['Дата', 'Сумма']} />
