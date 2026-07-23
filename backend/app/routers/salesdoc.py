@@ -57,6 +57,17 @@ def status(_: models.User = Depends(can_view)):
     return {"configured": salesdoc.is_configured()}
 
 
+@router.post("/reconnect")
+def reconnect(_: models.User = Depends(require_roles(models.Role.admin, models.Role.accountant))):
+    """Переподключить портал к SalesDoc (свежий вход / проверка токена)."""
+    if not salesdoc.is_configured():
+        raise HTTPException(status_code=503, detail="Интеграция SalesDoc не настроена")
+    try:
+        return salesdoc.reconnect()
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 def _store_ids_for_org(db: Session, org: str) -> set | None:
     """SD_id складов выбранной фирмы (в нижнем регистре). None — фильтр не
     применяем (выбраны «Обе» или привязка складов ещё не настроена)."""

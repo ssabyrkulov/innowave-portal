@@ -153,6 +153,7 @@ export const api = {
   stockBalances: () => request('/balances/stock'),
 
   salesdocStatus: () => request('/salesdoc/status'),
+  salesdocReconnect: () => request('/salesdoc/reconnect', { method: 'POST' }),
   salesdocDebt: (onlyDiff = false) =>
     request(`/salesdoc/debt${onlyDiff ? '?only_diff=true' : ''}`),
   salesdocPeriod: (dateFrom, dateTo) =>

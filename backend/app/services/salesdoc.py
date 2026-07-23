@@ -102,6 +102,20 @@ def _ensure_session() -> tuple[str, str]:
     return _session["userId"], _session["token"]
 
 
+def reconnect() -> dict:
+    """Портал заново берёт токен. В обычном режиме — свежий login (после этого
+    портал работает, но токен 1С гаснет — общий аккаунт). В статическом —
+    проверяет заданный токен лёгким запросом."""
+    _session["token"] = None
+    _session["userId"] = None
+    if _static_mode():
+        fetch_warehouses()  # бросит SalesDocError, если токен недействителен
+        return {"mode": "static", "connected": True}
+    with _login_lock:
+        _login()
+    return {"mode": "login", "connected": True}
+
+
 def _refresh_if_stale(used_token: str) -> None:
     """Перелогин на 401 — но только если токеном ещё никто не занялся, иначе
     параллельные 401 будут бесконечно гасить токены друг друга."""
