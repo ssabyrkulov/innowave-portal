@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     salesdoc_login: str = ""
     salesdoc_password: str = ""
     salesdoc_filial: str = ""       # filial_id; пусто = без филиальной структуры
+    # Статический режим: если заданы токен и userId (как в интеграции 1С),
+    # портал использует их напрямую и НЕ делает login — тогда портал и 1С не
+    # гасят токены друг друга (у SalesDoc один токен на аккаунт).
+    salesdoc_token: str = ""
+    salesdoc_user_id: str = ""
 
 
 settings = Settings()

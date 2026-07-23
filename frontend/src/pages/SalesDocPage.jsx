@@ -74,10 +74,14 @@ export default function SalesDocPage() {
             сервере (Render → Environment) переменные:</p>
           <ul className="sd-env">
             <li><code>SALESDOC_URL</code> — например <code>https://innowave.salesdoc.io</code></li>
-            <li><code>SALESDOC_LOGIN</code></li>
-            <li><code>SALESDOC_PASSWORD</code></li>
+            <li><code>SALESDOC_LOGIN</code> и <code>SALESDOC_PASSWORD</code></li>
             <li><code>SALESDOC_FILIAL</code> — необязательно (ID филиала)</li>
           </ul>
+          <p className="muted">Чтобы портал не конфликтовал с интеграцией 1С за
+            токен (у SalesDoc один токен на аккаунт), лучше вместо логина/пароля
+            задать <b>тот же токен, что в 1С</b>: <code>SALESDOC_TOKEN</code> и
+            <code>SALESDOC_USER_ID</code> (из карточки учётной записи SalesDoc в
+            1С). Тогда портал не делает вход и токен 1С не гаснет.</p>
           <p className="muted">После сохранения переменных сервис перезапустится и
             раздел заработает.</p>
         </div>

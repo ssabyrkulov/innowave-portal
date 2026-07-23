@@ -33,8 +33,15 @@ class SalesDocError(Exception):
 _session: dict = {"userId": None, "token": None}
 
 
+def _static_mode() -> bool:
+    """Статический токен (как в 1С): токен + userId заданы напрямую."""
+    return bool(settings.salesdoc_token and settings.salesdoc_user_id)
+
+
 def is_configured() -> bool:
-    return bool(settings.salesdoc_url and settings.salesdoc_login and settings.salesdoc_password)
+    if not settings.salesdoc_url:
+        return False
+    return _static_mode() or bool(settings.salesdoc_login and settings.salesdoc_password)
 
 
 def _endpoint() -> str:
@@ -83,8 +90,11 @@ def _login() -> None:
 
 
 def _ensure_session() -> tuple[str, str]:
-    """Гарантирует наличие токена. Логинимся под замком, чтобы параллельные
-    запросы не устроили двойной логин (новый логин гасит прежний токен)."""
+    """Гарантирует наличие токена. В статическом режиме берём токен/userId из
+    настроек и НЕ логинимся (иначе погасили бы токен 1С). Иначе логинимся под
+    замком, чтобы параллельные запросы не устроили двойной логин."""
+    if _static_mode():
+        return settings.salesdoc_user_id, settings.salesdoc_token
     if not _session["token"]:
         with _login_lock:
             if not _session["token"]:
@@ -115,8 +125,18 @@ def call(method: str, params: dict | None = None, _retry: bool = True) -> tuple[
     status, resp = _raw_post(payload)
     if not (isinstance(resp, dict) and resp.get("status")):
         code = str(resp.get("code")) if isinstance(resp, dict) else ""
-        # 401 — токен протух/погашен: перелогиниваемся один раз.
-        if _retry and (code == "401" or status == 401):
+        is_401 = code == "401" or status == 401
+        if is_401 and _static_mode():
+            # Статический токен устарел (вероятно, 1С перелогинилась и сменила
+            # токен). Логиниться нельзя — погасим токен 1С. Просим обновить.
+            raise SalesDocError(
+                "SalesDoc-токен недействителен. Скорее всего 1С перелогинилась "
+                "и сменила токен. Обновите SALESDOC_TOKEN и SALESDOC_USER_ID из "
+                "настроек интеграции 1С (или заведите отдельного пользователя "
+                "SalesDoc для портала)."
+            )
+        # Обычный режим: 401 — перелогиниваемся один раз.
+        if _retry and is_401:
             _refresh_if_stale(token)
             return call(method, params, _retry=False)
         msg = (resp or {}).get("message") or (resp or {}).get("error") or resp
