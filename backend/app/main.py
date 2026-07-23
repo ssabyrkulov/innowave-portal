@@ -114,6 +114,13 @@ def backfill_organization() -> None:
             conn.execute(text(
                 f"UPDATE {t} SET organization='hygiene' WHERE organization IS NULL"
             ))
+        # Категория помеченных контрагентов: старые записи = безнадёжные.
+        if inspector.has_table("bad_debt_clients"):
+            cols = {c["name"] for c in inspector.get_columns("bad_debt_clients")}
+            if "kind" in cols:
+                conn.execute(text(
+                    "UPDATE bad_debt_clients SET kind='bad_debt' WHERE kind IS NULL"
+                ))
 
 
 @app.on_event("startup")

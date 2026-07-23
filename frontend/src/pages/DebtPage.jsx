@@ -27,6 +27,20 @@ function noPayText(c) {
   return d != null ? `${d} дн.` : '—'
 }
 
+// Категории пометок контрагента. Помеченные уходят из активной дебиторки в
+// свою вкладку. Легко добавить новую — достаточно дописать сюда.
+const CATEGORIES = [
+  {
+    kind: 'bad_debt', label: 'Безнадёжные', icon: '⛔', verb: 'В безнадёжные',
+    hint: 'Безнадёжные контрагенты убираются из активной дебиторки и не учитываются в долге к взысканию.',
+  },
+  {
+    kind: 'disputed', label: 'Под вопросом', icon: '❓', verb: 'В «под вопросом»',
+    hint: 'Спорные: была оплата или нет — неясно (старые агенты уже не работают). Убираются из активной дебиторки до выяснения.',
+  },
+]
+const CAT_BY_KIND = Object.fromEntries(CATEGORIES.map((c) => [c.kind, c]))
+
 export default function DebtPage() {
   const { can } = useAuth()
   const [data, setData] = useState(null)
@@ -99,48 +113,51 @@ export default function DebtPage() {
     }
   }
 
-  async function markBad(client, note) {
+  async function markFlag(client, kind, note) {
     if (!client) return
     try {
-      await api.addBadDebt(client, note || null)
+      await api.setFlag(client, kind, note || null)
       await load()
     } catch (err) {
       setError(err.message)
     }
   }
 
-  async function addBad() {
+  async function addToCategory(kind) {
     const client = pickClient.trim()
     if (!client) return
-    await markBad(client, pickNote.trim())
+    await markFlag(client, kind, pickNote.trim())
     setPickClient('')
     setPickNote('')
   }
 
-  async function markBadInline(c) {
+  async function markInline(c, kind) {
+    const cat = CAT_BY_KIND[kind]
     const ok = confirm(
-      `Пометить «${c.client}» безнадёжным? Клиент уйдёт из активной дебиторки ` +
-        `(долг ${formatMoney(c.debt)}). Вернуть можно во вкладке «Безнадёжные».`
+      `Пометить «${c.client}» — ${cat.label.toLowerCase()}? Клиент уйдёт из ` +
+        `активной дебиторки (долг ${formatMoney(c.debt)}). Вернуть можно во ` +
+        `вкладке «${cat.label}».`
     )
-    if (ok) await markBad(c.client, null)
+    if (ok) await markFlag(c.client, kind, null)
   }
 
-  async function removeBad(client) {
+  async function removeFlag(client) {
     try {
-      await api.removeBadDebt(client)
+      await api.removeFlag(client)
       await load()
     } catch (err) {
       setError(err.message)
     }
   }
 
-  const badSet = new Set(data?.bad_debt || [])
+  const flags = data?.flags || {}
+  const flaggedSet = new Set(Object.keys(flags))
   const allDebtors = data ? data.clients.filter((c) => c.debt > 0.01) : []
-  const debtors = allDebtors.filter((c) => !badSet.has(c.client))
-  // Безнадёжные показываем даже с нулевым/погашенным долгом — это ручной список.
-  const badClients = data ? data.clients.filter((c) => badSet.has(c.client)) : []
+  const debtors = allDebtors.filter((c) => !flaggedSet.has(c.client))
+  // Помеченные показываем даже с нулевым/погашенным долгом — это ручной список.
+  const clientsOf = (kind) =>
+    data ? data.clients.filter((c) => flags[c.client] === kind) : []
   const activeDebt = debtors.reduce((s, c) => s + c.debt, 0)
-  const badDebtTotal = badClients.reduce((s, c) => s + c.debt, 0)
 
   return (
     <div>
@@ -231,22 +248,27 @@ export default function DebtPage() {
               <span className="summary-value">{formatMoney(data.total_paid)}</span>
             </div>
             <div className="summary-card summary-out">
-              <span className="summary-label">Долг{badClients.length > 0 ? ' (к взысканию)' : ''}</span>
+              <span className="summary-label">Долг{flaggedSet.size > 0 ? ' (к взысканию)' : ''}</span>
               <span className="summary-value">{formatMoney(activeDebt)}</span>
             </div>
             <div className="summary-card">
               <span className="summary-label">Должников</span>
               <span className="summary-value">{debtors.length}</span>
             </div>
-            {badClients.length > 0 && (
-              <div className="summary-card summary-bad">
-                <span className="summary-label">Безнадёжные</span>
-                <span className="summary-value">
-                  {formatMoney(badDebtTotal)}
-                  <span className="muted"> · {badClients.length}</span>
-                </span>
-              </div>
-            )}
+            {CATEGORIES.map((cat) => {
+              const cl = clientsOf(cat.kind)
+              if (cl.length === 0) return null
+              const tot = cl.reduce((s, c) => s + c.debt, 0)
+              return (
+                <div key={cat.kind} className="summary-card summary-bad">
+                  <span className="summary-label">{cat.label}</span>
+                  <span className="summary-value">
+                    {formatMoney(tot)}
+                    <span className="muted"> · {cl.length}</span>
+                  </span>
+                </div>
+              )
+            })}
           </div>
 
           <div className="ops-tabs debt-tabs">
@@ -256,12 +278,15 @@ export default function DebtPage() {
             >
               Активные ({debtors.length})
             </button>
-            <button
-              className={`ops-tab ${tab === 'bad' ? 'active' : ''}`}
-              onClick={() => setTab('bad')}
-            >
-              Безнадёжные ({badClients.length})
-            </button>
+            {CATEGORIES.map((cat) => (
+              <button
+                key={cat.kind}
+                className={`ops-tab ${tab === cat.kind ? 'active' : ''}`}
+                onClick={() => { setTab(cat.kind); setPickClient(''); setPickNote('') }}
+              >
+                {cat.icon} {cat.label} ({clientsOf(cat.kind).length})
+              </button>
+            ))}
           </div>
 
           {tab === 'active' && data.unmatched.length > 0 && can.editPayments && (
@@ -319,7 +344,7 @@ export default function DebtPage() {
                   <th className="hide-mobile">Посл. отгрузка</th>
                   <th className="hide-mobile">Посл. оплата</th>
                   <th className="hide-mobile"></th>
-                  {can.editPayments && <th className="debt-act-col">Безнадёжный</th>}
+                  {can.editPayments && <th className="debt-act-col">Пометить</th>}
                 </tr>
               </thead>
               <tbody>
@@ -362,13 +387,16 @@ export default function DebtPage() {
                       </td>
                       {can.editPayments && (
                         <td className="debt-act-col">
-                          <button
-                            className="btn btn-sm debt-mark-bad"
-                            title="Пометить безнадёжным — убрать из активной дебиторки"
-                            onClick={() => markBadInline(c)}
-                          >
-                            ⛔
-                          </button>
+                          {CATEGORIES.map((cat) => (
+                            <button
+                              key={cat.kind}
+                              className="btn btn-sm debt-mark-bad"
+                              title={`${cat.label} — убрать из активной дебиторки`}
+                              onClick={() => markInline(c, cat.kind)}
+                            >
+                              {cat.icon}
+                            </button>
+                          ))}
                         </td>
                       )}
                     </tr>
@@ -379,100 +407,21 @@ export default function DebtPage() {
           </div>
           )}
 
-          {tab === 'bad' && (
-            <div className="bad-debt">
-              {can.editPayments && (
-                <div className="chart-card bad-add">
-                  <div className="bad-add-row">
-                    <input
-                      list="all-debtors"
-                      className="product-search-input"
-                      placeholder="Выберите контрагента…"
-                      value={pickClient}
-                      onChange={(e) => setPickClient(e.target.value)}
-                    />
-                    <input
-                      className="product-search-input"
-                      placeholder="Причина (необязательно)"
-                      value={pickNote}
-                      onChange={(e) => setPickNote(e.target.value)}
-                    />
-                    <button
-                      className="btn btn-primary"
-                      disabled={!pickClient.trim()}
-                      onClick={addBad}
-                    >
-                      В безнадёжные
-                    </button>
-                  </div>
-                  <datalist id="all-debtors">
-                    {allDebtors.map((c) => (
-                      <option key={c.client} value={c.client}>
-                        {`долг ${formatMoney(c.debt)}`}
-                      </option>
-                    ))}
-                  </datalist>
-                  <p className="muted bad-hint">
-                    Безнадёжные контрагенты убираются из активной дебиторки и не
-                    учитываются в долге к взысканию.
-                  </p>
-                </div>
-              )}
-
-              <div className="table-wrap cards">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Клиент</th>
-                      <th className="num">Долг</th>
-                      <th className="num">Дней без оплат</th>
-                      <th className="hide-mobile">Причина</th>
-                      <th className="hide-mobile">Посл. оплата</th>
-                      {can.editPayments && <th></th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {badClients.length === 0 && (
-                      <tr>
-                        <td colSpan={can.editPayments ? 6 : 5} className="muted center">
-                          Список пуст. {can.editPayments ? 'Добавьте контрагента выше.' : ''}
-                        </td>
-                      </tr>
-                    )}
-                    {badClients.map((c) => (
-                      <tr key={c.client}>
-                        <td data-label="Клиент">
-                          <button className="client-link" onClick={() => setDetailClient(c.client)}>
-                            {c.client}
-                          </button>
-                        </td>
-                        <td className="num neg" data-label="Долг">{formatMoney(c.debt)}</td>
-                        <td className="num" data-label="Дней без оплат">
-                          {daysNoPay(c) != null ? `${daysNoPay(c)} дн.` : '—'}
-                        </td>
-                        <td className="muted hide-mobile" data-label="Причина">
-                          {data.bad_debt_notes?.[c.client] || '—'}
-                        </td>
-                        <td className="hide-mobile" data-label="Посл. оплата">
-                          {fmtDate(c.last_payment)}
-                        </td>
-                        {can.editPayments && (
-                          <td className="card-action">
-                            <button
-                              className="btn btn-sm"
-                              onClick={() => removeBad(c.client)}
-                              title="Вернуть в активную дебиторку"
-                            >
-                              Вернуть
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+          {CAT_BY_KIND[tab] && (
+            <CategoryTab
+              cat={CAT_BY_KIND[tab]}
+              list={clientsOf(tab)}
+              allDebtors={allDebtors}
+              notes={data.flag_notes || {}}
+              canEdit={can.editPayments}
+              pickClient={pickClient}
+              setPickClient={setPickClient}
+              pickNote={pickNote}
+              setPickNote={setPickNote}
+              onAdd={() => addToCategory(tab)}
+              onRemove={removeFlag}
+              onOpen={setDetailClient}
+            />
           )}
 
           <h2 className="section-title">
@@ -538,6 +487,98 @@ export default function DebtPage() {
       {detailClient && (
         <ClientDetailModal client={detailClient} onClose={() => setDetailClient(null)} />
       )}
+    </div>
+  )
+}
+
+function CategoryTab({
+  cat, list, allDebtors, notes, canEdit,
+  pickClient, setPickClient, pickNote, setPickNote, onAdd, onRemove, onOpen,
+}) {
+  return (
+    <div className="bad-debt">
+      {canEdit && (
+        <div className="chart-card bad-add">
+          <div className="bad-add-row">
+            <input
+              list="cat-debtors"
+              className="product-search-input"
+              placeholder="Выберите контрагента…"
+              value={pickClient}
+              onChange={(e) => setPickClient(e.target.value)}
+            />
+            <input
+              className="product-search-input"
+              placeholder="Причина / комментарий (необязательно)"
+              value={pickNote}
+              onChange={(e) => setPickNote(e.target.value)}
+            />
+            <button className="btn btn-primary" disabled={!pickClient.trim()} onClick={onAdd}>
+              {cat.verb}
+            </button>
+          </div>
+          <datalist id="cat-debtors">
+            {allDebtors.map((c) => (
+              <option key={c.client} value={c.client}>{`долг ${formatMoney(c.debt)}`}</option>
+            ))}
+          </datalist>
+          <p className="muted bad-hint">{cat.hint}</p>
+        </div>
+      )}
+
+      <div className="table-wrap cards">
+        <table>
+          <thead>
+            <tr>
+              <th>Клиент</th>
+              <th className="num">Долг</th>
+              <th className="num">Дней без оплат</th>
+              <th className="hide-mobile">Причина</th>
+              <th className="hide-mobile">Посл. оплата</th>
+              {canEdit && <th></th>}
+            </tr>
+          </thead>
+          <tbody>
+            {list.length === 0 && (
+              <tr>
+                <td colSpan={canEdit ? 6 : 5} className="muted center">
+                  Список пуст. {canEdit ? 'Добавьте контрагента выше.' : ''}
+                </td>
+              </tr>
+            )}
+            {list.map((c) => (
+              <tr key={c.client}>
+                <td data-label="Клиент">
+                  <button className="client-link" onClick={() => onOpen(c.client)}>
+                    {c.client}
+                  </button>
+                </td>
+                <td className="num neg" data-label="Долг">{formatMoney(c.debt)}</td>
+                <td className="num" data-label="Дней без оплат">
+                  {daysNoPay(c) != null ? `${daysNoPay(c)} дн.` : '—'}
+                </td>
+                <td className="muted hide-mobile" data-label="Причина">
+                  {notes[c.client] || '—'}
+                </td>
+                <td className="hide-mobile" data-label="Посл. оплата">
+                  {fmtDate(c.last_payment)}
+                </td>
+                {canEdit && (
+                  <td className="card-action">
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => onRemove(c.client)}
+                      title="Вернуть в активную дебиторку"
+                    >
+                      Вернуть
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

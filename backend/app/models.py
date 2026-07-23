@@ -255,16 +255,20 @@ class ClientActivity(Base):
 
 
 class BadDebtClient(Base):
-    """Клиент, чей долг признан безнадёжным (к взысканию не рассчитываем).
+    """Помеченный контрагент в дебиторке. kind задаёт категорию:
+    'bad_debt' — безнадёжный (к взысканию не рассчитываем),
+    'disputed' — под вопросом (была оплата или нет — неясно, агенты сменились).
 
-    Такие контрагенты убираются из активной дебиторки в отдельную вкладку —
-    чтобы не искажать «живой» долг и не тревожить агентов пустой работой.
+    Помеченные убираются из активной дебиторки в свою вкладку — чтобы не
+    искажать «живой» долг и не тревожить агентов пустой работой. Клиент может
+    быть максимум в одной категории (client уникален).
     """
 
     __tablename__ = "bad_debt_clients"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     client: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String, default="bad_debt", nullable=False, index=True)
     note: Mapped[str | None] = mapped_column(String, nullable=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

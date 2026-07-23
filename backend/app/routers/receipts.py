@@ -285,13 +285,17 @@ def delete_alias(
     db.commit()
 
 
-class BadDebtCreate(BaseModel):
+FLAG_KINDS = {"bad_debt", "disputed"}
+
+
+class ClientFlagCreate(BaseModel):
     client: str
+    kind: str = "bad_debt"
     note: str | None = None
 
 
-@router.get("/bad-debt")
-def list_bad_debt(
+@router.get("/flags")
+def list_flags(
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
 ):
@@ -303,6 +307,7 @@ def list_bad_debt(
     return [
         {
             "client": r.client,
+            "kind": r.kind or "bad_debt",
             "note": r.note,
             "created_at": r.created_at.isoformat(),
             "created_by": r.creator.full_name if r.creator else None,
@@ -311,37 +316,38 @@ def list_bad_debt(
     ]
 
 
-@router.post("/bad-debt", status_code=status.HTTP_201_CREATED)
-def add_bad_debt(
-    payload: BadDebtCreate,
+@router.post("/flags", status_code=status.HTTP_201_CREATED)
+def set_flag(
+    payload: ClientFlagCreate,
     db: Session = Depends(get_db),
     current: models.User = Depends(can_import),
 ):
     client = payload.client.strip()
     if not client:
         raise HTTPException(status_code=400, detail="Не указан контрагент")
+    kind = payload.kind if payload.kind in FLAG_KINDS else "bad_debt"
+    note = (payload.note or "").strip() or None
     existing = db.query(models.BadDebtClient).filter_by(client=client).first()
     if existing:
-        existing.note = (payload.note or "").strip() or None
+        existing.kind = kind
+        existing.note = note
     else:
         db.add(models.BadDebtClient(
-            client=client,
-            note=(payload.note or "").strip() or None,
-            created_by=current.id,
+            client=client, kind=kind, note=note, created_by=current.id,
         ))
     db.commit()
-    return {"status": "ok", "client": client}
+    return {"status": "ok", "client": client, "kind": kind}
 
 
-@router.delete("/bad-debt/{client:path}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_bad_debt(
+@router.delete("/flags/{client:path}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_flag(
     client: str,
     db: Session = Depends(get_db),
     _: models.User = Depends(can_import),
 ):
     row = db.query(models.BadDebtClient).filter_by(client=client).first()
     if not row:
-        raise HTTPException(status_code=404, detail="Клиент не в списке безнадёжных")
+        raise HTTPException(status_code=404, detail="Клиент не помечен")
     db.delete(row)
     db.commit()
 
@@ -469,9 +475,9 @@ def receivables(
     receipts = models.org_scope(db.query(models.Receipt), models.Receipt, org).all()
     return_docs = models.org_scope(db.query(models.ReturnDoc), models.ReturnDoc, org).all()
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
-    bad_rows = db.query(models.BadDebtClient).all()
-    bad_debt = {b.client for b in bad_rows}
-    bad_notes = {b.client: b.note for b in bad_rows if b.note}
+    flag_rows = db.query(models.BadDebtClient).all()
+    flags = {b.client: (b.kind or "bad_debt") for b in flag_rows}
+    flag_notes = {b.client: b.note for b in flag_rows if b.note}
 
     # Отгрузки по клиентам: итог документа (после скидок); документы без
     # номера учитываем по строкам со скидкой.
@@ -559,7 +565,7 @@ def receivables(
         "clients": clients,
         "unmatched": sorted(unmatched.values(), key=lambda u: -u["paid"]),
         "sales_clients": sorted(shipped.keys()),
-        "bad_debt": sorted(bad_debt),
-        "bad_debt_notes": bad_notes,
+        "flags": flags,
+        "flag_notes": flag_notes,
         "has_receipts": len(receipts) > 0,
     }

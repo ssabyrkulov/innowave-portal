@@ -108,11 +108,11 @@ export const api = {
     request('/receipts/alias', { method: 'POST', body: { payer, client } }),
   clientDetail: (client) =>
     request(`/receipts/client-detail?client=${encodeURIComponent(client)}`),
-  listBadDebt: () => request('/receipts/bad-debt'),
-  addBadDebt: (client, note) =>
-    request('/receipts/bad-debt', { method: 'POST', body: { client, note } }),
-  removeBadDebt: (client) =>
-    request(`/receipts/bad-debt/${encodeURIComponent(client)}`, { method: 'DELETE' }),
+  listFlags: () => request('/receipts/flags'),
+  setFlag: (client, kind, note) =>
+    request('/receipts/flags', { method: 'POST', body: { client, kind, note } }),
+  removeFlag: (client) =>
+    request(`/receipts/flags/${encodeURIComponent(client)}`, { method: 'DELETE' }),
 
   dashboard: () => request('/dashboard'),
 
