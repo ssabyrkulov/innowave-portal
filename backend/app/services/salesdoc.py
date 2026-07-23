@@ -575,6 +575,57 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
     }
 
 
+def payments_diagnostic(date_from, date_to, sample=10) -> dict:
+    """Разбор оплат SalesDoc: сколько с привязкой к клиенту, сколько без, по
+    видам операции и типам оплаты — чтобы понять, почему оплаты не находятся."""
+    rows = call_all(
+        "getPayment", ("payments", "payment"),
+        {"filter": {"period": {"date": {"from": date_from, "to": date_to}}}},
+    )
+    ptypes = fetch_payment_types()
+    with_sd = with_code = without = 0
+    txn: dict = {}
+    by_type: dict = {}
+    samples: list = []
+    for p in rows:
+        cli = p.get("client") or {}
+        if cli.get("SD_id"):
+            with_sd += 1
+        elif cli.get("code_1C"):
+            with_code += 1
+        else:
+            without += 1
+        t = _to_int(p.get("transactionType"))
+        txn[PAY_TXN.get(t, str(t))] = txn.get(PAY_TXN.get(t, str(t)), 0) + 1
+        pt = p.get("paymentType") or {}
+        tname = (
+            ptypes.get(("code", str(pt.get("code_1C"))))
+            or ptypes.get(("sd", str(pt.get("SD_id") or "").lower()))
+            or "(без типа)"
+        )
+        d = by_type.setdefault(tname, {"with_client": 0, "without_client": 0})
+        d["with_client" if (cli.get("SD_id") or cli.get("code_1C")) else "without_client"] += 1
+        if len(samples) < sample:
+            samples.append({
+                "date": _day(p.get("paymentDate")),
+                "amount": float(p.get("amount") or 0),
+                "txn": PAY_TXN.get(t, str(t)),
+                "type": tname,
+                "client_sd": cli.get("SD_id"),
+                "client_code": cli.get("code_1C"),
+                "cashbox": (p.get("cashbox") or {}).get("name") or (p.get("cashbox") or {}).get("SD_id"),
+            })
+    return {
+        "scanned": len(rows),
+        "with_client_sdid": with_sd,
+        "with_client_code": with_code,
+        "without_client": without,
+        "txn": txn,
+        "by_type": [{"type": k, **v} for k, v in sorted(by_type.items(), key=lambda x: -(x[1]["with_client"] + x[1]["without_client"]))],
+        "samples": samples,
+    }
+
+
 def fetch_orders_total(date_from: str, date_to: str, store_ids=None) -> dict:
     """Сумма заказов (реализаций) за период и разбивка по клиентам (по имени).
     store_ids — набор складов выбранной фирмы (None = все)."""

@@ -114,6 +114,8 @@ export default function SalesDocPage() {
 
       <AnalyzePanel />
 
+      <PaymentsDebugPanel />
+
       <WarehouseReportPanel />
 
       <MatchingPanel onLinked={() => loadAll(range, onlyDiff)} />
@@ -406,6 +408,60 @@ function ReconnectButton({ onDone }) {
       </button>
       {msg && <span className="muted sd-reconnect-msg">{msg}</span>}
     </>
+  )
+}
+
+function PaymentsDebugPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const today = toISODate(new Date())
+  const from = toISODate(new Date(Date.now() - 180 * 86400000))
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocPaymentsDebug(from, today)
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🔍 Диагностика оплат SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">За 180 дней. Показывает, у скольких оплат вообще
+            указан клиент — если много «без клиента», такие оплаты (обычно касса)
+            привязать к точке нельзя.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Считаю…</div>}
+          {data && (
+            <div className="an-grid">
+              <AnRow label="Всего оплат" value={data.scanned} />
+              <AnRow label="С клиентом (по ИД)" value={data.with_client_sdid} />
+              <AnRow label="С клиентом (по коду 1С)" value={data.with_client_code} />
+              <AnRow label="БЕЗ клиента" value={data.without_client}
+                warn={data.without_client > 0}
+                hint="эти оплаты нельзя привязать к точке" />
+              <div className="an-sub">По типу оплаты (с клиентом / без)</div>
+              {data.by_type.map((t) => (
+                <div key={t.type} className="an-store">
+                  <span>{t.type}</span>
+                  <span className="num">{t.with_client} / <span className="an-warn">{t.without_client}</span></span>
+                </div>
+              ))}
+              <div className="an-sub">По виду операции</div>
+              {Object.entries(data.txn).map(([k, v]) => (
+                <div key={k} className="an-store"><span>{k}</span><span className="num">{v}</span></div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

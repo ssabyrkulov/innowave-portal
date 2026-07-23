@@ -306,6 +306,20 @@ def warehouse_report(
         raise HTTPException(status_code=502, detail=str(e))
 
 
+@router.get("/payments-debug")
+def payments_debug(
+    _: models.User = Depends(can_view),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+):
+    """Диагностика оплат SalesDoc: с клиентом / без, по видам и типам."""
+    _require_configured()
+    try:
+        return salesdoc.payments_diagnostic(date_from.isoformat(), date_to.isoformat())
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @router.get("/analyze")
 def analyze_structure(
     db: Session = Depends(get_db),
