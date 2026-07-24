@@ -25,12 +25,16 @@ from .. import models
 from ..database import SessionLocal
 from . import salesdoc
 
-# Полная выгрузка — раз в сутки; проверка изменений — раз в минуту.
+# Полная выгрузка — раз в час; проверка изменений — раз в минуту.
+# Час, а не сутки: догрузка изменений видит правки и новые записи, но НЕ видит
+# удалённые (SalesDoc не сообщает об удалении). Удаления вычищает только полная
+# выгрузка — значит она должна быть частой, иначе убранная в SalesDoc запись
+# висела бы на сайте до следующих суток. Полная выгрузка занимает ~15 секунд.
 # Частота почти ничего не стоит: сначала идёт дежурная проверка (одна запись),
 # и данные выгружаются, только если счётчик изменений больше нуля. Токену это
 # не вредит — его гасит лишь повторный вход, а мы работаем на постоянном.
-FULL_EVERY = 24 * 3600
-DELTA_EVERY = 60  # 1 минута
+FULL_EVERY = 3600  # 1 час
+DELTA_EVERY = 60   # 1 минута
 # С каким запасом берём дельту: перекрываем прошлую синхронизацию, чтобы не
 # потерять записи, попавшие на границу окна.
 DELTA_OVERLAP = timedelta(hours=6)
@@ -124,14 +128,33 @@ def changed_count(method: str, updated_since: str) -> int | None:
     return int(total) if isinstance(total, (int, float, str)) and str(total).isdigit() else None
 
 
+def _drop_missing(db: Session, model, seen: set, date_from: date, date_to: date) -> int:
+    """Убирает из зеркала записи, которых больше нет в SalesDoc.
+
+    Вызывается только после ПОЛНОЙ выгрузки: тогда `seen` — это весь набор
+    существующих записей за период, и всё, чего в нём нет, в SalesDoc удалено
+    (например, ошибочную оплату убрали вручную). Без этого исправления в
+    SalesDoc не доезжали бы до сайта — расхождение висело бы вечно."""
+    stale = [
+        row.id for row in db.query(model.id, model.sd_id)
+        .filter(model.date >= date_from, model.date <= date_to).all()
+        if row.sd_id not in seen
+    ]
+    if stale:
+        db.query(model).filter(model.id.in_(stale)).delete(synchronize_session=False)
+    return len(stale)
+
+
 def sync_orders(db: Session, updated_since: str | None = None) -> int:
     df, dt = _window()
     rows = salesdoc.call_all("getOrder", ("orders", "order"),
                              _order_filter(df, dt, updated_since))
+    seen: set = set()
     for o in rows:
         sd_id = str(o.get("SD_id") or o.get("CS_id") or "").strip()
         if not sd_id:
             continue
+        seen.add(sd_id)
         cli_sd, cli_code = _client_keys(o.get("client"))
         _upsert(db, models.SalesDocOrder, sd_id, {
             "client_sd_id": cli_sd,
@@ -143,6 +166,10 @@ def sync_orders(db: Session, updated_since: str | None = None) -> int:
             "returns_amount": float(o.get("totalReturnsSumma") or 0),
             "code_1c": o.get("code_1C"),
         })
+    if updated_since is None:  # полная выгрузка — вычищаем удалённое в SalesDoc
+        db.flush()
+        _drop_missing(db, models.SalesDocOrder, seen,
+                      date.fromisoformat(df), date.fromisoformat(dt))
     return len(rows)
 
 
@@ -151,10 +178,12 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
     rows = salesdoc.call_all("getPayment", ("payments", "payment"),
                              _payment_filter(df, dt, updated_since))
     ptypes = salesdoc.fetch_payment_types()
+    seen: set = set()
     for p in rows:
         sd_id = str(p.get("SD_id") or p.get("CS_id") or "").strip()
         if not sd_id:
             continue
+        seen.add(sd_id)
         cli_sd, cli_code = _client_keys(p.get("client"))
         pt = p.get("paymentType") or {}
         _upsert(db, models.SalesDocPayment, sd_id, {
@@ -169,6 +198,10 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
                 or None
             ),
         })
+    if updated_since is None:  # полная выгрузка — вычищаем удалённое в SalesDoc
+        db.flush()
+        _drop_missing(db, models.SalesDocPayment, seen,
+                      date.fromisoformat(df), date.fromisoformat(dt))
     return len(rows)
 
 

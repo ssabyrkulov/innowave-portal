@@ -205,7 +205,11 @@ def reconcile_debt(
     свежую выгрузку."""
     _require_configured()
     if refresh:
+        # Полная пересборка: сбрасываем кэш и перевыгружаем зеркало целиком —
+        # только так подхватываются записи, УДАЛЁННЫЕ в SalesDoc (об удалении
+        # он не сообщает, догрузка изменений их не видит).
         salesdoc.clear_cache()
+        salesdoc_mirror.sync(full=True)
     try:
         sd_balance = salesdoc.fetch_balance(use_cache=True)
         sd_clients = salesdoc.fetch_clients(use_cache=True)
