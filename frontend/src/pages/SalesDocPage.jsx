@@ -24,6 +24,13 @@ function monthRange() {
 const money = (v) => formatMoney(v)
 const cls = (diff) => (Math.abs(Number(diff || 0)) >= 0.5 ? 'sd-diff-bad' : 'sd-diff-ok')
 
+// epoch (сек) → ЧЧ:ММ — когда кэш SalesDoc последний раз обновлялся.
+function fmtClock(epoch) {
+  return new Date(epoch * 1000).toLocaleTimeString('ru-RU', {
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
 export default function SalesDocPage() {
   const [configured, setConfigured] = useState(null)
   const [range, setRange] = useState(monthRange())
@@ -59,16 +66,18 @@ export default function SalesDocPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  async function loadAll(r, od) {
+  async function loadAll(r, od, refresh = false) {
     setLoading(true)
     setError(null)
     try {
       // Последовательно, а не Promise.all: параллельные запросы к SalesDoc
       // провоцируют повторный логин, который гасит токен предыдущего.
+      // Долг — первым: при refresh он сбрасывает кэш, дальше период тянется
+      // уже свежим. Обычно оба читаются из кэша — мгновенно.
+      const d = await api.salesdocDebt(od, false, refresh)
+      setDebt(d)
       const p = await api.salesdocPeriod(r.from, r.to)
       setPeriod(p)
-      const d = await api.salesdocDebt(od)
-      setDebt(d)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -109,7 +118,12 @@ export default function SalesDocPage() {
       <div className="page-header">
         <h1>Сверка с SalesDoc</h1>
         <div className="import-controls">
-          <button className="btn btn-primary" disabled={loading} onClick={() => loadAll(range, onlyDiff)}>
+          {debt?.synced_at && (
+            <span className="muted sd-synced" title="Данные SalesDoc кэшируются и обновляются в фоне">
+              данные на {fmtClock(debt.synced_at)}
+            </span>
+          )}
+          <button className="btn btn-primary" disabled={loading} onClick={() => loadAll(range, onlyDiff, true)}>
             {loading ? 'Обновление…' : '↻ Обновить'}
           </button>
         </div>

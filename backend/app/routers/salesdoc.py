@@ -199,13 +199,19 @@ def reconcile_debt(
     user: models.User = Depends(can_view),
     only_diff: bool = Query(default=False, description="Только строки с расхождением"),
     with_reason: bool = Query(default=False, description="Посчитать причину расхождения по всем строкам"),
+    refresh: bool = Query(default=False, description="Обновить данные SalesDoc (сбросить кэш)"),
     org: str = Query(default="all"),
 ):
-    """Дебиторка: наш долг (из 1С) против баланса SalesDoc, по каждому клиенту."""
+    """Дебиторка: наш долг (из 1С) против баланса SalesDoc, по каждому клиенту.
+
+    Данные SalesDoc берутся из кэша в памяти (быстро); refresh=true форсирует
+    свежую выгрузку."""
     _require_configured()
+    if refresh:
+        salesdoc.clear_cache()
     try:
-        sd_balance = salesdoc.fetch_balance()
-        sd_clients = salesdoc.fetch_clients()
+        sd_balance = salesdoc.fetch_balance(use_cache=True)
+        sd_clients = salesdoc.fetch_clients(use_cache=True)
     except salesdoc.SalesDocError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -247,10 +253,10 @@ def reconcile_debt(
             if s.store_id and s.organization
         }
         if store_org:
-            today = date.today()
+            df, dt = salesdoc.reason_window()
             try:
                 client_orgs = salesdoc.fetch_client_store_orgs(
-                    store_org, f"{today.year - 3}-01-01", today.isoformat()
+                    store_org, df, dt, use_cache=True
                 )
             except salesdoc.SalesDocError:
                 client_orgs = None
@@ -331,12 +337,10 @@ def reconcile_debt(
     # SalesDoc (заказы/возвраты/оплаты), группируем по клиенту. Считаем только
     # по запросу: обычная загрузка дебиторки остаётся быстрой.
     if with_reason:
-        today = date.today()
+        df, dt = salesdoc.reason_window()
         try:
             comp = salesdoc.fetch_reconcile_components(
-                f"{today.year - 3}-01-01",
-                today.isoformat(),
-                _store_ids_for_org(db, org),
+                df, dt, _store_ids_for_org(db, org), use_cache=True
             )
         except salesdoc.SalesDocError as e:
             raise HTTPException(status_code=502, detail=str(e))
@@ -358,6 +362,7 @@ def reconcile_debt(
         # Баланс SalesDoc — общий по клиенту (обе фирмы). При выборе одной
         # фирмы наш долг — только её, а долг SD — суммарный: это ожидаемо.
         "sd_account_wide": (org or "").strip().lower() in models.ORGS,
+        "synced_at": salesdoc.last_sync(),  # epoch последнего обновления кэша
         "rows": rows,
     }
 
@@ -514,8 +519,8 @@ def reconcile_period(
     df, dt = date_from.isoformat(), date_to.isoformat()
     store_ids = _store_ids_for_org(db, org)  # реализации делим по складу
     try:
-        sd_orders = salesdoc.fetch_orders_total(df, dt, store_ids)
-        sd_payments = salesdoc.fetch_payments_total(df, dt)
+        sd_orders = salesdoc.fetch_orders_total(df, dt, store_ids, use_cache=True)
+        sd_payments = salesdoc.fetch_payments_total(df, dt, use_cache=True)
     except salesdoc.SalesDocError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

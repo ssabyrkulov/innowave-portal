@@ -131,6 +131,11 @@ def on_startup() -> None:
     run_mini_migrations()
     backfill_organization()
     seed_initial_admin()
+    # Держим данные SalesDoc «тёплыми» в памяти — тогда сверка открывается
+    # мгновенно. Фоновый поток, старт не блокирует (при выключенной
+    # интеграции — no-op).
+    from .services import salesdoc
+    salesdoc.start_background_warmer()
 
 
 @app.exception_handler(Exception)

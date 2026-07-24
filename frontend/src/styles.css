@@ -2647,6 +2647,7 @@ button.summary-card {
 .sd-toolbar { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 8px; gap: 12px; flex-wrap: wrap; }
 .sd-toolbar-right { display: flex; align-items: center; gap: 12px; }
 .sd-check { font-size: 14px; cursor: pointer; }
+.sd-synced { font-size: 12.5px; align-self: center; }
 .sd-reason { font-size: 13px; }
 .sd-reason-warn { color: var(--warn); font-weight: 600; }
 .sd-reason-bad { color: var(--out); font-weight: 600; }
