@@ -143,6 +143,8 @@ export default function SalesDocPage() {
 
       <PaymentsDebugPanel />
 
+      <ReturnsDebugPanel />
+
       <WarehouseReportPanel />
 
       <MatchingPanel onLinked={() => loadAll(range, onlyDiff)} />
@@ -572,6 +574,75 @@ function PaymentsDebugPanel() {
               {Object.entries(data.txn).map(([k, v]) => (
                 <div key={k} className="an-store"><span>{k}</span><span className="num">{v}</span></div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ReturnsDebugPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const today = toISODate(new Date())
+  const from = `${new Date().getFullYear() - 3}-01-01`
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocReturnsDebug(from, today)
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  // Насколько источник SD близок к 1С (для подсказки, какой считать «возвратом»).
+  const near = data
+    ? Math.abs(data.shelf.total - data.one_c.total) <= Math.abs(data.defects.total - data.one_c.total)
+      ? 'shelf' : 'defects'
+    : null
+  const dup = data && data.overlap.amount >= 1
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🔁 Диагностика возвратов SD (за 3 года)
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Сравниваю два источника возвратов SalesDoc с
+            возвратами 1С: <b>getOrderDefect</b> (документы брака) и <b>«Возврат
+            с полки»</b> (тип 9 в журнале оплат). Так видно, какой из них — это
+            ваши обычные возвраты и нет ли задвоения.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Считаю по вашей базе…</div>}
+          {data && (
+            <div className="an-grid">
+              <AnRow label="Возвраты 1С (эталон)"
+                value={`${money(data.one_c.total)} · ${data.one_c.count}`} />
+              <AnRow label="«Возврат с полки» (тип 9)"
+                value={`${money(data.shelf.total)} · ${data.shelf.count} · клиентов ${data.shelf.clients}`}
+                hint={near === 'shelf' ? 'ближе к 1С' : undefined} />
+              <AnRow label="getOrderDefect (брак)"
+                value={`${money(data.defects.total)} · ${data.defects.count} · клиентов ${data.defects.clients}`}
+                hint={near === 'defects' ? 'ближе к 1С' : undefined} />
+              <AnRow label="Клиентов в обоих источниках"
+                value={data.clients_with_both} warn={data.clients_with_both > 0} />
+              <AnRow label="Совпадающих возвратов (дата+сумма)"
+                value={`${data.overlap.count} на ${money(data.overlap.amount)}`}
+                warn={dup}
+                hint={dup ? 'возможное задвоение' : 'пересечений нет'} />
+              <div className={`sd-diag sd-diag-${dup ? 'warn' : 'ok'}`}>
+                <div className="sd-diag-head">
+                  <span className="sd-diag-icon">{dup ? '⚠️' : '✅'}</span>
+                  <span>
+                    {dup
+                      ? `Есть совпадающие возвраты в обоих источниках на ${money(data.overlap.amount)} — вероятно задвоение. Стоит считать возвратом только «Возврат с полки» и убрать getOrderDefect.`
+                      : 'Источники не пересекаются (одинаковых возвратов нет) — суммировать безопасно.'}
+                  </span>
+                </div>
+              </div>
             </div>
           )}
         </div>

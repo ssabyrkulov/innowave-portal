@@ -683,6 +683,71 @@ def payments_diagnostic(date_from, date_to, sample=10) -> dict:
     }
 
 
+def _client_key_any(cli: dict | None) -> str:
+    """Ключ клиента для сопоставления источников возвратов: SD_id, иначе код 1С."""
+    k = _client_key_sd(cli)
+    if k:
+        return k
+    return "code:" + str((cli or {}).get("code_1C") or "?")
+
+
+def returns_diagnostic(date_from: str, date_to: str) -> dict:
+    """Сравнивает два источника возвратов в SalesDoc за период:
+    getOrderDefect (документы брака) и «Возврат с полки» (тип 9 в журнале
+    оплат). Показывает суммы, число клиентов в каждом и пересечение — чтобы
+    понять, суммировать их безопасно или это одни и те же возвраты (дубли)."""
+    period = {"period": {"date": {"from": date_from, "to": date_to}}}
+
+    # --- getOrderDefect (брак/возвратные заказы) ---
+    def_by_client: dict[str, float] = {}
+    def_keys: dict[str, set] = {}
+    def_count = 0
+    def_total = 0.0
+    for r in call_all("getOrderDefect",
+                      ("defects", "orderDefects", "defect", "orderDefect", "orders"),
+                      {"filter": period}, use_cache=True):
+        amt = float(r.get("summa") or r.get("totalSumma") or 0)
+        k = _client_key_any(r.get("client"))
+        def_count += 1
+        def_total += amt
+        def_by_client[k] = def_by_client.get(k, 0.0) + amt
+        def_keys.setdefault(k, set()).add((_day(r.get("date") or r.get("dateLoad")), round(amt, 2)))
+
+    # --- «Возврат с полки» (тип 9 в getPayment) ---
+    shelf_by_client: dict[str, float] = {}
+    shelf_keys: dict[str, set] = {}
+    shelf_count = 0
+    shelf_total = 0.0
+    for p in call_all("getPayment", ("payments", "payment"), {"filter": period}, use_cache=True):
+        if _to_int(p.get("transactionType")) != SHELF_RETURN_TXN:
+            continue
+        amt = float(p.get("amount") or 0)
+        k = _client_key_any(p.get("client"))
+        shelf_count += 1
+        shelf_total += amt
+        shelf_by_client[k] = shelf_by_client.get(k, 0.0) + amt
+        shelf_keys.setdefault(k, set()).add((_day(p.get("paymentDate")), round(amt, 2)))
+
+    # Пересечение: клиенты в обоих источниках и совпадающие (дата, сумма) —
+    # это «подозрение на дубль» (один возврат учтён и там, и там).
+    both = set(def_by_client) & set(shelf_by_client)
+    dup_count = 0
+    dup_amount = 0.0
+    for k in both:
+        for (d, a) in (def_keys.get(k, set()) & shelf_keys.get(k, set())):
+            dup_count += 1
+            dup_amount += a
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "defects": {"count": def_count, "total": round(def_total, 2), "clients": len(def_by_client)},
+        "shelf": {"count": shelf_count, "total": round(shelf_total, 2), "clients": len(shelf_by_client)},
+        "clients_with_both": len(both),
+        "overlap": {"count": dup_count, "amount": round(dup_amount, 2)},
+    }
+
+
 def fetch_orders_total(date_from: str, date_to: str, store_ids=None,
                        use_cache: bool = False) -> dict:
     """Сумма заказов (реализаций) за период и разбивка по клиентам (по имени).

@@ -157,6 +157,8 @@ export const api = {
     request(`/salesdoc/warehouse-report?date_from=${dateFrom}&date_to=${dateTo}`),
   salesdocPaymentsDebug: (dateFrom, dateTo) =>
     request(`/salesdoc/payments-debug?date_from=${dateFrom}&date_to=${dateTo}`),
+  salesdocReturnsDebug: (dateFrom, dateTo) =>
+    request(`/salesdoc/returns-debug?date_from=${dateFrom}&date_to=${dateTo}`),
   salesdocMatching: () => request('/salesdoc/matching'),
   salesdocLink: (client_1c, sd_id) =>
     request('/salesdoc/link', { method: 'POST', body: { client_1c, sd_id } }),

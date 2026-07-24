@@ -401,6 +401,35 @@ def payments_debug(
         raise HTTPException(status_code=502, detail=str(e))
 
 
+@router.get("/returns-debug")
+def returns_debug(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    org: str = Query(default="all"),
+):
+    """Сравнение источников возвратов SalesDoc (getOrderDefect vs «Возврат с
+    полки», тип 9) с возвратами 1С за период — чтобы понять, какой источник
+    совпадает и нет ли задвоения."""
+    _require_configured()
+    try:
+        data = salesdoc.returns_diagnostic(date_from.isoformat(), date_to.isoformat())
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    # Возвраты 1С за тот же период — эталон для сравнения.
+    q = (
+        models.org_scope(db.query(models.ReturnDoc), models.ReturnDoc, org)
+        .filter(models.ReturnDoc.date >= date_from, models.ReturnDoc.date <= date_to)
+    )
+    rows = q.all()
+    data["one_c"] = {
+        "count": len(rows),
+        "total": round(sum(float(r.amount) for r in rows), 2),
+    }
+    return data
+
+
 @router.get("/analyze")
 def analyze_structure(
     db: Session = Depends(get_db),
