@@ -25,7 +25,6 @@ const money = (v) => formatMoney(v)
 const cls = (diff) => (Math.abs(Number(diff || 0)) >= 0.5 ? 'sd-diff-bad' : 'sd-diff-ok')
 
 export default function SalesDocPage() {
-  const { can } = useAuth()
   const [configured, setConfigured] = useState(null)
   const [range, setRange] = useState(monthRange())
   const [period, setPeriod] = useState(null)
@@ -95,7 +94,6 @@ export default function SalesDocPage() {
       <div className="page-header">
         <h1>Сверка с SalesDoc</h1>
         <div className="import-controls">
-          {can.editPayments && <ReconnectButton onDone={() => loadAll(range, onlyDiff)} />}
           <button className="btn btn-primary" disabled={loading} onClick={() => loadAll(range, onlyDiff)}>
             {loading ? 'Обновление…' : '↻ Обновить'}
           </button>
@@ -381,33 +379,6 @@ function RcSection({ title, total, count, rows, head }) {
         </div>
       )}
     </div>
-  )
-}
-
-function ReconnectButton({ onDone }) {
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState(null)
-  async function go() {
-    setBusy(true)
-    setMsg(null)
-    try {
-      const r = await api.salesdocReconnect()
-      setMsg(r.mode === 'static' ? 'Токен проверен ✓' : 'Переподключено ✓')
-      onDone?.()
-    } catch (e) {
-      setMsg(e.message)
-    } finally {
-      setBusy(false)
-      setTimeout(() => setMsg(null), 6000)
-    }
-  }
-  return (
-    <>
-      <button className="btn" disabled={busy} onClick={go} title="Заново взять токен SalesDoc">
-        {busy ? '…' : '🔌 Переподключить'}
-      </button>
-      {msg && <span className="muted sd-reconnect-msg">{msg}</span>}
-    </>
   )
 }
 

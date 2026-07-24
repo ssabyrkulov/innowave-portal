@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
-import { useAuth } from '../auth'
 import { formatMoney } from '../utils'
 
 const MONTH_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
@@ -18,15 +17,10 @@ function monthLabel(key) {
 }
 
 export default function AnalyticsPage() {
-  const { can } = useAuth()
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [importing, setImporting] = useState(false)
-  const [importResult, setImportResult] = useState(null)
-  const [replacePeriod, setReplacePeriod] = useState(false)
-  const fileRef = useRef(null)
 
   async function load() {
     setError(null)
@@ -42,92 +36,21 @@ export default function AnalyticsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFrom, dateTo])
 
-  async function onFile(e) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setImporting(true)
-    setImportResult(null)
-    setError(null)
-    try {
-      const res = await api.importSales(file, replacePeriod)
-      setImportResult(res)
-      await load()
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setImporting(false)
-    }
-  }
-
   const empty = data && data.lines === 0 && !dateFrom && !dateTo
 
   return (
     <div>
       <div className="page-header">
         <h1>Аналитика продаж</h1>
-        {can.editPayments && (
-          <div className="import-controls">
-            <label
-              className="filter-inline replace-toggle"
-              title="Удалить из базы период, который покрывает файл, и загрузить его заново — правки 1С задним числом попадут корректно"
-            >
-              <input
-                type="checkbox"
-                checked={replacePeriod}
-                onChange={(e) => setReplacePeriod(e.target.checked)}
-              />
-              заменить период
-            </label>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".xlsx,.xlsm"
-              style={{ display: 'none' }}
-              onChange={onFile}
-            />
-            <button
-              className="btn btn-primary"
-              disabled={importing}
-              onClick={() => fileRef.current?.click()}
-            >
-              {importing ? 'Загрузка…' : '⬆ Загрузить Excel из 1С'}
-            </button>
-          </div>
-        )}
       </div>
-
-      {importResult && (
-        <div className="import-result">
-          Импорт завершён: добавлено <b>{importResult.added}</b>
-          {importResult.replaced_rows > 0 && (
-            <>, заменено строк периода: <b>{importResult.replaced_rows}</b></>
-          )}
-          {importResult.skipped_duplicates > 0 && (
-            <>, пропущено дублей: <b>{importResult.skipped_duplicates}</b></>
-          )}
-          {importResult.errors.length > 0 && (
-            <details>
-              <summary>Строк с ошибками: {importResult.errors.length}</summary>
-              <ul>
-                {importResult.errors.map((e, i) => (
-                  <li key={i}>{e}</li>
-                ))}
-              </ul>
-            </details>
-          )}
-        </div>
-      )}
 
       {error && <div className="error">{error}</div>}
 
       {empty ? (
         <div className="table-wrap">
           <div className="center muted">
-            Данных о продажах пока нет.
-            {can.editPayments
-              ? ' Нажмите «Загрузить Excel из 1С» и выберите файл выгрузки (РеализацияТоваровУслуг).'
-              : ' Попросите бухгалтера загрузить выгрузку из 1С.'}
+            Данных о продажах пока нет. Они подгружаются автоматически из 1С
+            (выгрузка «РеализацияТоваровУслуг» синхронизируется из Google Drive).
           </div>
         </div>
       ) : data ? (

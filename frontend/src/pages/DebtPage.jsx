@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { formatMoney } from '../utils'
@@ -47,15 +47,11 @@ export default function DebtPage() {
   const [receipts, setReceipts] = useState([])
   const [showReceipts, setShowReceipts] = useState(false)
   const [error, setError] = useState(null)
-  const [importing, setImporting] = useState(false)
-  const [importResult, setImportResult] = useState(null)
-  const [replacePeriod, setReplacePeriod] = useState(false)
   const [aliasDraft, setAliasDraft] = useState({})
   const [tab, setTab] = useState('active') // active | bad
   const [detailClient, setDetailClient] = useState(null)
   const [pickClient, setPickClient] = useState('')
   const [pickNote, setPickNote] = useState('')
-  const fileRef = useRef(null)
 
   async function load() {
     setError(null)
@@ -71,24 +67,6 @@ export default function DebtPage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showReceipts])
-
-  async function onFile(e) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setImporting(true)
-    setImportResult(null)
-    setError(null)
-    try {
-      const res = await api.importReceipts(file, replacePeriod)
-      setImportResult(res)
-      await load()
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setImporting(false)
-    }
-  }
 
   async function linkAlias(payer) {
     const client = aliasDraft[payer]
@@ -163,32 +141,6 @@ export default function DebtPage() {
     <div>
       <div className="page-header">
         <h1>Дебиторка</h1>
-        {can.editPayments && (
-          <div className="import-controls">
-            <label className="replace-toggle">
-              <input
-                type="checkbox"
-                checked={replacePeriod}
-                onChange={(e) => setReplacePeriod(e.target.checked)}
-              />{' '}
-              заменить период
-            </label>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".xlsx,.xlsm"
-              style={{ display: 'none' }}
-              onChange={onFile}
-            />
-            <button
-              className="btn btn-primary"
-              disabled={importing}
-              onClick={() => fileRef.current?.click()}
-            >
-              {importing ? 'Загрузка…' : '⬆ Загрузить оплаты из 1С'}
-            </button>
-          </div>
-        )}
       </div>
 
       <div className="note-readonly">
@@ -197,37 +149,13 @@ export default function DebtPage() {
         быть ниже показанных.
       </div>
 
-      {importResult && (
-        <div className="import-result">
-          Импорт завершён: добавлено <b>{importResult.added}</b>
-          {importResult.replaced_rows > 0 && (
-            <>, заменено строк периода: <b>{importResult.replaced_rows}</b></>
-          )}
-          {importResult.skipped_duplicates > 0 && (
-            <>, пропущено дублей: <b>{importResult.skipped_duplicates}</b></>
-          )}
-          {importResult.errors.length > 0 && (
-            <details>
-              <summary>Строк с ошибками: {importResult.errors.length}</summary>
-              <ul>
-                {importResult.errors.map((e, i) => (
-                  <li key={i}>{e}</li>
-                ))}
-              </ul>
-            </details>
-          )}
-        </div>
-      )}
-
       {error && <div className="error">{error}</div>}
 
       {data && !data.has_receipts ? (
         <div className="table-wrap">
           <div className="center muted">
-            Оплаты ещё не загружены.
-            {can.editPayments
-              ? ' Нажмите «Загрузить оплаты из 1С» и выберите выгрузку «Поступление денежных средств».'
-              : ' Попросите бухгалтера загрузить выгрузку оплат.'}
+            Оплаты ещё не загружены. Они подгружаются автоматически из 1С
+            (выгрузка «Поступление денежных средств» синхронизируется из Google Drive).
           </div>
         </div>
       ) : data ? (

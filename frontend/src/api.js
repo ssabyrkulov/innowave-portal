@@ -86,20 +86,8 @@ export const api = {
   updatePayment: (id, body) => request(`/payments/${id}`, { method: 'PATCH', body }),
   deletePayment: (id) => request(`/payments/${id}`, { method: 'DELETE' }),
 
-  importSales: (file, replacePeriod = false) => {
-    const fd = new FormData()
-    fd.append('file', file)
-    fd.append('replace_period', replacePeriod ? 'true' : 'false')
-    return request('/sales/import', { method: 'POST', formData: fd })
-  },
   importLog: () => request('/sales/imports'),
 
-  importReceipts: (file, replacePeriod = false) => {
-    const fd = new FormData()
-    fd.append('file', file)
-    fd.append('replace_period', replacePeriod ? 'true' : 'false')
-    return request('/receipts/import', { method: 'POST', formData: fd })
-  },
   receivables: () => request('/receipts/receivables'),
   listReceipts: () => request('/receipts'),
   setReceiptRate: (id, rate) =>
@@ -153,7 +141,6 @@ export const api = {
   stockBalances: () => request('/balances/stock'),
 
   salesdocStatus: () => request('/salesdoc/status'),
-  salesdocReconnect: () => request('/salesdoc/reconnect', { method: 'POST' }),
   salesdocDebt: (onlyDiff = false) =>
     request(`/salesdoc/debt${onlyDiff ? '?only_diff=true' : ''}`),
   salesdocPeriod: (dateFrom, dateTo) =>
