@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -83,14 +84,15 @@ def db_target() -> str:
         return "(не удалось определить)"
 
 
-def wait_for_db(attempts: int = 12, base_delay: float = 2.0) -> None:
+def wait_for_db(attempts: int = 40, base_delay: float = 2.0) -> None:
     """Ждёт готовности БД перед инициализацией.
 
-    Бесплатный PostgreSQL на Render иногда не успевает принять соединение к
-    моменту старта контейнера — раньше одно такое «моргание» роняло весь
-    деплой (Application startup failed → Render откатывался на старую версию).
-    Повторяем подключение с нарастающей паузой, чтобы транзиентный таймаут
-    не срывал выкладку.
+    PostgreSQL на Render бывает недоступен несколько минут — при плановом
+    обслуживании внутренний хост перестаёт резолвиться. Раньше мы ждали ~2
+    минуты и выходили: Render перезапускал контейнер, тот падал снова —
+    крэш-луп и 502 на всё время работ. Теперь ждём ~10 минут, чтобы спокойно
+    пережить обслуживание, а если и это не помогло — сервис всё равно
+    стартует (см. on_startup) и не уходит в бесконечный перезапуск.
     """
     print(f"[startup] Подключаюсь к БД: {db_target()}", flush=True)
     last_err: Exception | None = None
@@ -138,20 +140,86 @@ def backfill_organization() -> None:
                 ))
 
 
-@app.on_event("startup")
-def on_startup() -> None:
-    wait_for_db()
+# Готовность БД: пока False — API отвечает понятной ошибкой, а не падает.
+db_state: dict = {"ready": False, "error": None}
+
+
+def init_database() -> None:
+    """Подготовка схемы и первичных данных (после того, как БД доступна)."""
     Base.metadata.create_all(bind=engine)
     run_mini_migrations()
     backfill_organization()
     seed_initial_admin()
-    # Фоновый прогрев кэша SalesDoc по умолчанию ВЫКЛЮЧЕН: он держал в памяти
-    # сырые выгрузки за 3 года и на инстансе 512 МБ приводил к падению по
-    # памяти (перезапуск → снова прогрев → 502). Включается осознанно через
-    # SALESDOC_WARM_CACHE=1 на инстансе с достаточной памятью.
+    # Фоновый прогрев кэша SalesDoc по умолчанию ВЫКЛЮЧЕН — включается
+    # осознанно через SALESDOC_WARM_CACHE=1.
     if os.environ.get("SALESDOC_WARM_CACHE") == "1":
         from .services import salesdoc
         salesdoc.start_background_warmer()
+
+
+def startup_sequence() -> None:
+    wait_for_db()
+    init_database()
+    db_state["ready"] = True
+    db_state["error"] = None
+    print("[startup] БД готова, сервис поднят", flush=True)
+
+
+def retry_startup_in_background() -> None:
+    """Продолжаем поднимать БД в фоне, не роняя процесс.
+
+    Важно: сервис уже слушает порт, поэтому пользователь видит понятное
+    сообщение вместо 502, а Render не крутит бесконечные перезапуски.
+    Как только база вернётся (например, после обслуживания) — портал
+    заработает сам, без ручного вмешательства."""
+    def loop():
+        while not db_state["ready"]:
+            try:
+                startup_sequence()
+            except Exception as err:  # noqa: BLE001 — фон не должен падать
+                db_state["error"] = f"{type(err).__name__}: {err}"
+                print(f"[startup] БД всё ещё недоступна: {err}. Повтор через 30s…",
+                      flush=True)
+                time.sleep(30)
+
+    threading.Thread(target=loop, name="db-init-retry", daemon=True).start()
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    try:
+        startup_sequence()
+    except Exception as err:  # noqa: BLE001 — стартуем даже без БД
+        db_state["error"] = f"{type(err).__name__}: {err}"
+        print(
+            "[startup] Не удалось подключиться к БД. Сервис стартует без неё и "
+            "продолжит попытки в фоне (API вернёт 503 до восстановления).",
+            flush=True,
+        )
+        retry_startup_in_background()
+
+
+@app.middleware("http")
+async def guard_db(request: Request, call_next):
+    """Пока БД не поднялась — отдаём понятное 503 на API вместо 500/502.
+    Статика и /healthz работают, чтобы страница открывалась и было видно
+    состояние сервиса."""
+    path = request.url.path
+    is_api = path.startswith("/api/") or any(
+        path.startswith(f"/{p}/") or path == f"/{p}"
+        for p in ("auth", "users", "payments", "sales", "checks", "receipts",
+                  "agents", "dashboard", "integrations", "returns", "balances",
+                  "expenses", "budget", "operations", "salesdoc")
+    )
+    if is_api and not db_state["ready"]:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "База данных временно недоступна (идёт "
+                               "обслуживание). Сервис восстановится "
+                               "автоматически — обновите страницу через "
+                               "несколько минут."},
+        )
+    return await call_next(request)
 
 
 @app.exception_handler(Exception)
@@ -184,6 +252,9 @@ def health():
         "status": "ok",
         "service": "innowave-portal",
         "commit": commit,
+        # Видно, поднялась ли база: при обслуживании сервис жив, db=false.
+        "db": db_state["ready"],
+        "db_error": db_state["error"],
         "modules": modules,
     }
 
