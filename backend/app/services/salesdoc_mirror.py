@@ -97,6 +97,30 @@ def _payment_filter(date_from: str, date_to: str, updated_since: str | None) -> 
     return {"filter": {"period": period}}
 
 
+def changed_count(method: str, updated_since: str) -> int | None:
+    """Сколько записей изменилось с указанной даты — БЕЗ выгрузки самих данных.
+
+    Просим одну запись (limit=1): SalesDoc возвращает в pagination общее число
+    подходящих. Это «дежурная проверка»: если ноль — синхронизировать нечего и
+    мы не тратим ни трафик, ни токен. None — счётчик получить не удалось."""
+    _, dt = _window()
+    params = {
+        "limit": 1, "page": 1,
+        "filter": {"period": {"dateUpdate": {"from": updated_since, "to": dt}}},
+    }
+    if method == "getOrder":
+        params["filter"]["include"] = "all"
+        params["filter"]["status"] = [1, 2, 3, 4, 5]
+    try:
+        _, pagination = salesdoc.call(method, params)
+    except salesdoc.SalesDocError:
+        return None
+    if not pagination:
+        return None
+    total = pagination.get("total")
+    return int(total) if isinstance(total, (int, float, str)) and str(total).isdigit() else None
+
+
 def sync_orders(db: Session, updated_since: str | None = None) -> int:
     df, dt = _window()
     rows = salesdoc.call_all("getOrder", ("orders", "order"),
@@ -159,12 +183,24 @@ def sync(full: bool = False) -> dict:
     try:
         db = SessionLocal()
         try:
-            for kind, fn in (("orders", sync_orders), ("payments", sync_payments)):
+            for kind, fn, method in (("orders", sync_orders, "getOrder"),
+                                     ("payments", sync_payments, "getPayment")):
                 st = _state(db, kind)
                 since = None
                 if not full and st.last_full_at:
                     base = st.last_delta_at or st.last_full_at
                     since = (base - DELTA_OVERLAP).date().isoformat()
+                    # Дежурная проверка: если с прошлого раза ничего не
+                    # изменилось — не выгружаем ничего. Ночью и в выходные
+                    # это почти весь трафик.
+                    changed = changed_count(method, since)
+                    if changed == 0:
+                        st.last_delta_at = datetime.utcnow()
+                        result[kind] = {"unchanged": True, "total": st.rows}
+                        db.commit()
+                        continue
+                    if changed is not None:
+                        result.setdefault("changed", {})[kind] = changed
                 try:
                     n = fn(db, since)
                     # Сессия без autoflush — сбрасываем сами, иначе count()
