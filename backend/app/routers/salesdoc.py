@@ -160,44 +160,34 @@ def _sd_component(maps: dict, sd_id, code) -> float:
 
 
 def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
-    """Вероятная причина расхождения долга по клиенту: раскладываем разницу на
-    компоненты (реализации / возвраты / оплаты) и называем главный фактор."""
+    """Короткий ярлык причины для колонки: одно-два слова — «реализации»,
+    «возврат», «оплата» (или их сочетание). Если компоненты совпадают, но долг
+    расходится — «баланс SD» либо «курс/период». Подробности — в карточке."""
     if not row["in_sd"]:
-        return "bad", "Точки нет в SalesDoc"
+        return "bad", "нет в SD"
     if not row["in_1c"]:
-        return "bad", "Точки нет в 1С"
+        return "bad", "нет в 1С"
     delta = round(row["sd_debt"] - row["our_debt"], 2)
     if abs(delta) < 1:
-        return "ok", "Сходится"
+        return "ok", "сходится"
     sd_sales = _sd_component(comp["sales"], row["sd_id"], row["code_1C"])
     sd_ret = _sd_component(comp["returns"], row["sd_id"], row["code_1C"])
     sd_pay = _sd_component(comp["payments"], row["sd_id"], row["code_1C"])
-    # Вклад каждого компонента в «SalesDoc показывает больше долга»:
+    # Значимые расхождения по компонентам — коротким словом каждый.
     factors = [
-        ("sales", round(sd_sales - row["our_sales"], 2)),      # больше реализаций в SD
-        ("returns", round(row["our_returns"] - sd_ret, 2)),    # меньше возвратов в SD
-        ("pay", round(row["our_pay"] - sd_pay, 2)),            # меньше оплат в SD
+        ("реализации", round(sd_sales - row["our_sales"], 2)),
+        ("возврат", round(row["our_returns"] - sd_ret, 2)),
+        ("оплата", round(row["our_pay"] - sd_pay, 2)),
     ]
     sig = sorted((f for f in factors if abs(f[1]) >= 500), key=lambda f: -abs(f[1]))
-    if not sig:
-        # Компоненты совпали. Если баланс SD расходится с суммой его операций —
-        # оплата не применена к балансу / входящий остаток (правится в SD).
-        sd_txn_net = round(sd_sales - sd_ret - sd_pay, 2)
-        gap = round(row["sd_debt"] - sd_txn_net, 2)
-        if abs(gap) >= 500:
-            return "warn", (f"Операции совпадают, но баланс SD не отражает "
-                            f"{_fmt_som(abs(gap))} (оплата не применена / входящий остаток)")
-        return "warn", "Не раскладывается (курс / остаток / период)"
-    key, cval = sig[0]
-    a = _fmt_som(abs(cval))
-    if key == "sales":
-        return "warn", (f"В SalesDoc больше реализаций на {a}" if cval > 0
-                        else f"В 1С больше реализаций на {a} (нет в SD)")
-    if key == "returns":
-        return "warn", (f"В SalesDoc не проведены возвраты на {a}" if cval > 0
-                        else f"В SalesDoc больше возвратов на {a}")
-    return "warn", (f"В SalesDoc не проведены оплаты на {a}" if cval > 0
-                    else f"В 1С не загружены оплаты на {a} (наличные?)")
+    if sig:
+        return "warn", " · ".join(name for name, _ in sig)
+    # Компоненты совпали, а долг расходится: баланс SD не отражает операции
+    # (оплата не применена / входящий остаток) — либо курс/период.
+    sd_txn_net = round(sd_sales - sd_ret - sd_pay, 2)
+    if abs(round(row["sd_debt"] - sd_txn_net, 2)) >= 500:
+        return "warn", "баланс SD"
+    return "warn", "курс/период"
 
 
 @router.get("/debt")
