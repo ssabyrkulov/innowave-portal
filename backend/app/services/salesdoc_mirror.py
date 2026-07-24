@@ -25,11 +25,13 @@ from .. import models
 from ..database import SessionLocal
 from . import salesdoc
 
-# Полная выгрузка — раз в час; проверка изменений — раз в минуту.
-# Час, а не сутки: догрузка изменений видит правки и новые записи, но НЕ видит
-# удалённые (SalesDoc не сообщает об удалении). Удаления вычищает только полная
-# выгрузка — значит она должна быть частой, иначе убранная в SalesDoc запись
-# висела бы на сайте до следующих суток. Полная выгрузка занимает ~15 секунд.
+# Раз в минуту — дежурная проверка: изменилось ли что-нибудь и сходится ли
+# количество записей. Правки и новые записи видны по счётчику изменений,
+# удаления — по расхождению количества (об удалении SalesDoc не сообщает,
+# запись просто исчезает). В обоих случаях синхронизация запускается сразу,
+# так что и удаление доезжает до сайта в течение минуты.
+# Полная выгрузка раз в час — страховка на случай, если количество совпало
+# случайно (например, одну запись добавили, а другую удалили).
 # Частота почти ничего не стоит: сначала идёт дежурная проверка (одна запись),
 # и данные выгружаются, только если счётчик изменений больше нуля. Токену это
 # не вредит — его гасит лишь повторный вход, а мы работаем на постоянном.
@@ -145,6 +147,38 @@ def _drop_missing(db: Session, model, seen: set, date_from: date, date_to: date)
     return len(stale)
 
 
+def total_count(method: str) -> int | None:
+    """Сколько всего записей в SalesDoc за наш период — БЕЗ выгрузки данных.
+
+    Нужно, чтобы ловить удаления. Удалённая запись просто исчезает из ответов
+    SalesDoc: пометки «удалена» нет, в счётчик изменений она не попадает.
+    Единственный способ заметить пропажу — сравнить количество: если у нас
+    записей больше, чем в SalesDoc, значит что-то убрали."""
+    df, dt = _window()
+    params = {"limit": 1, "page": 1,
+              "filter": {"period": {"date": {"from": df, "to": dt}}}}
+    if method == "getOrder":
+        params["filter"]["include"] = "all"
+        params["filter"]["status"] = [1, 2, 3, 4, 5]
+    try:
+        _, pagination = salesdoc.call(method, params)
+    except salesdoc.SalesDocError:
+        return None
+    total = (pagination or {}).get("total")
+    return int(total) if str(total).isdigit() else None
+
+
+def mirror_count(db: Session, model) -> int:
+    """Сколько записей этого вида в зеркале за тот же период."""
+    df, dt = _window()
+    return (
+        db.query(model)
+        .filter(model.date >= date.fromisoformat(df),
+                model.date <= date.fromisoformat(dt))
+        .count()
+    )
+
+
 def sync_orders(db: Session, updated_since: str | None = None) -> int:
     df, dt = _window()
     rows = salesdoc.call_all("getOrder", ("orders", "order"),
@@ -219,23 +253,32 @@ def sync(full: bool = False) -> dict:
     try:
         db = SessionLocal()
         try:
-            for kind, fn, method in (("orders", sync_orders, "getOrder"),
-                                     ("payments", sync_payments, "getPayment")):
+            for kind, fn, method, model in (
+                    ("orders", sync_orders, "getOrder", models.SalesDocOrder),
+                    ("payments", sync_payments, "getPayment", models.SalesDocPayment)):
                 st = _state(db, kind)
                 since = None
                 if not full and st.last_full_at:
                     base = st.last_delta_at or st.last_full_at
                     since = (base - DELTA_OVERLAP).date().isoformat()
-                    # Дежурная проверка: если с прошлого раза ничего не
-                    # изменилось — не выгружаем ничего. Ночью и в выходные
-                    # это почти весь трафик.
                     changed = changed_count(method, since)
-                    if changed == 0:
+                    # Удаления не попадают в «изменённые» — их видно только по
+                    # расхождению количества. Если числа не сходятся, сразу
+                    # перевыгружаем целиком: это вычистит пропавшие записи.
+                    sd_total = total_count(method)
+                    ours = mirror_count(db, model)
+                    if sd_total is not None and sd_total != ours:
+                        since = None
+                        result.setdefault("resync", {})[kind] = {
+                            "ours": ours, "salesdoc": sd_total}
+                    elif changed == 0:
+                        # Ничего не изменилось и количество сходится — тратить
+                        # трафик незачем.
                         st.last_delta_at = datetime.utcnow()
                         result[kind] = {"unchanged": True, "total": st.rows}
                         db.commit()
                         continue
-                    if changed is not None:
+                    elif changed is not None:
                         result.setdefault("changed", {})[kind] = changed
                 try:
                     n = fn(db, since)
