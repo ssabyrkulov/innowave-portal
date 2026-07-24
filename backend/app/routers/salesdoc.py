@@ -143,11 +143,62 @@ def _require_configured():
         )
 
 
+def _fmt_som(v: float) -> str:
+    return f"{round(v):,}".replace(",", " ") + " с"
+
+
+def _sd_component(maps: dict, sd_id, code) -> float:
+    """Сумма компонента SalesDoc для клиента: по SD_id + по коду 1С (запись
+    попадает ровно в одну карту, поэтому двойного счёта нет)."""
+    s = 0.0
+    sid = (sd_id or "").lower()
+    if sid and sid in maps["sd"]:
+        s += maps["sd"][sid]
+    if code is not None and str(code) in maps["code"]:
+        s += maps["code"][str(code)]
+    return round(s, 2)
+
+
+def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
+    """Вероятная причина расхождения долга по клиенту: раскладываем разницу на
+    компоненты (реализации / возвраты / оплаты) и называем главный фактор."""
+    if not row["in_sd"]:
+        return "bad", "Точки нет в SalesDoc"
+    if not row["in_1c"]:
+        return "bad", "Точки нет в 1С"
+    delta = round(row["sd_debt"] - row["our_debt"], 2)
+    if abs(delta) < 1:
+        return "ok", "Сходится"
+    sd_sales = _sd_component(comp["sales"], row["sd_id"], row["code_1C"])
+    sd_ret = _sd_component(comp["returns"], row["sd_id"], row["code_1C"])
+    sd_pay = _sd_component(comp["payments"], row["sd_id"], row["code_1C"])
+    # Вклад каждого компонента в «SalesDoc показывает больше долга»:
+    factors = [
+        ("sales", round(sd_sales - row["our_sales"], 2)),      # больше реализаций в SD
+        ("returns", round(row["our_returns"] - sd_ret, 2)),    # меньше возвратов в SD
+        ("pay", round(row["our_pay"] - sd_pay, 2)),            # меньше оплат в SD
+    ]
+    sig = sorted((f for f in factors if abs(f[1]) >= 500), key=lambda f: -abs(f[1]))
+    if not sig:
+        return "warn", "Не раскладывается (курс / остаток / период)"
+    key, cval = sig[0]
+    a = _fmt_som(abs(cval))
+    if key == "sales":
+        return "warn", (f"В SalesDoc больше реализаций на {a}" if cval > 0
+                        else f"В 1С больше реализаций на {a} (нет в SD)")
+    if key == "returns":
+        return "warn", (f"В SalesDoc не проведены возвраты на {a}" if cval > 0
+                        else f"В SalesDoc больше возвратов на {a}")
+    return "warn", (f"В SalesDoc не проведены оплаты на {a}" if cval > 0
+                    else f"В 1С не загружены оплаты на {a} (наличные?)")
+
+
 @router.get("/debt")
 def reconcile_debt(
     db: Session = Depends(get_db),
     user: models.User = Depends(can_view),
     only_diff: bool = Query(default=False, description="Только строки с расхождением"),
+    with_reason: bool = Query(default=False, description="Посчитать причину расхождения по всем строкам"),
     org: str = Query(default="all"),
 ):
     """Дебиторка: наш долг (из 1С) против баланса SalesDoc, по каждому клиенту."""
@@ -241,6 +292,10 @@ def reconcile_debt(
             "code_1C": entry["code_1C"] if entry else None,
             "sd_id": entry["sd_id"] if entry else sid,
             "organization": client_org,
+            # Компоненты долга 1С — для «причины расхождения».
+            "our_sales": round(c.get("shipped", 0.0), 2),
+            "our_returns": round(c.get("returned", 0.0), 2),
+            "our_pay": round(c.get("paid", 0.0), 2),
         })
 
     # Клиенты, которые есть только в SalesDoc и там висит долг.
@@ -263,11 +318,32 @@ def reconcile_debt(
             "code_1C": entry["code_1C"],
             "sd_id": entry["sd_id"],
             "organization": row_org,  # фирма по складам заказов SalesDoc
+            "our_sales": 0.0,
+            "our_returns": 0.0,
+            "our_pay": 0.0,
         })
 
     rows.sort(key=lambda x: -abs(x["diff"]))
     if only_diff:
         rows = [r for r in rows if abs(r["diff"]) >= 0.5]
+
+    # «Причина расхождения» по всем строкам сразу — одна массовая выгрузка из
+    # SalesDoc (заказы/возвраты/оплаты), группируем по клиенту. Считаем только
+    # по запросу: обычная загрузка дебиторки остаётся быстрой.
+    if with_reason:
+        today = date.today()
+        try:
+            comp = salesdoc.fetch_reconcile_components(
+                f"{today.year - 3}-01-01",
+                today.isoformat(),
+                _store_ids_for_org(db, org),
+            )
+        except salesdoc.SalesDocError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        for r in rows:
+            lvl, txt = _diagnose_reason(r, comp)
+            r["reason_level"] = lvl
+            r["reason"] = txt
 
     our_total = round(sum(r["our_debt"] for r in rows), 2)
     sd_total = round(sum(r["sd_debt"] for r in rows), 2)

@@ -662,3 +662,77 @@ def fetch_payments_total(date_from: str, date_to: str) -> dict:
         total += float(p.get("amount") or 0)
         count += 1
     return {"total": round(total, 2), "count": count}
+
+
+def _client_key_sd(cli: dict | None) -> str | None:
+    """Каноничный SD_id клиента (в нижнем регистре) из записи заказа/оплаты/
+    возврата: сначала SD_id, иначе из CS_id вида F1-<SD_id>."""
+    cli = cli or {}
+    sd = str(cli.get("SD_id") or "").lower()
+    if sd:
+        return sd
+    cs = str(cli.get("CS_id") or "").lower()
+    if cs and "-" in cs:
+        return cs.split("-", 1)[-1]
+    return None
+
+
+def fetch_reconcile_components(date_from: str, date_to: str, store_ids=None) -> dict:
+    """Массовая выгрузка для «причины расхождения» по ВСЕМ клиентам сразу: один
+    проход по заказам, возвратам и оплатам с агрегацией по клиенту. Возвращает
+    для каждого компонента две карты — по SD_id и по коду 1С (у части записей
+    клиент записан только кодом). Реализации делятся по складу (store_ids),
+    возвраты и оплаты — общие по клиенту (склад в этих методах недоступен).
+
+    Всё последовательно (в call_all нет параллелизма), чтобы не гасить токен."""
+    def accumulate(cli, amt, by_sd, by_code):
+        key = _client_key_sd(cli)
+        if key:
+            by_sd[key] = by_sd.get(key, 0.0) + amt
+            return
+        code = str((cli or {}).get("code_1C") or "")
+        if code:
+            by_code[code] = by_code.get(code, 0.0) + amt
+
+    period = {"period": {"date": {"from": date_from, "to": date_to}}}
+
+    # --- Реализации (только отгруженные), с делением по складу ---
+    sales_sd: dict[str, float] = {}
+    sales_code: dict[str, float] = {}
+    oparams = {"filter": {"include": "all", "status": sorted(SHIPPED_STATUSES), **period}}
+    for o in call_all("getOrder", ("orders", "order"), oparams):
+        if o.get("status") not in SHIPPED_STATUSES:
+            continue
+        if not _store_ok(o.get("store"), store_ids):
+            continue
+        amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
+        accumulate(o.get("client"), amt, sales_sd, sales_code)
+
+    # --- Возвраты (getOrderDefect; склад недоступен → общие по клиенту) ---
+    returns_sd: dict[str, float] = {}
+    returns_code: dict[str, float] = {}
+    try:
+        for r in call_all(
+            "getOrderDefect",
+            ("defects", "orderDefects", "defect", "orderDefect", "orders"),
+            {"filter": period},
+        ):
+            amt = float(r.get("summa") or r.get("totalSumma") or 0)
+            accumulate(r.get("client"), amt, returns_sd, returns_code)
+    except SalesDocError:
+        pass
+
+    # --- Оплаты (только «Оплата», тип 3; общие по клиенту) ---
+    pay_sd: dict[str, float] = {}
+    pay_code: dict[str, float] = {}
+    for p in call_all("getPayment", ("payments", "payment"), {"filter": period}):
+        if _to_int(p.get("transactionType")) != PAYMENT_TXN:
+            continue
+        amt = float(p.get("amount") or 0)
+        accumulate(p.get("client"), amt, pay_sd, pay_code)
+
+    return {
+        "sales": {"sd": sales_sd, "code": sales_code},
+        "returns": {"sd": returns_sd, "code": returns_code},
+        "payments": {"sd": pay_sd, "code": pay_code},
+    }

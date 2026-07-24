@@ -2597,8 +2597,13 @@ button.summary-card {
 .sd-diff-ok, .sd-diff-ok b, .sd-diff-ok .summary-value { color: var(--in); }
 .sd-debt-summary { margin-top: 6px; }
 .sd-counts { font-size: 16px; }
-.sd-toolbar { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 8px; }
+.sd-toolbar { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 8px; gap: 12px; flex-wrap: wrap; }
+.sd-toolbar-right { display: flex; align-items: center; gap: 12px; }
 .sd-check { font-size: 14px; cursor: pointer; }
+.sd-reason { font-size: 13px; }
+.sd-reason-warn { color: var(--warn); font-weight: 600; }
+.sd-reason-bad { color: var(--out); font-weight: 600; }
+.sd-reason-ok { color: var(--in); }
 
 /* ---------- Сверка SD: детализация клиента 1С vs SalesDoc ---------- */
 .rc-period { font-size: 13px; margin: -4px 0 12px; }

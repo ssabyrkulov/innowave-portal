@@ -31,8 +31,23 @@ export default function SalesDocPage() {
   const [debt, setDebt] = useState(null)
   const [onlyDiff, setOnlyDiff] = useState(true)
   const [loading, setLoading] = useState(false)
+  const [reasonsLoading, setReasonsLoading] = useState(false)
   const [error, setError] = useState(null)
   const [detail, setDetail] = useState(null)
+
+  // «Разобрать причины»: одна массовая выгрузка из SalesDoc, причина по всем
+  // строкам сразу. Отдельно от обычной загрузки — она остаётся быстрой.
+  async function loadReasons() {
+    setReasonsLoading(true)
+    setError(null)
+    try {
+      setDebt(await api.salesdocDebt(onlyDiff, true))
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setReasonsLoading(false)
+    }
+  }
 
   useEffect(() => {
     api.salesdocStatus()
@@ -184,7 +199,14 @@ export default function SalesDocPage() {
                 onChange={(e) => { setOnlyDiff(e.target.checked); loadAll(range, e.target.checked) }} />
               {' '}Только расхождения
             </label>
-            <span className="muted">{debt.rows.length} строк</span>
+            <div className="sd-toolbar-right">
+              <button className="btn btn-sm" disabled={reasonsLoading || loading}
+                onClick={loadReasons}
+                title="Одна выгрузка из SalesDoc — причина расхождения по всем строкам. Может занять до минуты.">
+                {reasonsLoading ? 'Считаю причины…' : '🔎 Разобрать причины'}
+              </button>
+              <span className="muted">{debt.rows.length} строк</span>
+            </div>
           </div>
 
           <div className="table-wrap cards">
@@ -197,11 +219,12 @@ export default function SalesDocPage() {
                   <th className="num">Долг SD</th>
                   <th className="num">Разница</th>
                   <th>Где есть</th>
+                  <th>Причина</th>
                 </tr>
               </thead>
               <tbody>
                 {debt.rows.length === 0 && (
-                  <tr><td colSpan={6} className="muted center">Расхождений нет 🎉</td></tr>
+                  <tr><td colSpan={7} className="muted center">Расхождений нет 🎉</td></tr>
                 )}
                 {debt.rows.map((r, i) => (
                   <tr key={i}>
@@ -223,6 +246,13 @@ export default function SalesDocPage() {
                         <span className="badge badge-overdue">только 1С</span>
                       ) : (
                         <span className="badge badge-overdue">только SD</span>
+                      )}
+                    </td>
+                    <td data-label="Причина">
+                      {r.reason ? (
+                        <span className={`sd-reason sd-reason-${r.reason_level}`}>{r.reason}</span>
+                      ) : (
+                        <span className="muted">—</span>
                       )}
                     </td>
                   </tr>

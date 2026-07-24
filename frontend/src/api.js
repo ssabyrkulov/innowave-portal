@@ -141,8 +141,13 @@ export const api = {
   stockBalances: () => request('/balances/stock'),
 
   salesdocStatus: () => request('/salesdoc/status'),
-  salesdocDebt: (onlyDiff = false) =>
-    request(`/salesdoc/debt${onlyDiff ? '?only_diff=true' : ''}`),
+  salesdocDebt: (onlyDiff = false, withReason = false) => {
+    const qs = new URLSearchParams()
+    if (onlyDiff) qs.set('only_diff', 'true')
+    if (withReason) qs.set('with_reason', 'true')
+    const s = qs.toString()
+    return request(`/salesdoc/debt${s ? `?${s}` : ''}`)
+  },
   salesdocPeriod: (dateFrom, dateTo) =>
     request(`/salesdoc/period?date_from=${dateFrom}&date_to=${dateTo}`),
   salesdocAnalyze: (dateFrom, dateTo) =>
