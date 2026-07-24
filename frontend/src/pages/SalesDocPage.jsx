@@ -280,6 +280,19 @@ function ReconcileDetailModal({ row, onClose }) {
   const cRet = (oneC?.returns || []).filter((r) => inRange(r.date, dr))
   const sum = (arr, k) => arr.reduce((s, x) => s + Number(x[k] || 0), 0)
 
+  // Суммы по компонентам с обеих сторон — по ним ставим «диагноз» расхождения.
+  const s1 = sum(cShip, 'amount')
+  const p1 = sum(cPay, 'amount_kgs')
+  const r1 = sum(cRet, 'amount')
+  const sSd = Number(sd?.orders?.total || 0)
+  const pSd = Number(sd?.payments?.total || 0)
+  const rSd = Number(sd?.returns?.total || 0)
+  // Показываем вердикт, когда данные готовы (или точка есть лишь в одной системе).
+  const bothLoaded = row.in_1c && row.in_sd ? sd != null : true
+  const diag = !loading && !err && bothLoaded
+    ? diagnoseReconcile(row, { s1, p1, r1, sSd, pSd, rSd })
+    : null
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
@@ -300,17 +313,19 @@ function ReconcileDetailModal({ row, onClose }) {
         {err && <div className="error">SalesDoc: {err}</div>}
         {sd?.errors?.length > 0 && <div className="error">SalesDoc: {sd.errors.join('; ')}</div>}
 
+        {diag && <ReconcileVerdict diag={diag} />}
+
         <div className="rc-cols">
           {/* ---- 1С ---- */}
           <div className="rc-col">
             <div className="rc-col-title">1С {row.in_1c ? '' : '· нет'}</div>
-            <RcSection title="Реализации" total={sum(cShip, 'amount')} count={cShip.length}
+            <RcSection title="Реализации" total={s1} count={cShip.length}
               rows={cShip.map((s) => [s.date, s.doc_number || '—', money(s.amount)])}
               head={['Дата', 'Документ', 'Сумма']} />
-            <RcSection title="Оплаты" total={sum(cPay, 'amount_kgs')} count={cPay.length}
+            <RcSection title="Оплаты" total={p1} count={cPay.length}
               rows={cPay.map((p) => [p.date, p.kind === 'cash' ? 'касса' : 'банк', money(p.amount_kgs)])}
               head={['Дата', 'Тип', 'Сумма']} />
-            <RcSection title="Возвраты" total={sum(cRet, 'amount')} count={cRet.length}
+            <RcSection title="Возвраты" total={r1} count={cRet.length}
               rows={cRet.map((r) => [r.date, money(r.amount)])} head={['Дата', 'Сумма']} />
           </div>
 
@@ -342,6 +357,91 @@ function ReconcileDetailModal({ row, onClose }) {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Ставит «диагноз» расхождения долга 1С ↔ SalesDoc: раскладывает разницу по
+// компонентам (реализации / возвраты / оплаты) и называет вероятную причину
+// человеческим языком — «в SalesDoc не проведены возвраты» и т. п.
+function diagnoseReconcile(row, t) {
+  // Точка есть лишь в одной системе — причина очевидна, компоненты не нужны.
+  if (!row.in_sd) {
+    return {
+      level: 'bad', head: 'Точки нет в SalesDoc',
+      lines: ['Клиент есть только в 1С — сверять не с чем. Свяжите точку во ' +
+        'вкладке «Сопоставление точек 1С ↔ SalesDoc» или это новая/закрытая точка.'],
+    }
+  }
+  if (!row.in_1c) {
+    return {
+      level: 'bad', head: 'Точки нет в 1С',
+      lines: ['Клиент есть только в SalesDoc — в 1С отгрузок и оплат по нему нет.'],
+    }
+  }
+
+  const delta = Number(row.sd_debt || 0) - Number(row.our_debt || 0)
+  if (Math.abs(delta) < 1) {
+    return { level: 'ok', head: 'Долг сходится — расхождения нет', lines: [] }
+  }
+
+  // Вклад каждого компонента в разницу долга (насколько SalesDoc показывает больше):
+  //  реализации: больше реализаций в SD → выше долг в SD
+  //  возвраты:   меньше возвратов в SD → выше долг в SD
+  //  оплаты:     меньше оплат в SD    → выше долг в SD
+  const factors = [
+    { key: 'sales', c: t.sSd - t.s1 },
+    { key: 'returns', c: t.r1 - t.rSd },
+    { key: 'pay', c: t.p1 - t.pSd },
+  ]
+  const phrase = (f) => {
+    const a = money(Math.abs(f.c))
+    if (f.key === 'sales') {
+      return f.c > 0
+        ? `В SalesDoc реализаций больше на ${a} — вероятно, в 1С не проведены отгрузки.`
+        : `В 1С реализаций больше на ${a} — вероятно, в SalesDoc не проведены отгрузки.`
+    }
+    if (f.key === 'returns') {
+      return f.c > 0
+        ? `В SalesDoc не проведены возвраты на ${a} (в 1С они есть).`
+        : `В SalesDoc возвратов больше на ${a} (в 1С их нет или меньше).`
+    }
+    return f.c > 0
+      ? `В SalesDoc не проведены оплаты на ${a} (в 1С они есть).`
+      : `В 1С не загружены оплаты на ${a} — вероятно, наличные (в SalesDoc они есть).`
+  }
+
+  // Значимые факторы (> 500 сом), по убыванию влияния.
+  const sig = factors
+    .filter((f) => Math.abs(f.c) >= 500)
+    .sort((a, b) => Math.abs(b.c) - Math.abs(a.c))
+
+  if (sig.length === 0) {
+    return {
+      level: 'warn',
+      head: `Долг расходится на ${money(delta)}, но по компонентам не раскладывается`,
+      lines: ['Реализации, возвраты и оплаты в обеих системах близки. Возможна ' +
+        'разница из-за курса валют, входящего остатка или периода — попробуйте ' +
+        'расширить даты выше.'],
+    }
+  }
+
+  return { level: 'warn', head: phrase(sig[0]), lines: sig.slice(1).map(phrase) }
+}
+
+function ReconcileVerdict({ diag }) {
+  const icon = diag.level === 'ok' ? '✅' : diag.level === 'bad' ? '⛔' : '⚠️'
+  return (
+    <div className={`sd-diag sd-diag-${diag.level}`}>
+      <div className="sd-diag-head">
+        <span className="sd-diag-icon">{icon}</span>
+        <span>{diag.head}</span>
+      </div>
+      {diag.lines.length > 0 && (
+        <ul className="sd-diag-list">
+          {diag.lines.map((l, i) => <li key={i}>{l}</li>)}
+        </ul>
+      )}
     </div>
   )
 }

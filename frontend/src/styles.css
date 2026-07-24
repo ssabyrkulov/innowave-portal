@@ -2608,6 +2608,27 @@ button.summary-card {
   font-weight: 800; font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
   padding-bottom: 6px; border-bottom: 2px solid var(--action); margin-bottom: 10px;
 }
+
+/* «Диагноз» расхождения — вердикт вверху карточки сверки */
+.sd-diag {
+  border-radius: 10px; padding: 12px 14px; margin: 4px 0 14px;
+  border: 1px solid var(--border);
+}
+.sd-diag-head {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-weight: 700; font-size: 15px; line-height: 1.35;
+}
+.sd-diag-icon { flex: none; font-size: 16px; }
+.sd-diag-list {
+  margin: 8px 0 0; padding-left: 30px; font-size: 13px; color: var(--muted);
+}
+.sd-diag-list li { margin: 3px 0; }
+.sd-diag-warn { background: var(--warn-soft); border-color: var(--warn); }
+.sd-diag-warn .sd-diag-head { color: var(--warn); }
+.sd-diag-bad { background: var(--out-soft); border-color: var(--out); }
+.sd-diag-bad .sd-diag-head { color: var(--out); }
+.sd-diag-ok { background: var(--in-soft); border-color: var(--in); }
+.sd-diag-ok .sd-diag-head { color: var(--in); }
 .rc-section { margin-bottom: 14px; }
 .rc-section-head {
   display: flex; justify-content: space-between; align-items: baseline;
