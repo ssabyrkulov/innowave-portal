@@ -29,9 +29,31 @@ _cache_lock = threading.Lock()
 _last_sync: float | None = None
 
 
+# Кэш ВЫЧИСЛЕННЫХ результатов (маленькие словари: клиент → сумма). В отличие
+# от кэша сырых выгрузок он занимает килобайты, а не сотни мегабайт, поэтому
+# именно им кэшируем тяжёлые агрегаты (компоненты сверки, фирмы клиентов).
+_result_cache: dict[str, tuple[float, object]] = {}
+
+
 def clear_cache() -> None:
     with _cache_lock:
         _cache.clear()
+        _result_cache.clear()
+
+
+def _cached_result(key: str, ttl: float, build):
+    """Вернуть результат из кэша результатов или посчитать и запомнить."""
+    now = time.time()
+    with _cache_lock:
+        hit = _result_cache.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    value = build()
+    global _last_sync
+    with _cache_lock:
+        _result_cache[key] = (time.time(), value)
+        _last_sync = time.time()
+    return value
 
 
 def last_sync() -> float | None:
@@ -421,23 +443,32 @@ def analyze(date_from, date_to, store_org: dict) -> dict:
 def fetch_client_store_orgs(store_org: dict, date_from, date_to, use_cache: bool = False) -> dict:
     """По заказам SalesDoc определяет фирму каждого клиента: SD_id клиента
     (в нижнем регистре) → множество организаций (по складам его заказов).
-    store_org: {store_sd_id(lower): org}."""
-    params = {"filter": {
-        "include": "all",
-        "status": [1, 2, 3, 4, 5],
-        "period": {"date": {"from": date_from, "to": date_to}},
-    }}
-    rows = call_all("getOrder", ("orders", "order"), params, use_cache=use_cache)
-    out: dict[str, set] = {}
-    for o in rows:
-        cli = (o.get("client") or {}).get("SD_id")
-        st = (o.get("store") or {}).get("SD_id")
-        if not cli:
-            continue
-        org = store_org.get(str(st or "").lower())
-        if org:
-            out.setdefault(str(cli).lower(), set()).add(org)
-    return out
+    store_org: {store_sd_id(lower): org}.
+
+    Кэшируем сам результат (маленькая карта), а не сырую выгрузку заказов —
+    иначе в памяти оседают сотни мегабайт."""
+    def build() -> dict:
+        params = {"filter": {
+            "include": "all",
+            "status": [1, 2, 3, 4, 5],
+            "period": {"date": {"from": date_from, "to": date_to}},
+        }}
+        out: dict[str, set] = {}
+        for o in call_all("getOrder", ("orders", "order"), params):
+            cli = (o.get("client") or {}).get("SD_id")
+            st = (o.get("store") or {}).get("SD_id")
+            if not cli:
+                continue
+            org = store_org.get(str(st or "").lower())
+            if org:
+                out.setdefault(str(cli).lower(), set()).add(org)
+        return out
+
+    if not use_cache:
+        return build()
+    key = json.dumps(["client_store_orgs", date_from, date_to,
+                      sorted(store_org.items())], ensure_ascii=False)
+    return _cached_result(key, CACHE_TTL, build)
 
 
 def fetch_clients(use_cache: bool = False) -> list[dict]:
@@ -705,7 +736,7 @@ def returns_diagnostic(date_from: str, date_to: str) -> dict:
     def_total = 0.0
     for r in call_all("getOrderDefect",
                       ("defects", "orderDefects", "defect", "orderDefect", "orders"),
-                      {"filter": period}, use_cache=True):
+                      {"filter": period}):
         amt = float(r.get("summa") or r.get("totalSumma") or 0)
         k = _client_key_any(r.get("client"))
         def_count += 1
@@ -718,7 +749,7 @@ def returns_diagnostic(date_from: str, date_to: str) -> dict:
     shelf_keys: dict[str, set] = {}
     shelf_count = 0
     shelf_total = 0.0
-    for p in call_all("getPayment", ("payments", "payment"), {"filter": period}, use_cache=True):
+    for p in call_all("getPayment", ("payments", "payment"), {"filter": period}):
         if _to_int(p.get("transactionType")) != SHELF_RETURN_TXN:
             continue
         amt = float(p.get("amount") or 0)
@@ -752,12 +783,19 @@ def fetch_orders_total(date_from: str, date_to: str, store_ids=None,
                        use_cache: bool = False) -> dict:
     """Сумма заказов (реализаций) за период и разбивка по клиентам (по имени).
     store_ids — набор складов выбранной фирмы (None = все)."""
+    if use_cache:
+        key = json.dumps(["orders_total", date_from, date_to,
+                          sorted(store_ids) if store_ids else None], ensure_ascii=False)
+        return _cached_result(
+            key, CACHE_TTL,
+            lambda: fetch_orders_total(date_from, date_to, store_ids, use_cache=False),
+        )
     params = {"filter": {
         "include": "all",
         "status": sorted(SHIPPED_STATUSES),  # только отгруженные
         "period": {"date": {"from": date_from, "to": date_to}},
     }}
-    rows = call_all("getOrder", ("orders", "order"), params, use_cache=use_cache)
+    rows = call_all("getOrder", ("orders", "order"), params)
     total = 0.0
     by_client: dict[str, float] = {}
     for o in rows:
@@ -823,8 +861,14 @@ def start_background_warmer(interval: float = CACHE_TTL - 120) -> None:
 
 def fetch_payments_total(date_from: str, date_to: str, use_cache: bool = False) -> dict:
     """Сумма оплат за период (по paymentDate)."""
+    if use_cache:
+        key = json.dumps(["payments_total", date_from, date_to], ensure_ascii=False)
+        return _cached_result(
+            key, CACHE_TTL,
+            lambda: fetch_payments_total(date_from, date_to, use_cache=False),
+        )
     params = {"filter": {"period": {"date": {"from": date_from, "to": date_to}}}}
-    rows = call_all("getPayment", ("payments", "payment"), params, use_cache=use_cache)
+    rows = call_all("getPayment", ("payments", "payment"), params)
     total, count = 0.0, 0
     for p in rows:
         if _to_int(p.get("transactionType")) != PAYMENT_TXN:  # только «Оплата»
@@ -856,8 +900,16 @@ def fetch_reconcile_components(date_from: str, date_to: str, store_ids=None,
     возвраты и оплаты — общие по клиенту (склад в этих методах недоступен).
 
     Всё последовательно (в call_all нет параллелизма), чтобы не гасить токен.
-    Сырые списки кэшируются (use_cache) — фильтрация по складу идёт уже над
-    кэшем, поэтому смена фирмы не требует новой выгрузки."""
+    Кэшируем ИТОГ (карты клиент → сумма, это килобайты), а не сырые выгрузки
+    за 3 года: раньше они оседали в памяти сотнями мегабайт и роняли инстанс."""
+    if use_cache:
+        key = json.dumps(["reconcile_components", date_from, date_to,
+                          sorted(store_ids) if store_ids else None], ensure_ascii=False)
+        return _cached_result(
+            key, CACHE_TTL,
+            lambda: fetch_reconcile_components(date_from, date_to, store_ids, use_cache=False),
+        )
+
     def accumulate(cli, amt, by_sd, by_code):
         key = _client_key_sd(cli)
         if key:
@@ -873,7 +925,7 @@ def fetch_reconcile_components(date_from: str, date_to: str, store_ids=None,
     sales_sd: dict[str, float] = {}
     sales_code: dict[str, float] = {}
     oparams = {"filter": {"include": "all", "status": sorted(SHIPPED_STATUSES), **period}}
-    for o in call_all("getOrder", ("orders", "order"), oparams, use_cache=use_cache):
+    for o in call_all("getOrder", ("orders", "order"), oparams):
         if o.get("status") not in SHIPPED_STATUSES:
             continue
         if not _store_ok(o.get("store"), store_ids):
@@ -888,7 +940,7 @@ def fetch_reconcile_components(date_from: str, date_to: str, store_ids=None,
         for r in call_all(
             "getOrderDefect",
             ("defects", "orderDefects", "defect", "orderDefect", "orders"),
-            {"filter": period}, use_cache=use_cache,
+            {"filter": period},
         ):
             amt = float(r.get("summa") or r.get("totalSumma") or 0)
             accumulate(r.get("client"), amt, returns_sd, returns_code)
@@ -900,8 +952,7 @@ def fetch_reconcile_components(date_from: str, date_to: str, store_ids=None,
     # а не документ getOrderDefect. Считаем её возвратом, чтобы сходилось с 1С.
     pay_sd: dict[str, float] = {}
     pay_code: dict[str, float] = {}
-    for p in call_all("getPayment", ("payments", "payment"), {"filter": period},
-                      use_cache=use_cache):
+    for p in call_all("getPayment", ("payments", "payment"), {"filter": period}):
         txn = _to_int(p.get("transactionType"))
         amt = float(p.get("amount") or 0)
         if txn == PAYMENT_TXN:

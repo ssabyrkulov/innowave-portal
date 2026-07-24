@@ -131,11 +131,13 @@ def on_startup() -> None:
     run_mini_migrations()
     backfill_organization()
     seed_initial_admin()
-    # Держим данные SalesDoc «тёплыми» в памяти — тогда сверка открывается
-    # мгновенно. Фоновый поток, старт не блокирует (при выключенной
-    # интеграции — no-op).
-    from .services import salesdoc
-    salesdoc.start_background_warmer()
+    # Фоновый прогрев кэша SalesDoc по умолчанию ВЫКЛЮЧЕН: он держал в памяти
+    # сырые выгрузки за 3 года и на инстансе 512 МБ приводил к падению по
+    # памяти (перезапуск → снова прогрев → 502). Включается осознанно через
+    # SALESDOC_WARM_CACHE=1 на инстансе с достаточной памятью.
+    if os.environ.get("SALESDOC_WARM_CACHE") == "1":
+        from .services import salesdoc
+        salesdoc.start_background_warmer()
 
 
 @app.exception_handler(Exception)
