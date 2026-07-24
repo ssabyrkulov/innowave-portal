@@ -141,10 +141,11 @@ export const api = {
   stockBalances: () => request('/balances/stock'),
 
   salesdocStatus: () => request('/salesdoc/status'),
-  salesdocDebt: (onlyDiff = false, withReason = false, refresh = false) => {
+  // Причина расхождения считается всегда (из зеркала — бесплатно), поэтому
+  // отдельный флаг не нужен: сервер включает её по умолчанию.
+  salesdocDebt: (onlyDiff = false, refresh = false) => {
     const qs = new URLSearchParams()
     if (onlyDiff) qs.set('only_diff', 'true')
-    if (withReason) qs.set('with_reason', 'true')
     if (refresh) qs.set('refresh', 'true')
     const s = qs.toString()
     return request(`/salesdoc/debt${s ? `?${s}` : ''}`)

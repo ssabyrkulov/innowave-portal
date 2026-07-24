@@ -38,23 +38,8 @@ export default function SalesDocPage() {
   const [debt, setDebt] = useState(null)
   const [onlyDiff, setOnlyDiff] = useState(true)
   const [loading, setLoading] = useState(false)
-  const [reasonsLoading, setReasonsLoading] = useState(false)
   const [error, setError] = useState(null)
   const [detail, setDetail] = useState(null)
-
-  // «Разобрать причины»: одна массовая выгрузка из SalesDoc, причина по всем
-  // строкам сразу. Отдельно от обычной загрузки — она остаётся быстрой.
-  async function loadReasons() {
-    setReasonsLoading(true)
-    setError(null)
-    try {
-      setDebt(await api.salesdocDebt(onlyDiff, true))
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setReasonsLoading(false)
-    }
-  }
 
   useEffect(() => {
     api.salesdocStatus()
@@ -74,7 +59,7 @@ export default function SalesDocPage() {
       // провоцируют повторный логин, который гасит токен предыдущего.
       // Долг — первым: при refresh он сбрасывает кэш, дальше период тянется
       // уже свежим. Обычно оба читаются из кэша — мгновенно.
-      const d = await api.salesdocDebt(od, false, refresh)
+      const d = await api.salesdocDebt(od, refresh)
       setDebt(d)
       const p = await api.salesdocPeriod(r.from, r.to)
       setPeriod(p)
@@ -217,14 +202,7 @@ export default function SalesDocPage() {
                 onChange={(e) => { setOnlyDiff(e.target.checked); loadAll(range, e.target.checked) }} />
               {' '}Только расхождения
             </label>
-            <div className="sd-toolbar-right">
-              <button className="btn btn-sm" disabled={reasonsLoading || loading}
-                onClick={loadReasons}
-                title="Одна выгрузка из SalesDoc — причина расхождения по всем строкам. Может занять до минуты.">
-                {reasonsLoading ? 'Считаю причины…' : '🔎 Разобрать причины'}
-              </button>
-              <span className="muted">{debt.rows.length} строк</span>
-            </div>
+            <span className="muted">{debt.rows.length} строк</span>
           </div>
 
           <div className="table-wrap cards">

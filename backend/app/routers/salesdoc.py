@@ -195,7 +195,7 @@ def reconcile_debt(
     db: Session = Depends(get_db),
     user: models.User = Depends(can_view),
     only_diff: bool = Query(default=False, description="Только строки с расхождением"),
-    with_reason: bool = Query(default=False, description="Посчитать причину расхождения по всем строкам"),
+    with_reason: bool = Query(default=True, description="Считать причину расхождения (из зеркала — бесплатно)"),
     refresh: bool = Query(default=False, description="Обновить данные SalesDoc (сбросить кэш)"),
     org: str = Query(default="all"),
 ):
@@ -333,22 +333,16 @@ def reconcile_debt(
     # «Причина расхождения» по всем строкам сразу — одна массовая выгрузка из
     # SalesDoc (заказы/возвраты/оплаты), группируем по клиенту. Считаем только
     # по запросу: обычная загрузка дебиторки остаётся быстрой.
-    if with_reason:
+    # Причина расхождения считается по зеркалу — это обычная группировка в
+    # базе, поэтому идёт всегда, без отдельной кнопки. Пока зеркало не
+    # наполнено (первые секунды после старта), колонка просто пустая — список
+    # из-за неё не тормозит.
+    if with_reason and salesdoc_mirror.status(db)["ready"]:
         df, dt = salesdoc.reason_window()
-        store_ids = _store_ids_for_org(db, org)
-        if salesdoc_mirror.status(db)["ready"]:
-            # Из зеркала — обычная группировка в базе, мгновенно.
-            comp = salesdoc_mirror.reconcile_components(
-                db, date.fromisoformat(df), date.fromisoformat(dt), store_ids
-            )
-        else:
-            # Зеркало ещё не наполнено — считаем напрямую (медленно, разово).
-            try:
-                comp = salesdoc.fetch_reconcile_components(
-                    df, dt, store_ids, use_cache=True
-                )
-            except salesdoc.SalesDocError as e:
-                raise HTTPException(status_code=502, detail=str(e))
+        comp = salesdoc_mirror.reconcile_components(
+            db, date.fromisoformat(df), date.fromisoformat(dt),
+            _store_ids_for_org(db, org),
+        )
         for r in rows:
             lvl, txt = _diagnose_reason(r, comp)
             r["reason_level"] = lvl
