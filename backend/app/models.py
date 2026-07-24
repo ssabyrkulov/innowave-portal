@@ -292,6 +292,69 @@ class SalesDocStore(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocOrder(Base):
+    """Зеркало заказа (реализации) SalesDoc.
+
+    Серверный фильтр по клиенту SalesDoc не соблюдает — на один клиент он всё
+    равно отдаёт весь журнал (проверено: 1173 записи и с фильтром, и без).
+    Поэтому держим копию журнала у себя: карточка клиента и сверка читаются
+    обычным SQL — мгновенно и без обращения к SalesDoc.
+    """
+
+    __tablename__ = "salesdoc_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    client_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    client_code_1c: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    store_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    returns_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    code_1c: Mapped[str | None] = mapped_column(String, nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SalesDocPayment(Base):
+    """Зеркало операции журнала оплат SalesDoc.
+
+    Тут же живут и возвраты: в SalesDoc возврат товара — это операция
+    «Возврат с полки» (transactionType=9), а не отдельный документ
+    (getOrderDefect за 3 года пуст). Поэтому храним журнал целиком и
+    разделяем по виду операции при чтении.
+    """
+
+    __tablename__ = "salesdoc_payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    client_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    client_code_1c: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    txn: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    type_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SalesDocSyncState(Base):
+    """Состояние синхронизации зеркала: когда последний раз обновляли и как.
+
+    kind — 'orders' | 'payments'. Хранит момент последней полной выгрузки и
+    последней догрузки изменений, чтобы дельту брать с нужной точки.
+    """
+
+    __tablename__ = "salesdoc_sync_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    kind: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    last_full_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_delta_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rows: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
 class SalesDocClientLink(Base):
     """Ручная связка контрагента 1С с клиентом SalesDoc (по SD_id).
 

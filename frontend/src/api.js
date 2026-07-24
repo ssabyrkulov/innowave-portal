@@ -160,6 +160,9 @@ export const api = {
   salesdocReturnsDebug: (dateFrom, dateTo) =>
     request(`/salesdoc/returns-debug?date_from=${dateFrom}&date_to=${dateTo}`),
   salesdocSpeedProbe: () => request('/salesdoc/speed-probe'),
+  salesdocMirror: () => request('/salesdoc/mirror'),
+  salesdocMirrorSync: (full = false) =>
+    request(`/salesdoc/mirror/sync${full ? '?full=true' : ''}`, { method: 'POST' }),
   salesdocMatching: () => request('/salesdoc/matching'),
   salesdocLink: (client_1c, sd_id) =>
     request('/salesdoc/link', { method: 'POST', body: { client_1c, sd_id } }),

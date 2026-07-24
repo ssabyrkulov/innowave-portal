@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..database import get_db
 from ..deps import require_roles
-from ..services import salesdoc
+from ..services import salesdoc, salesdoc_mirror
 from .receipts import CUSTOMER_PAYMENT_PREFIX, receivables
 from .sales import sales_summary
 
@@ -620,6 +620,19 @@ def client_detail(
     df, dt = date_from.isoformat(), date_to.isoformat()
     store_ids = _store_ids_for_org(db, org)  # реализации делим по складу
 
+    # Читаем из зеркала — мгновенно, без обращения к SalesDoc. Свежесть
+    # поддерживает фоновая синхронизация (дельта каждые 5 минут).
+    state = salesdoc_mirror.status(db)
+    if state["ready"]:
+        data = salesdoc_mirror.client_detail(
+            db, sd_id, code_1c, date_from, date_to, store_ids
+        )
+        data.update({"sd_id": sd_id, "code_1c": code_1c, "date_from": df,
+                     "date_to": dt, "source": "mirror",
+                     "synced_at": state["synced_at"]})
+        return data
+
+    # Зеркало ещё не наполнено (первый запуск) — отдаём напрямую из SalesDoc.
     def safe(fn, *extra):
         try:
             return fn(sd_id, code_1c, df, dt, *extra), None
@@ -628,23 +641,10 @@ def client_detail(
 
     orders, e1 = safe(salesdoc.fetch_client_orders, store_ids)
     payments, e2 = safe(salesdoc.fetch_client_payments)
-    returns, e3 = safe(salesdoc.fetch_client_returns)
-
-    # Возвраты SalesDoc = документы-дефекты (getOrderDefect) + «Возврат с полки»
-    # из журнала оплат (тип 9). Второе — основной способ, поэтому объединяем.
-    shelf = (payments or {}).pop("shelf_returns", None)
-    if shelf and shelf["count"]:
-        if returns is None:
-            returns = {"total": 0.0, "count": 0, "items": []}
-        returns = {
-            "total": round(returns["total"] + shelf["total"], 2),
-            "count": returns["count"] + shelf["count"],
-            "items": sorted(
-                returns["items"] + shelf["items"],
-                key=lambda x: x["date"], reverse=True,
-            ),
-        }
-
+    # getOrderDefect за 3 года пуст (проверено замером) — возвраты живут в
+    # журнале оплат как «Возврат с полки», их и берём.
+    shelf = (payments or {}).pop("shelf_returns", None) or {
+        "total": 0.0, "count": 0, "items": []}
     return {
         "sd_id": sd_id,
         "code_1c": code_1c,
@@ -652,6 +652,27 @@ def client_detail(
         "date_to": dt,
         "orders": orders,
         "payments": payments,
-        "returns": returns,
-        "errors": [e for e in (e1, e2, e3) if e],
+        "returns": shelf,
+        "source": "live",
+        "synced_at": None,
+        "errors": [e for e in (e1, e2) if e],
     }
+
+
+@router.get("/mirror")
+def mirror_status(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+):
+    """Свежесть зеркала SalesDoc: когда обновлялось, сколько записей."""
+    return salesdoc_mirror.status(db)
+
+
+@router.post("/mirror/sync")
+def mirror_sync(
+    _: models.User = Depends(can_edit),
+    full: bool = Query(default=False, description="Полная выгрузка вместо дельты"),
+):
+    """Обновить зеркало сейчас: дельта изменений (быстро) или полная выгрузка."""
+    _require_configured()
+    return salesdoc_mirror.sync(full=full)

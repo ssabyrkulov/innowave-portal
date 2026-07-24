@@ -150,11 +150,11 @@ def init_database() -> None:
     run_mini_migrations()
     backfill_organization()
     seed_initial_admin()
-    # Фоновый прогрев кэша SalesDoc по умолчанию ВЫКЛЮЧЕН — включается
-    # осознанно через SALESDOC_WARM_CACHE=1.
-    if os.environ.get("SALESDOC_WARM_CACHE") == "1":
-        from .services import salesdoc
-        salesdoc.start_background_warmer()
+    # Зеркало SalesDoc: держим копию журналов в базе и обновляем в фоне
+    # (дельта каждые 5 минут, полная выгрузка раз в сутки). Благодаря этому
+    # карточка клиента и сверка открываются мгновенно, без запросов к SalesDoc.
+    from .services import salesdoc_mirror
+    salesdoc_mirror.start_background_sync()
 
 
 def startup_sequence() -> None:

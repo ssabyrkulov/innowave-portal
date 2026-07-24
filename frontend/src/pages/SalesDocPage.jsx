@@ -301,6 +301,15 @@ function ReconcileDetailModal({ row, onClose }) {
   const [err, setErr] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  const [refreshing, setRefreshing] = useState(false)
+
+  function loadSd() {
+    return api.salesdocClientDetail({
+      sd_id: row.sd_id, code_1c: row.code_1C,
+      date_from: dr.from, date_to: dr.to,
+    })
+  }
+
   useEffect(() => {
     let alive = true
     setLoading(true)
@@ -311,10 +320,19 @@ function ReconcileDetailModal({ row, onClose }) {
         ? api.clientDetail(row.name).then((d) => alive && setOneC(d)).catch(() => {})
         : Promise.resolve(),
       (row.sd_id || row.code_1C)
-        ? api.salesdocClientDetail({
-            sd_id: row.sd_id, code_1c: row.code_1C,
-            date_from: dr.from, date_to: dr.to,
-          }).then((d) => alive && setSd(d)).catch((e) => alive && setErr(e.message))
+        ? loadSd().then((d) => {
+            if (!alive) return
+            setSd(d)
+            // Данные показаны мгновенно (из зеркала). Догружаем изменения в
+            // фоне и, если что-то поменялось, обновляем цифры на месте.
+            if (d.source === 'mirror') {
+              setRefreshing(true)
+              api.salesdocMirrorSync(false)
+                .then(() => alive && loadSd().then((fresh) => alive && setSd(fresh)))
+                .catch(() => {})
+                .finally(() => alive && setRefreshing(false))
+            }
+          }).catch((e) => alive && setErr(e.message))
         : Promise.resolve(),
     ]
     Promise.all(jobs).finally(() => alive && setLoading(false))
@@ -356,6 +374,10 @@ function ReconcileDetailModal({ row, onClose }) {
           <input type="date" className="filter-select" value={dr.to}
             onChange={(e) => setDr((d) => ({ ...d, to: e.target.value }))} />
           <span className="muted rc-period-hint">по умолчанию — вся история</span>
+          {refreshing && <span className="muted rc-refreshing">проверяю обновления…</span>}
+          {!refreshing && sd?.synced_at && (
+            <span className="muted rc-refreshing">данные на {fmtClock(Date.parse(sd.synced_at) / 1000)}</span>
+          )}
         </div>
         {loading && <div className="center muted">Загрузка…</div>}
         {err && <div className="error">SalesDoc: {err}</div>}
