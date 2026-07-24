@@ -156,7 +156,7 @@ def call(method: str, params: dict | None = None, _retry: bool = True) -> tuple[
             return call(method, params, _retry=False)
         msg = (resp or {}).get("message") or (resp or {}).get("error") or resp
         raise SalesDocError(f"SalesDoc: ошибка метода {method}: {msg}")
-    return resp["result"], resp.get("pagination")
+    return (resp.get("result") or {}), resp.get("pagination")
 
 
 def _pick(result: dict, keys: tuple[str, ...]) -> list:

@@ -1,10 +1,11 @@
 import os
 import time
+import traceback
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
@@ -130,6 +131,17 @@ def on_startup() -> None:
     run_mini_migrations()
     backfill_organization()
     seed_initial_admin()
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Необработанные исключения отдаём с текстом, а не «пустым» 500 — чтобы на
+    фронте вместо безликого «Ошибка запроса» была видна реальная причина."""
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Внутренняя ошибка: {type(exc).__name__}: {exc}"},
+    )
 
 
 @app.get("/healthz", tags=["health"])
