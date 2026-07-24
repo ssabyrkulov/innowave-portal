@@ -145,6 +145,8 @@ export default function SalesDocPage() {
 
       <ReturnsDebugPanel />
 
+      <SpeedProbePanel />
+
       <WarehouseReportPanel />
 
       <MatchingPanel onLinked={() => loadAll(range, onlyDiff)} />
@@ -660,6 +662,83 @@ function ReturnsDebugPanel() {
                   </span>
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Замер перед ускорением карточки: соблюдает ли SalesDoc фильтр по клиенту и
+// работает ли инкремент. От результата зависит, как строить быструю выгрузку.
+function SpeedProbePanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocSpeedProbe()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  const yes = (v) => (v ? '✅ да' : '❌ нет')
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} ⚡ Замер скорости SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Проверяю на живых данных, можно ли тянуть данные
+            клиента точечно (а не весь журнал за 3 года) и работает ли догрузка
+            «только изменённого». От этого зависит, как ускорить карточку.
+            Занимает до минуты — тянет журнал целиком для сравнения.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Замеряю…</div>}
+          {data && (
+            <div className="an-grid">
+              <AnRow label="Клиент для теста" value={data.client_name} />
+
+              <div className="an-sub">Реализации (getOrder)</div>
+              <AnRow label="Фильтр по клиенту работает"
+                value={yes(data.orders.server_filter_works)}
+                warn={!data.orders.server_filter_works} />
+              <AnRow label="С фильтром"
+                value={`${data.orders.with_client_filter.returned} зап. · ${data.orders.with_client_filter.ms} мс`} />
+              <AnRow label="Без фильтра (весь журнал)"
+                value={`${data.orders.without_filter.returned} зап. · ${data.orders.without_filter.ms} мс`} />
+              {data.orders.speedup && (
+                <AnRow label="Выигрыш" value={`в ${data.orders.speedup}× быстрее`} />
+              )}
+
+              <div className="an-sub">Возвраты (getOrderDefect)</div>
+              <AnRow label="Фильтр по клиенту работает"
+                value={yes(data.defects.server_filter_works)}
+                warn={!data.defects.server_filter_works} />
+              <AnRow label="С фильтром / без"
+                value={`${data.defects.with_client_filter.returned} / ${data.defects.without_filter.returned} зап.`} />
+
+              <div className="an-sub">Оплаты (getPayment)</div>
+              <AnRow label="Фильтр по типу операции работает"
+                value={yes(data.payments.type_filter_works)}
+                warn={!data.payments.type_filter_works} />
+              <AnRow label="Только оплаты / весь журнал"
+                value={`${data.payments.with_type_filter.returned} / ${data.payments.without_filter.returned} зап.`} />
+
+              <div className="an-sub">Догрузка изменений (dateUpdate)</div>
+              <AnRow label="Инкремент пригоден"
+                value={yes(data.incremental.usable)}
+                warn={!data.incremental.usable}
+                hint="если да — зеркало можно обновлять дельтой, а не перекачкой" />
+              <AnRow label={`Изменено с ${data.incremental.since}`}
+                value={`${data.incremental.by_dateUpdate.returned} зап. · ${data.incremental.by_dateUpdate.ms} мс`} />
+              <AnRow label="Появилось за тот же срок"
+                value={`${data.incremental.by_date.returned} зап.`} />
             </div>
           )}
         </div>

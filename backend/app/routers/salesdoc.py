@@ -427,6 +427,29 @@ def returns_debug(
     return data
 
 
+@router.get("/speed-probe")
+def speed_probe(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(can_view),
+    org: str = Query(default="all"),
+):
+    """Замер перед ускорением карточки клиента: соблюдает ли SalesDoc фильтр по
+    клиенту и работает ли инкремент по dateUpdate. Клиента берём сам — первый
+    из сверки, у которого есть ИД SalesDoc."""
+    _require_configured()
+    data = reconcile_debt(db=db, user=user, only_diff=False, org=org)
+    target = next((r for r in data["rows"] if r.get("sd_id") and r["in_sd"]), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Не нашёл клиента с ИД SalesDoc")
+    df, dt = salesdoc.reason_window()
+    try:
+        res = salesdoc.speed_probe(target["sd_id"], target.get("code_1C"), df, dt)
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    res["client_name"] = target["name"]
+    return res
+
+
 @router.get("/analyze")
 def analyze_structure(
     db: Session = Depends(get_db),

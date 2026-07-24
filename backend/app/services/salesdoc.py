@@ -779,6 +779,128 @@ def returns_diagnostic(date_from: str, date_to: str) -> dict:
     }
 
 
+def speed_probe(sd_id: str, code_1c: str | None, date_from: str, date_to: str) -> dict:
+    """Проверяет две вещи на живых данных SalesDoc, от которых зависит, как
+    строить быструю карточку клиента:
+
+    1) Соблюдает ли сервер фильтр по клиенту (params.client). Если да —
+       заказы/возвраты можно тянуть точечно и мгновенно, без кэша.
+    2) Работает ли инкремент по filter.period.dateUpdate — «отдай только то,
+       что изменилось». На нём строится дежурное зеркало оплат.
+
+    Только чтение, ничего не меняет. Замеряет время каждого варианта."""
+    out: dict = {"sd_id": sd_id, "code_1C": code_1c,
+                 "date_from": date_from, "date_to": date_to}
+    period = {"period": {"date": {"from": date_from, "to": date_to}}}
+    all_status = [1, 2, 3, 4, 5]
+
+    def timed(fn):
+        t0 = time.time()
+        try:
+            rows = fn()
+            return {"rows": rows, "ms": int((time.time() - t0) * 1000), "error": None}
+        except SalesDocError as e:
+            return {"rows": [], "ms": int((time.time() - t0) * 1000), "error": str(e)}
+
+    def mine(rows, getter):
+        """Сколько записей реально относятся к нашему клиенту."""
+        return sum(1 for r in rows if _client_matches(getter(r), sd_id, code_1c))
+
+    # --- 1. Заказы: с фильтром по клиенту vs без него ---
+    with_f = timed(lambda: call_all(
+        "getOrder", ("orders", "order"),
+        {"client": _client_ref(sd_id, code_1c),
+         "filter": {"include": "all", "status": all_status, **period}}))
+    without_f = timed(lambda: call_all(
+        "getOrder", ("orders", "order"),
+        {"filter": {"include": "all", "status": all_status, **period}}))
+
+    got = len(with_f["rows"])
+    mine_with = mine(with_f["rows"], lambda o: o.get("client"))
+    total_all = len(without_f["rows"])
+    # Фильтр считаем рабочим, если ответ заметно меньше общего журнала и
+    # состоит (почти) только из записей нашего клиента.
+    server_filter_works = bool(
+        not with_f["error"] and got and total_all
+        and got < total_all * 0.5 and mine_with >= got * 0.9
+    )
+    out["orders"] = {
+        "with_client_filter": {"returned": got, "of_this_client": mine_with,
+                               "ms": with_f["ms"], "error": with_f["error"]},
+        "without_filter": {"returned": total_all, "ms": without_f["ms"],
+                           "error": without_f["error"]},
+        "server_filter_works": server_filter_works,
+        "speedup": round(without_f["ms"] / with_f["ms"], 1)
+        if with_f["ms"] and not with_f["error"] else None,
+    }
+
+    # --- 2. Возвраты-документы: тот же тест ---
+    d_with = timed(lambda: call_all(
+        "getOrderDefect", ("defects", "orderDefects", "defect", "orderDefect", "orders"),
+        {"client": _client_ref(sd_id, code_1c), "filter": period}))
+    d_all = timed(lambda: call_all(
+        "getOrderDefect", ("defects", "orderDefects", "defect", "orderDefect", "orders"),
+        {"filter": period}))
+    out["defects"] = {
+        "with_client_filter": {"returned": len(d_with["rows"]), "ms": d_with["ms"],
+                               "error": d_with["error"]},
+        "without_filter": {"returned": len(d_all["rows"]), "ms": d_all["ms"],
+                           "error": d_all["error"]},
+        "server_filter_works": bool(
+            not d_with["error"] and d_all["rows"]
+            and len(d_with["rows"]) < len(d_all["rows"])
+        ),
+    }
+
+    # --- 3. Оплаты: фильтр по типу операции (клиентского фильтра у них нет) ---
+    p_typed = timed(lambda: call_all(
+        "getPayment", ("payments", "payment"),
+        {"filter": {"transactionType": PAYMENT_TXN, **period}}))
+    p_all = timed(lambda: call_all(
+        "getPayment", ("payments", "payment"), {"filter": period}))
+    typed_rows = p_typed["rows"]
+    only_pay = sum(1 for p in typed_rows if _to_int(p.get("transactionType")) == PAYMENT_TXN)
+    out["payments"] = {
+        "with_type_filter": {"returned": len(typed_rows), "really_type3": only_pay,
+                             "ms": p_typed["ms"], "error": p_typed["error"]},
+        "without_filter": {"returned": len(p_all["rows"]), "ms": p_all["ms"],
+                           "error": p_all["error"]},
+        "type_filter_works": bool(
+            not p_typed["error"] and typed_rows
+            and only_pay >= len(typed_rows) * 0.9
+            and len(typed_rows) < len(p_all["rows"])
+        ),
+    }
+
+    # --- 4. Инкремент: ловит ли dateUpdate свежие записи ---
+    # Берём «изменённые за последние 7 дней» и сравниваем с тем, сколько
+    # записей за этот же срок есть по обычной дате документа.
+    from datetime import date as _date, timedelta
+    today = _date.today()
+    week_ago = (today - timedelta(days=7)).isoformat()
+    upd = timed(lambda: call_all(
+        "getPayment", ("payments", "payment"),
+        {"filter": {"period": {"dateUpdate": {"from": week_ago, "to": today.isoformat()}}}}))
+    recent = timed(lambda: call_all(
+        "getPayment", ("payments", "payment"),
+        {"filter": {"period": {"date": {"from": week_ago, "to": today.isoformat()}}}}))
+    out["incremental"] = {
+        "since": week_ago,
+        "by_dateUpdate": {"returned": len(upd["rows"]), "ms": upd["ms"],
+                          "error": upd["error"]},
+        "by_date": {"returned": len(recent["rows"]), "ms": recent["ms"],
+                    "error": recent["error"]},
+        # Инкремент пригоден, если dateUpdate отдаёт не меньше, чем появилось
+        # новых за тот же период (иначе свежие записи будут теряться).
+        "usable": bool(
+            not upd["error"] and upd["rows"]
+            and len(upd["rows"]) >= len(recent["rows"])
+            and len(upd["rows"]) < len(p_all["rows"])
+        ),
+    }
+    return out
+
+
 def fetch_orders_total(date_from: str, date_to: str, store_ids=None,
                        use_cache: bool = False) -> dict:
     """Сумма заказов (реализаций) за период и разбивка по клиентам (по имени).
