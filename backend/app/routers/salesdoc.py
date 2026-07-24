@@ -580,6 +580,22 @@ def client_detail(
     orders, e1 = safe(salesdoc.fetch_client_orders, store_ids)
     payments, e2 = safe(salesdoc.fetch_client_payments)
     returns, e3 = safe(salesdoc.fetch_client_returns)
+
+    # Возвраты SalesDoc = документы-дефекты (getOrderDefect) + «Возврат с полки»
+    # из журнала оплат (тип 9). Второе — основной способ, поэтому объединяем.
+    shelf = (payments or {}).pop("shelf_returns", None)
+    if shelf and shelf["count"]:
+        if returns is None:
+            returns = {"total": 0.0, "count": 0, "items": []}
+        returns = {
+            "total": round(returns["total"] + shelf["total"], 2),
+            "count": returns["count"] + shelf["count"],
+            "items": sorted(
+                returns["items"] + shelf["items"],
+                key=lambda x: x["date"], reverse=True,
+            ),
+        }
+
     return {
         "sd_id": sd_id,
         "code_1c": code_1c,

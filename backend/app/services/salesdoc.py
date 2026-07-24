@@ -552,6 +552,10 @@ PAY_TXN = {
 }
 # В «оплаты» (деньги от клиента) идёт только транзакция типа «Оплата».
 PAYMENT_TXN = 3
+# Возврат товара в SalesDoc записывается не отдельным документом, а операцией
+# «Возврат с полки» (тип 9) в журнале оплат getPayment. Учитываем её как
+# возврат (в 1С это выгрузка возвратов).
+SHELF_RETURN_TXN = 9
 
 
 def fetch_payment_types() -> dict:
@@ -585,12 +589,19 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
     rows = call_all("getPayment", ("payments", "payment"), params)
     ptypes = fetch_payment_types()
     items, total, counted = [], 0.0, 0
+    shelf_items, shelf_total = [], 0.0  # «Возврат с полки» — это возвраты
     for p in rows:
         if not _client_matches(p.get("client"), sd_id, code_1c):
             continue
         # (клиент совпал)
         amt = float(p.get("amount") or 0)
         txn = _to_int(p.get("transactionType"))
+        # «Возврат с полки» (тип 9) — это возврат товара, а не оплата: уводим
+        # его в отдельный список, чтобы не мозолил глаза среди оплат.
+        if txn == SHELF_RETURN_TXN:
+            shelf_total += amt
+            shelf_items.append({"date": _day(p.get("paymentDate")), "amount": round(amt, 2)})
+            continue
         is_counted = txn == PAYMENT_TXN
         if is_counted:
             total += amt
@@ -610,9 +621,14 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
             "counted": is_counted,
         })
     items.sort(key=lambda x: x["date"], reverse=True)
+    shelf_items.sort(key=lambda x: x["date"], reverse=True)
     return {
         "total": round(total, 2), "count": counted, "items": items,
         "scanned": len(rows), "matched": len(items),
+        # Возвраты, спрятанные в журнале оплат как «Возврат с полки».
+        "shelf_returns": {
+            "total": round(shelf_total, 2), "count": len(shelf_items), "items": shelf_items,
+        },
     }
 
 
@@ -814,15 +830,19 @@ def fetch_reconcile_components(date_from: str, date_to: str, store_ids=None,
     except SalesDocError:
         pass
 
-    # --- Оплаты (только «Оплата», тип 3; общие по клиенту) ---
+    # --- Оплаты (тип 3) и «Возврат с полки» (тип 9) из журнала оплат ---
+    # В SalesDoc возврат товара — это операция «Возврат с полки» в getPayment,
+    # а не документ getOrderDefect. Считаем её возвратом, чтобы сходилось с 1С.
     pay_sd: dict[str, float] = {}
     pay_code: dict[str, float] = {}
     for p in call_all("getPayment", ("payments", "payment"), {"filter": period},
                       use_cache=use_cache):
-        if _to_int(p.get("transactionType")) != PAYMENT_TXN:
-            continue
+        txn = _to_int(p.get("transactionType"))
         amt = float(p.get("amount") or 0)
-        accumulate(p.get("client"), amt, pay_sd, pay_code)
+        if txn == PAYMENT_TXN:
+            accumulate(p.get("client"), amt, pay_sd, pay_code)
+        elif txn == SHELF_RETURN_TXN:
+            accumulate(p.get("client"), amt, returns_sd, returns_code)
 
     return {
         "sales": {"sd": sales_sd, "code": sales_code},
