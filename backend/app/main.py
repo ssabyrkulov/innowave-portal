@@ -70,6 +70,19 @@ app.add_middleware(
 )
 
 
+def db_target() -> str:
+    """Хост и имя БД без пароля — чтобы в логах было видно, к какой именно базе
+    подключается сервис (при смене DATABASE_URL сразу ясно, подхватилась ли)."""
+    try:
+        from .database import database_url
+        rest = database_url.split("://", 1)[-1]
+        creds, _, addr = rest.rpartition("@")
+        user = creds.split(":", 1)[0] if creds else ""
+        return f"{user + '@' if user else ''}{addr}"
+    except Exception:  # noqa: BLE001 — диагностика не должна ронять старт
+        return "(не удалось определить)"
+
+
 def wait_for_db(attempts: int = 12, base_delay: float = 2.0) -> None:
     """Ждёт готовности БД перед инициализацией.
 
@@ -79,6 +92,7 @@ def wait_for_db(attempts: int = 12, base_delay: float = 2.0) -> None:
     Повторяем подключение с нарастающей паузой, чтобы транзиентный таймаут
     не срывал выкладку.
     """
+    print(f"[startup] Подключаюсь к БД: {db_target()}", flush=True)
     last_err: Exception | None = None
     for i in range(attempts):
         try:
