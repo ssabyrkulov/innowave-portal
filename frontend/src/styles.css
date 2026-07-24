@@ -201,6 +201,7 @@ table {
 .nav-link {
   display: flex;
   align-items: center;
+  gap: 11px;
   text-decoration: none;
   color: var(--side-text);
   padding: 10px 14px;
@@ -210,6 +211,14 @@ table {
   font-weight: 400;
   letter-spacing: -0.01em;
 }
+
+.nav-ico {
+  flex: none;
+  width: 22px;
+  text-align: center;
+}
+
+.logout-ico { display: none; }
 
 .nav-link:hover {
   background: var(--side-hover);
@@ -282,6 +291,44 @@ table {
   overflow-x: auto;
   min-width: 0;
 }
+
+/* ---------- Сворачиваемая боковая панель (десктоп) ---------- */
+.sidebar-toggle {
+  align-self: flex-end;
+  width: 26px;
+  height: 26px;
+  margin: -8px -4px 4px 0;
+  border: 1px solid var(--side-border);
+  background: transparent;
+  color: var(--side-text);
+  border-radius: 0;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.sidebar-toggle:hover { background: var(--side-hover); color: var(--text); }
+
+.sidebar.collapsed {
+  width: 74px;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.sidebar.collapsed .sidebar-toggle { align-self: center; margin-right: 0; }
+.sidebar.collapsed .brand { justify-content: center; margin: 0 0 22px; }
+.sidebar.collapsed .brand-text,
+.sidebar.collapsed .user-text,
+.sidebar.collapsed .org-switch,
+.sidebar.collapsed .nav-txt {
+  display: none;
+}
+.sidebar.collapsed .nav-link { justify-content: center; gap: 0; padding: 10px 0; }
+.sidebar.collapsed .user-card { justify-content: center; padding: 0; }
+.sidebar.collapsed .sidebar-footer .btn-logout { padding: 9px 0; }
+.sidebar.collapsed .logout-ico { display: inline; font-size: 16px; }
 
 /* Мобильная оболочка (верхняя панель, нижние вкладки, лист «Ещё») —
    на десктопе скрыта, включается в @media (max-width: 840px). */

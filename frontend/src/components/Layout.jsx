@@ -57,7 +57,19 @@ export default function Layout() {
   const { user, logout, can } = useAuth()
   const [alerts, setAlerts] = useState(null)
   const [moreOpen, setMoreOpen] = useState(false)
+  // Свёрнутая боковая панель (только десктоп) — состояние запоминаем.
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem('pc_sidebar_collapsed') === '1'
+  )
   const location = useLocation()
+
+  function toggleSidebar() {
+    setCollapsed((c) => {
+      const next = !c
+      localStorage.setItem('pc_sidebar_collapsed', next ? '1' : '0')
+      return next
+    })
+  }
 
   // Обновляем счётчик нарушений при смене раздела (и при входе)
   useEffect(() => {
@@ -100,10 +112,19 @@ export default function Layout() {
   return (
     <div className="app">
       {/* ---------- Десктоп: боковое меню ---------- */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
+        <button
+          className="sidebar-toggle"
+          onClick={toggleSidebar}
+          title={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+          aria-label={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+        >
+          {collapsed ? '»' : '«'}
+        </button>
+
         <div className="brand">
           <div className="brand-mark">IW</div>
-          <div>
+          <div className="brand-text">
             <div className="brand-title">InnoWave Group</div>
             <div className="brand-sub">Корпоративный портал</div>
           </div>
@@ -113,14 +134,18 @@ export default function Layout() {
 
         <nav className="nav">
           {PRIMARY.map((i) => (
-            <NavLink key={i.to} to={i.to} end={i.end} className="nav-link">
-              {i.icon} {i.label}
+            <NavLink key={i.to} to={i.to} end={i.end} className="nav-link"
+              title={collapsed ? i.label : undefined}>
+              <span className="nav-ico">{i.icon}</span>
+              <span className="nav-txt">{i.label}</span>
               {i.badge && badge}
             </NavLink>
           ))}
           {secondaryVisible.map((i) => (
-            <NavLink key={i.to} to={i.to} className="nav-link">
-              {i.icon} {i.label}
+            <NavLink key={i.to} to={i.to} className="nav-link"
+              title={collapsed ? i.label : undefined}>
+              <span className="nav-ico">{i.icon}</span>
+              <span className="nav-txt">{i.label}</span>
             </NavLink>
           ))}
         </nav>
@@ -128,13 +153,15 @@ export default function Layout() {
         <div className="sidebar-footer">
           <div className="user-card">
             <div className="avatar">{initials}</div>
-            <div>
+            <div className="user-text">
               <div className="user-name">{user.full_name}</div>
               <div className="user-role">{ROLE_LABELS[user.role] || user.role}</div>
             </div>
           </div>
-          <button className="btn btn-ghost btn-logout" onClick={logout}>
-            Выйти
+          <button className="btn btn-ghost btn-logout" onClick={logout}
+            title={collapsed ? 'Выйти' : undefined}>
+            <span className="nav-txt">Выйти</span>
+            <span className="logout-ico">⎋</span>
           </button>
         </div>
       </aside>
