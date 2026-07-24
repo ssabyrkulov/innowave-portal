@@ -180,6 +180,13 @@ def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
     ]
     sig = sorted((f for f in factors if abs(f[1]) >= 500), key=lambda f: -abs(f[1]))
     if not sig:
+        # Компоненты совпали. Если баланс SD расходится с суммой его операций —
+        # оплата не применена к балансу / входящий остаток (правится в SD).
+        sd_txn_net = round(sd_sales - sd_ret - sd_pay, 2)
+        gap = round(row["sd_debt"] - sd_txn_net, 2)
+        if abs(gap) >= 500:
+            return "warn", (f"Операции совпадают, но баланс SD не отражает "
+                            f"{_fmt_som(abs(gap))} (оплата не применена / входящий остаток)")
         return "warn", "Не раскладывается (курс / остаток / период)"
     key, cval = sig[0]
     a = _fmt_som(abs(cval))
