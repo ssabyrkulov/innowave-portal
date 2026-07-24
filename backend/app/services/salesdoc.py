@@ -34,8 +34,9 @@ _session: dict = {"userId": None, "token": None}
 
 
 def _static_mode() -> bool:
-    """Статический токен (как в 1С): токен + userId заданы напрямую."""
-    return bool(settings.salesdoc_token and settings.salesdoc_user_id)
+    """Статический режим: задан готовый токен (как в 1С). userId — необязателен
+    (по SalesDoc достаточно токена)."""
+    return bool(settings.salesdoc_token)
 
 
 def is_configured() -> bool:
@@ -94,7 +95,7 @@ def _ensure_session() -> tuple[str, str]:
     настроек и НЕ логинимся (иначе погасили бы токен 1С). Иначе логинимся под
     замком, чтобы параллельные запросы не устроили двойной логин."""
     if _static_mode():
-        return settings.salesdoc_user_id, settings.salesdoc_token
+        return settings.salesdoc_user_id or "", settings.salesdoc_token
     if not _session["token"]:
         with _login_lock:
             if not _session["token"]:
@@ -127,10 +128,10 @@ def _refresh_if_stale(used_token: str) -> None:
 def call(method: str, params: dict | None = None, _retry: bool = True) -> tuple[dict, dict | None]:
     """Вызов метода SalesDoc. Возвращает (result, pagination)."""
     user_id, token = _ensure_session()
-    payload: dict = {
-        "method": method,
-        "auth": {"userId": user_id, "token": token},
-    }
+    auth: dict = {"token": token}
+    if user_id:  # userId необязателен — по SalesDoc достаточно токена
+        auth["userId"] = user_id
+    payload: dict = {"method": method, "auth": auth}
     if settings.salesdoc_filial:
         payload["filial"] = {"filial_id": settings.salesdoc_filial}
     if params is not None:
