@@ -338,6 +338,24 @@ class SalesDocPayment(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocClient(Base):
+    """Зеркало точки SalesDoc: справочник + текущий долг.
+
+    Чтобы список сверки читался только из нашей базы и открывался мгновенно —
+    без похода в SalesDoc на каждое открытие раздела.
+    """
+
+    __tablename__ = "salesdoc_clients"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    code_1c: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String, default="")
+    debt: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class SalesDocSyncState(Base):
     """Состояние синхронизации зеркала: когда последний раз обновляли и как.
 

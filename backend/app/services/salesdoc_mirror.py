@@ -239,6 +239,51 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
     return len(rows)
 
 
+def sync_clients(db: Session, updated_since: str | None = None) -> int:
+    """Справочник точек SalesDoc и их текущий долг — в зеркало.
+
+    Оба метода отдают всё разом и стоят по одному запросу, поэтому делаем
+    всегда полностью (дельты у них нет). Благодаря этому список сверки
+    читается только из нашей базы и открывается мгновенно."""
+    clients = salesdoc.fetch_clients()
+    balance = salesdoc.fetch_balance()
+    debt_by_id = {}
+    for b in balance:
+        sid = (b["sd_id"] or "").lower()
+        if sid:
+            debt_by_id[sid] = debt_by_id.get(sid, 0.0) + b["debt"]
+
+    seen: set = set()
+    for c in clients:
+        sid = (c["sd_id"] or "").lower()
+        if not sid:
+            continue
+        seen.add(sid)
+        _upsert(db, models.SalesDocClient, sid, {
+            "code_1c": str(c["code_1C"]) if c["code_1C"] else None,
+            "name": c["name"] or "",
+            "debt": round(debt_by_id.get(sid, 0.0), 2),
+        })
+    db.flush()
+    # Точки, которых больше нет в SalesDoc, убираем из зеркала.
+    stale = [row.id for row in db.query(models.SalesDocClient.id,
+                                        models.SalesDocClient.sd_id).all()
+             if row.sd_id not in seen]
+    if stale:
+        db.query(models.SalesDocClient).filter(
+            models.SalesDocClient.id.in_(stale)).delete(synchronize_session=False)
+    return len(clients)
+
+
+def clients_for_reconcile(db: Session) -> list[dict]:
+    """Точки SalesDoc из зеркала — в том же виде, что раньше приходил из API."""
+    return [
+        {"sd_id": c.sd_id, "code_1C": c.code_1c, "name": c.name,
+         "debt": float(c.debt or 0)}
+        for c in db.query(models.SalesDocClient).all()
+    ]
+
+
 def sync(full: bool = False) -> dict:
     """Обновить зеркало. full=True — полная выгрузка, иначе дельта изменений.
 
@@ -255,10 +300,11 @@ def sync(full: bool = False) -> dict:
         try:
             for kind, fn, method, model in (
                     ("orders", sync_orders, "getOrder", models.SalesDocOrder),
-                    ("payments", sync_payments, "getPayment", models.SalesDocPayment)):
+                    ("payments", sync_payments, "getPayment", models.SalesDocPayment),
+                    ("clients", sync_clients, None, models.SalesDocClient)):
                 st = _state(db, kind)
                 since = None
-                if not full and st.last_full_at:
+                if method is not None and not full and st.last_full_at:
                     base = st.last_delta_at or st.last_full_at
                     since = (base - DELTA_OVERLAP).date().isoformat()
                     changed = changed_count(method, since)
@@ -289,9 +335,7 @@ def sync(full: bool = False) -> dict:
                     if since is None:
                         st.last_full_at = now
                     st.last_delta_at = now
-                    st.rows = db.query(
-                        models.SalesDocOrder if kind == "orders" else models.SalesDocPayment
-                    ).count()
+                    st.rows = db.query(model).count()
                     st.last_error = None
                     result[kind] = {"fetched": n, "total": st.rows}
                 except salesdoc.SalesDocError as e:
@@ -306,11 +350,21 @@ def sync(full: bool = False) -> dict:
     return result
 
 
+def sync_async(full: bool = False) -> dict:
+    """Запустить синхронизацию в фоне и сразу вернуть управление.
+
+    Пользователь никогда не должен ждать выгрузку из SalesDoc: страницы
+    читаются из зеркала, а обновление идёт незаметно и доезжает само."""
+    threading.Thread(target=sync, kwargs={"full": full},
+                     name="salesdoc-sync-once", daemon=True).start()
+    return {"started": True, "full": full}
+
+
 def status(db: Session) -> dict:
     """Свежесть зеркала — для показа «данные на …» и кнопки обновления."""
     out: dict = {"configured": salesdoc.is_configured(), "kinds": {}}
     newest: datetime | None = None
-    for kind in ("orders", "payments"):
+    for kind in ("orders", "payments", "clients"):
         st = db.query(models.SalesDocSyncState).filter_by(kind=kind).first()
         if st is None:
             out["kinds"][kind] = None

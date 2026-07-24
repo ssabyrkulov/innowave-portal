@@ -51,6 +51,12 @@ export default function SalesDocPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Обновление зеркала идёт на сервере в фоне: список отдаётся сразу, а
+  // свежие данные подтягиваем повторным чтением через несколько секунд.
+  function reloadSoon(r, od) {
+    setTimeout(() => loadAll(r, od).catch(() => {}), 4000)
+  }
+
   async function loadAll(r, od, refresh = false) {
     setLoading(true)
     setError(null)
@@ -108,7 +114,9 @@ export default function SalesDocPage() {
               данные на {fmtClock(debt.synced_at)}
             </span>
           )}
-          <button className="btn btn-primary" disabled={loading} onClick={() => loadAll(range, onlyDiff, true)}>
+          <button className="btn btn-primary" disabled={loading}
+            title="Перечитать из SalesDoc. Список остаётся на месте — свежие данные подтянутся через несколько секунд."
+            onClick={() => { loadAll(range, onlyDiff, true); reloadSoon(range, onlyDiff) }}>
             {loading ? 'Обновление…' : '↻ Обновить'}
           </button>
         </div>
@@ -301,14 +309,17 @@ function ReconcileDetailModal({ row, onClose }) {
         ? loadSd().then((d) => {
             if (!alive) return
             setSd(d)
-            // Данные показаны мгновенно (из зеркала). Догружаем изменения в
-            // фоне и, если что-то поменялось, обновляем цифры на месте.
+            // Данные показаны мгновенно (из зеркала). Просим сервер догрузить
+            // изменения — он делает это в фоне и отвечает сразу, — а через
+            // пару секунд перечитываем и обновляем цифры на месте.
             if (d.source === 'mirror') {
               setRefreshing(true)
-              api.salesdocMirrorSync(false)
-                .then(() => alive && loadSd().then((fresh) => alive && setSd(fresh)))
-                .catch(() => {})
-                .finally(() => alive && setRefreshing(false))
+              api.salesdocMirrorSync(false).catch(() => {})
+              setTimeout(() => {
+                if (!alive) return
+                loadSd().then((fresh) => alive && setSd(fresh)).catch(() => {})
+                  .finally(() => alive && setRefreshing(false))
+              }, 2500)
             }
           }).catch((e) => alive && setErr(e.message))
         : Promise.resolve(),

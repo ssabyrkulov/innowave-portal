@@ -205,23 +205,30 @@ def reconcile_debt(
     свежую выгрузку."""
     _require_configured()
     if refresh:
-        # Полная пересборка: сбрасываем кэш и перевыгружаем зеркало целиком —
-        # только так подхватываются записи, УДАЛЁННЫЕ в SalesDoc (об удалении
-        # он не сообщает, догрузка изменений их не видит).
+        # Пересборка идёт В ФОНЕ: пользователь не должен ждать выгрузку из
+        # SalesDoc — список тут же отдаётся из зеркала, а свежие данные
+        # доедут через несколько секунд сами.
         salesdoc.clear_cache()
-        salesdoc_mirror.sync(full=True)
-    try:
-        sd_balance = salesdoc.fetch_balance(use_cache=True)
-        sd_clients = salesdoc.fetch_clients(use_cache=True)
-    except salesdoc.SalesDocError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        salesdoc_mirror.sync_async(full=True)
 
-    # Долг SalesDoc по ИД клиента (нет в списке долгов = 0).
-    debt_by_id: dict[str, float] = {}
-    for r in sd_balance:
-        sid = (r["sd_id"] or "").lower()
-        if sid:
-            debt_by_id[sid] = debt_by_id.get(sid, 0.0) + r["debt"]
+    mirror_ready = salesdoc_mirror.status(db)["ready"]
+    if mirror_ready:
+        # Читаем только из своей базы — мгновенно, без обращения к SalesDoc.
+        sd_clients = salesdoc_mirror.clients_for_reconcile(db)
+    else:
+        # Зеркало ещё наполняется (первый запуск) — разово берём напрямую.
+        try:
+            sd_balance = salesdoc.fetch_balance(use_cache=True)
+            sd_clients = salesdoc.fetch_clients(use_cache=True)
+        except salesdoc.SalesDocError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        debt_by_id: dict[str, float] = {}
+        for r in sd_balance:
+            sid = (r["sd_id"] or "").lower()
+            if sid:
+                debt_by_id[sid] = debt_by_id.get(sid, 0.0) + r["debt"]
+        sd_clients = [{**c, "debt": round(debt_by_id.get(
+            (c["sd_id"] or "").lower(), 0.0), 2)} for c in sd_clients]
 
     # Справочник SalesDoc: индексы по ИД, коду 1С и по имени.
     sd_by_id: dict[str, dict] = {}
@@ -233,7 +240,7 @@ def reconcile_debt(
             "sd_id": sid,
             "name": c["name"],
             "code_1C": c["code_1C"],
-            "debt": round(debt_by_id.get(sid, 0.0), 2),
+            "debt": c.get("debt", 0.0),
         }
         if sid:
             sd_by_id[sid] = entry
@@ -679,6 +686,7 @@ def mirror_sync(
     _: models.User = Depends(can_edit),
     full: bool = Query(default=False, description="Полная выгрузка вместо дельты"),
 ):
-    """Обновить зеркало сейчас: дельта изменений (быстро) или полная выгрузка."""
+    """Запустить обновление зеркала в фоне. Ответ приходит сразу — данные
+    доезжают сами, страницу это не задерживает."""
     _require_configured()
-    return salesdoc_mirror.sync(full=full)
+    return salesdoc_mirror.sync_async(full=full)
