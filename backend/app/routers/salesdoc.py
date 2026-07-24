@@ -335,12 +335,20 @@ def reconcile_debt(
     # по запросу: обычная загрузка дебиторки остаётся быстрой.
     if with_reason:
         df, dt = salesdoc.reason_window()
-        try:
-            comp = salesdoc.fetch_reconcile_components(
-                df, dt, _store_ids_for_org(db, org), use_cache=True
+        store_ids = _store_ids_for_org(db, org)
+        if salesdoc_mirror.status(db)["ready"]:
+            # Из зеркала — обычная группировка в базе, мгновенно.
+            comp = salesdoc_mirror.reconcile_components(
+                db, date.fromisoformat(df), date.fromisoformat(dt), store_ids
             )
-        except salesdoc.SalesDocError as e:
-            raise HTTPException(status_code=502, detail=str(e))
+        else:
+            # Зеркало ещё не наполнено — считаем напрямую (медленно, разово).
+            try:
+                comp = salesdoc.fetch_reconcile_components(
+                    df, dt, store_ids, use_cache=True
+                )
+            except salesdoc.SalesDocError as e:
+                raise HTTPException(status_code=502, detail=str(e))
         for r in rows:
             lvl, txt = _diagnose_reason(r, comp)
             r["reason_level"] = lvl

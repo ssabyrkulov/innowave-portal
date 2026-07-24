@@ -325,6 +325,49 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
     }
 
 
+def reconcile_components(db: Session, date_from: date, date_to: date,
+                         store_ids=None) -> dict:
+    """Суммы реализаций / возвратов / оплат по ВСЕМ клиентам сразу — из зеркала.
+
+    Питает колонку «Причина» в сверке. Раньше для этого выкачивались журналы
+    SalesDoc за 3 года; теперь это обычная группировка в базе — мгновенно.
+
+    Формат совпадает с прежним: по каждому компоненту две карты — по SD_id
+    клиента и по коду 1С (запись попадает ровно в одну, двойного счёта нет)."""
+    from sqlalchemy import func
+
+    def collect(model, extra_filter=None, store_filter=False):
+        by_sd: dict[str, float] = {}
+        by_code: dict[str, float] = {}
+        q = (
+            db.query(model.client_sd_id, model.client_code_1c,
+                     func.sum(model.amount))
+            .filter(model.date >= date_from, model.date <= date_to)
+        )
+        if extra_filter is not None:
+            q = q.filter(extra_filter)
+        if store_filter and store_ids:
+            q = q.filter(model.store_sd_id.in_(store_ids))
+        for cli_sd, cli_code, total in q.group_by(
+                model.client_sd_id, model.client_code_1c).all():
+            amount = float(total or 0)
+            if cli_sd:
+                by_sd[cli_sd] = by_sd.get(cli_sd, 0.0) + amount
+            elif cli_code:
+                by_code[cli_code] = by_code.get(cli_code, 0.0) + amount
+        return {"sd": by_sd, "code": by_code}
+
+    O, P = models.SalesDocOrder, models.SalesDocPayment
+    return {
+        # Реализации — только отгруженные, делятся по складу выбранной фирмы.
+        "sales": collect(O, O.status.in_(sorted(salesdoc.SHIPPED_STATUSES)),
+                         store_filter=True),
+        # Возвраты и оплаты — из журнала операций, по клиенту (склада там нет).
+        "returns": collect(P, P.txn == salesdoc.SHELF_RETURN_TXN),
+        "payments": collect(P, P.txn == salesdoc.PAYMENT_TXN),
+    }
+
+
 def start_background_sync() -> None:
     """Фоновое обновление: дельта каждые 5 минут, полная выгрузка раз в сутки.
 
