@@ -45,6 +45,22 @@ function setup() {
   console.log('Готово: расписание каждые 15 минут установлено.');
 }
 
+// Excel-файл или нет. Раньше проверялось только расширение — и выгрузки,
+// сохранённые без «.xlsx» в имени (ВыгрузкаБанкВХЕх, ВыгрузкаОстЕх и т.п.),
+// молча пропускались: данные по ним переставали обновляться на портале.
+// Теперь смотрим ещё и на тип файла, поэтому расширение необязательно.
+function isExcel(f) {
+  const name = f.getName();
+  if (/^~\$/.test(name)) return false;            // временный файл Excel
+  if (/\.(xlsx|xlsm)$/i.test(name)) return true;
+  const mime = f.getMimeType();
+  return (
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel.sheet.macroEnabled.12' ||
+    mime === 'application/vnd.ms-excel'
+  );
+}
+
 function syncNewFiles() {
   const props = PropertiesService.getScriptProperties();
 
@@ -53,7 +69,7 @@ function syncNewFiles() {
 
     while (files.hasNext()) {
       const f = files.next();
-      if (!/\.(xlsx|xlsm)$/i.test(f.getName())) continue;
+      if (!isExcel(f)) continue;
 
       // Ключ памяти включает org — файлы из разных папок не путаются.
       const key = 'sent_' + folder.org + '_' + f.getId();
