@@ -8,6 +8,7 @@
 import hashlib
 import io
 import secrets
+import traceback
 
 import openpyxl
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, UploadFile
@@ -212,6 +213,30 @@ async def inbox(
     file_hash = hashlib.sha256(content).hexdigest()
 
     auto_name = f"[авто:{org}] {filename}"
+    try:
+        return _dispatch_import(db, kind, content, auto_name, robot, filename,
+                                org, file_hash)
+    except HTTPException:
+        raise
+    except Exception as err:  # noqa: BLE001 — важно назвать место сбоя
+        # Ответ уходит в журнал Apps Script, а туда traceback целиком не
+        # влезает. Отдаём тип, текст и последний кадр из нашего кода — по ним
+        # сразу видно, какой импортёр и какая строка споткнулись.
+        tb = traceback.extract_tb(err.__traceback__)
+        ours = [f for f in tb if "/app/" in f.filename] or tb
+        last = ours[-1] if ours else None
+        where = (f"{last.filename.split('/')[-1]}:{last.lineno} в {last.name}()"
+                 if last else "неизвестно")
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Не удалось загрузить «{filename}» ({kind}): "
+                   f"{type(err).__name__}: {err} — {where}",
+        ) from err
+
+
+def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_hash):
+    """Разбор файла нужным импортёром по определённому типу выгрузки."""
     if kind == "sales":
         # Формат реализации: построчный (есть «НоменклатураНаименование») или
         # документный (Дата/Сумма/Контрагент, как у Innowave).
