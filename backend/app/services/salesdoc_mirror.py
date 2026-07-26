@@ -284,6 +284,73 @@ def clients_for_reconcile(db: Session) -> list[dict]:
     ]
 
 
+def sync_stock(db: Session, updated_since: str | None = None) -> int:
+    """Остатки по складам и позициям — в зеркало.
+
+    getStock отдаёт срез целиком (склады → товары → количество), дельты у него
+    нет, поэтому выгружаем полностью и вычищаем пропавшие позиции."""
+    rows = salesdoc.call_all("getStock", ("warehouse", "warehouses"))
+    seen: set = set()
+    n = 0
+    for w in rows:
+        store = str(w.get("SD_id") or "").lower()
+        if not store:
+            continue
+        for p in (w.get("products") or []):
+            pid = str(p.get("SD_id") or p.get("code_1C") or p.get("name") or "").strip()
+            if not pid:
+                continue
+            key = f"{store}:{pid}"
+            seen.add(key)
+            n += 1
+            _upsert(db, models.SalesDocStock, key, {
+                "store_sd_id": store,
+                "product_sd_id": str(p.get("SD_id") or "") or None,
+                "product_name": p.get("name") or "",
+                "code_1c": str(p.get("code_1C") or "") or None,
+                "quantity": float(p.get("quantity") or 0),
+            })
+    db.flush()
+    stale = [r.id for r in db.query(models.SalesDocStock.id,
+                                    models.SalesDocStock.sd_id).all()
+             if r.sd_id not in seen]
+    if stale:
+        db.query(models.SalesDocStock).filter(
+            models.SalesDocStock.id.in_(stale)).delete(synchronize_session=False)
+    return n
+
+
+def stock_by_store(db: Session, store_ids=None, q: str | None = None,
+                   only_positive: bool = True) -> list[dict]:
+    """Остатки из зеркала: по каждому складу список позиций с количеством."""
+    query = db.query(models.SalesDocStock)
+    if store_ids:
+        query = query.filter(models.SalesDocStock.store_sd_id.in_(store_ids))
+    if q:
+        query = query.filter(models.SalesDocStock.product_name.ilike(f"%{q.strip()}%"))
+    if only_positive:
+        query = query.filter(models.SalesDocStock.quantity > 0)
+
+    names = {s.store_id.lower(): (s.name, s.organization)
+             for s in db.query(models.SalesDocStore).all() if s.store_id}
+    grouped: dict[str, dict] = {}
+    for r in query.order_by(models.SalesDocStock.product_name).all():
+        name, org = names.get(r.store_sd_id, (r.store_sd_id, None))
+        g = grouped.setdefault(r.store_sd_id, {
+            "store_id": r.store_sd_id, "store": name or r.store_sd_id,
+            "org": org, "positions": 0, "total_qty": 0.0, "items": [],
+        })
+        qty = float(r.quantity or 0)
+        g["positions"] += 1
+        g["total_qty"] += qty
+        g["items"].append({"name": r.product_name, "code_1C": r.code_1c,
+                           "qty": round(qty, 3)})
+    out = sorted(grouped.values(), key=lambda x: -x["total_qty"])
+    for g in out:
+        g["total_qty"] = round(g["total_qty"], 3)
+    return out
+
+
 def sync(full: bool = False) -> dict:
     """Обновить зеркало. full=True — полная выгрузка, иначе дельта изменений.
 
@@ -301,7 +368,8 @@ def sync(full: bool = False) -> dict:
             for kind, fn, method, model in (
                     ("orders", sync_orders, "getOrder", models.SalesDocOrder),
                     ("payments", sync_payments, "getPayment", models.SalesDocPayment),
-                    ("clients", sync_clients, None, models.SalesDocClient)):
+                    ("clients", sync_clients, None, models.SalesDocClient),
+                    ("stock", sync_stock, None, models.SalesDocStock)):
                 st = _state(db, kind)
                 since = None
                 if method is not None and not full and st.last_full_at:
@@ -364,7 +432,7 @@ def status(db: Session) -> dict:
     """Свежесть зеркала — для показа «данные на …» и кнопки обновления."""
     out: dict = {"configured": salesdoc.is_configured(), "kinds": {}}
     newest: datetime | None = None
-    for kind in ("orders", "payments", "clients"):
+    for kind in ("orders", "payments", "clients", "stock"):
         st = db.query(models.SalesDocSyncState).filter_by(kind=kind).first()
         if st is None:
             out["kinds"][kind] = None

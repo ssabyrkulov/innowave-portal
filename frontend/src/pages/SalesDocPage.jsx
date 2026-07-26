@@ -138,6 +138,8 @@ export default function SalesDocPage() {
 
       <ReturnsDebugPanel />
 
+      <StockPanel />
+
       <SpeedProbePanel />
 
       <WarehouseReportPanel />
@@ -683,6 +685,105 @@ function ReturnsDebugPanel() {
 
 // Замер перед ускорением карточки: соблюдает ли SalesDoc фильтр по клиенту и
 // работает ли инкремент. От результата зависит, как строить быструю выгрузку.
+const qty = (v) => Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 3 })
+
+// Остатки SalesDoc по складам и позициям — в штуках (сумм SalesDoc не отдаёт).
+function StockPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [q, setQ] = useState('')
+  const [allItems, setAllItems] = useState(false)
+  const [openStore, setOpenStore] = useState(null)
+
+  function load(search = q, all = allItems) {
+    setLoading(true); setError(null)
+    api.salesdocStock({ q: search, all_items: all })
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  // Поиск с паузой, чтобы не дёргать сервер на каждую букву.
+  useEffect(() => {
+    if (!open) return
+    const t = setTimeout(() => load(q, allItems), 350)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, allItems])
+
+  const totalQty = (data?.warehouses || []).reduce((s, w) => s + w.total_qty, 0)
+  const totalPos = (data?.warehouses || []).reduce((s, w) => s + w.positions, 0)
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 📦 Остатки на складах SalesDoc (шт)
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <div className="filters">
+            <input className="product-search-input" type="search" value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Поиск по названию товара…" />
+            <label className="sd-check">
+              <input type="checkbox" checked={allItems}
+                onChange={(e) => setAllItems(e.target.checked)} />
+              {' '}показывать нулевые
+            </label>
+          </div>
+          <p className="muted">SalesDoc отдаёт по остаткам только количество —
+            цен и сумм в них нет. Данные из зеркала, обновляются в фоне.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Загрузка…</div>}
+          {data && data.warehouses.length === 0 && (
+            <div className="muted">
+              {data.ready ? 'Ничего не найдено.' : 'Остатки ещё загружаются — обновите через минуту.'}
+            </div>
+          )}
+          {data && data.warehouses.length > 0 && (
+            <>
+              <div className="an-row">
+                <span className="an-label">Всего</span>
+                <span className="an-val">{qty(totalQty)} шт · {totalPos} позиций</span>
+              </div>
+              {data.warehouses.map((w) => (
+                <div key={w.store_id} className="stock-store">
+                  <button className="btn btn-ghost stock-store-head"
+                    onClick={() => setOpenStore(openStore === w.store_id ? null : w.store_id)}>
+                    {openStore === w.store_id ? '▾' : '▸'} {w.store}
+                    <span className="muted">
+                      {' '}· {ORG_LABELS[w.org] || 'фирма не задана'}
+                      {' '}· {qty(w.total_qty)} шт · {w.positions} поз.
+                    </span>
+                  </button>
+                  {openStore === w.store_id && (
+                    <div className="table-wrap rc-table">
+                      <table>
+                        <thead>
+                          <tr><th>Товар</th><th className="num">Кол-во, шт</th></tr>
+                        </thead>
+                        <tbody>
+                          {w.items.map((it, i) => (
+                            <tr key={i}>
+                              <td>{it.name}</td>
+                              <td className="num">{qty(it.qty)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SpeedProbePanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)

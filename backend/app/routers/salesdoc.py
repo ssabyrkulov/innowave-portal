@@ -672,6 +672,26 @@ def client_detail(
     }
 
 
+@router.get("/stock")
+def stock(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    q: str | None = Query(default=None, description="Поиск по названию товара"),
+    all_items: bool = Query(default=False, description="Показывать и нулевые остатки"),
+    org: str = Query(default="all"),
+):
+    """Остатки SalesDoc по складам и позициям (в штуках).
+
+    Читается из зеркала — мгновенно. Сумм в остатках SalesDoc не отдаёт, только
+    количество."""
+    rows = salesdoc_mirror.stock_by_store(
+        db, _store_ids_for_org(db, org), q, only_positive=not all_items
+    )
+    state = salesdoc_mirror.status(db)
+    return {"warehouses": rows, "synced_at": state["synced_at"],
+            "ready": state["ready"]}
+
+
 @router.get("/mirror")
 def mirror_status(
     db: Session = Depends(get_db),

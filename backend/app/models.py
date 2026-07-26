@@ -356,6 +356,26 @@ class SalesDocClient(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocStock(Base):
+    """Зеркало остатков SalesDoc: сколько штук каждой позиции на каждом складе.
+
+    SalesDoc отдаёт только количество — цен и сумм в остатках у него нет.
+    Ключ строки — «склад:товар» (sd_id), чтобы одна позиция на разных складах
+    хранилась отдельно.
+    """
+
+    __tablename__ = "salesdoc_stock"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    store_sd_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    product_sd_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    product_name: Mapped[str] = mapped_column(String, default="", index=True)
+    code_1c: Mapped[str | None] = mapped_column(String, nullable=True)
+    quantity: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class SalesDocSyncState(Base):
     """Состояние синхронизации зеркала: когда последний раз обновляли и как.
 

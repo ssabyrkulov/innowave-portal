@@ -161,6 +161,12 @@ export const api = {
   salesdocReturnsDebug: (dateFrom, dateTo) =>
     request(`/salesdoc/returns-debug?date_from=${dateFrom}&date_to=${dateTo}`),
   salesdocSpeedProbe: () => request('/salesdoc/speed-probe'),
+  salesdocStock: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '' && v !== false)
+    ).toString()
+    return request(`/salesdoc/stock${qs ? `?${qs}` : ''}`)
+  },
   salesdocMirror: () => request('/salesdoc/mirror'),
   salesdocMirrorSync: (full = false) =>
     request(`/salesdoc/mirror/sync${full ? '?full=true' : ''}`, { method: 'POST' }),
