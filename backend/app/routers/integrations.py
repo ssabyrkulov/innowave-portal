@@ -56,9 +56,22 @@ def _require_token(authorization: str | None) -> None:
             status_code=503,
             detail="Автоприём выключен: не задан INBOX_TOKEN на сервере",
         )
+    # Сравниваем байты, а не строки: secrets.compare_digest на str требует
+    # чистого ASCII и на любом другом символе бросает TypeError — запрос падал
+    # с «500 Внутренняя ошибка» вместо честного «неверный токен», из-за чего
+    # причина выглядела как сбой разбора файла.
     expected = f"Bearer {settings.inbox_token}"
-    if not authorization or not secrets.compare_digest(authorization, expected):
-        raise HTTPException(status_code=401, detail="Неверный токен")
+    ok = bool(authorization) and secrets.compare_digest(
+        (authorization or "").encode("utf-8"), expected.encode("utf-8")
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=401,
+            detail="Неверный токен автоприёма: проверьте TOKEN в скрипте "
+                   "Google Apps Script и INBOX_TOKEN на сервере (частая "
+                   "причина — лишний пробел или кириллическая буква при "
+                   "копировании).",
+        )
 
 
 def _robot_user(db: Session) -> models.User:
