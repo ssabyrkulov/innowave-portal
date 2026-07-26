@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { formatMoney, toISODate } from '../utils'
@@ -40,6 +40,35 @@ export default function SalesDocPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [detail, setDetail] = useState(null)
+  const [reasonFilter, setReasonFilter] = useState('')
+
+  // Причина у строки может быть составной («оплата · возврат»), поэтому
+  // разбираем её на отдельные ярлыки: так одну точку видно во всех своих
+  // категориях, а фильтр по «оплата» ловит и составные случаи.
+  const reasonTokens = (r) =>
+    (r.reason || '').split('·').map((s) => s.trim()).filter(Boolean)
+
+  const reasonStats = useMemo(() => {
+    const counts = new Map()
+    for (const r of debt?.rows || []) {
+      for (const t of reasonTokens(r)) counts.set(t, (counts.get(t) || 0) + 1)
+    }
+    return [...counts.entries()]
+      .map(([key, count]) => ({ key, count }))
+      .sort((a, b) => b.count - a.count)
+  }, [debt])
+
+  const visibleRows = useMemo(() => {
+    const rows = debt?.rows || []
+    if (!reasonFilter) return rows
+    return rows.filter((r) => reasonTokens(r).includes(reasonFilter))
+  }, [debt, reasonFilter])
+
+  // Сколько всего расходится по выбранной причине — сразу видно масштаб.
+  const filteredDiff = useMemo(
+    () => visibleRows.reduce((s, r) => s + Number(r.diff || 0), 0),
+    [visibleRows]
+  )
 
   useEffect(() => {
     api.salesdocStatus()
@@ -212,7 +241,22 @@ export default function SalesDocPage() {
                 onChange={(e) => { setOnlyDiff(e.target.checked); loadAll(range, e.target.checked) }} />
               {' '}Только расхождения
             </label>
-            <span className="muted">{debt.rows.length} строк</span>
+            {reasonStats.length > 0 && (
+              <select className="filter-select" value={reasonFilter}
+                onChange={(e) => setReasonFilter(e.target.value)}
+                title="Показать только точки с этой причиной расхождения">
+                <option value="">Все причины</option>
+                {reasonStats.map((r) => (
+                  <option key={r.key} value={r.key}>
+                    {r.key} — {r.count}
+                  </option>
+                ))}
+              </select>
+            )}
+            <span className="muted">
+              {visibleRows.length} строк
+              {reasonFilter && ` · на ${money(filteredDiff)}`}
+            </span>
           </div>
 
           <div className="table-wrap cards">
@@ -229,10 +273,14 @@ export default function SalesDocPage() {
                 </tr>
               </thead>
               <tbody>
-                {debt.rows.length === 0 && (
-                  <tr><td colSpan={7} className="muted center">Расхождений нет 🎉</td></tr>
+                {visibleRows.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="muted center">
+                      {reasonFilter ? 'По этой причине точек нет' : 'Расхождений нет 🎉'}
+                    </td>
+                  </tr>
                 )}
-                {debt.rows.map((r, i) => (
+                {visibleRows.map((r, i) => (
                   <tr key={i}>
                     <td data-label="Клиент">
                       <button className="client-link" onClick={() => setDetail(r)}>
