@@ -284,6 +284,26 @@ def clients_for_reconcile(db: Session) -> list[dict]:
     ]
 
 
+def sync_warehouses(db: Session, updated_since: str | None = None) -> int:
+    """Названия складов из SalesDoc — в справочник привязки.
+
+    Раньше склад, не заведённый вручную, показывался голым идентификатором
+    («d0_5»). Теперь имена подтягиваются автоматически; ручной остаётся только
+    привязка к фирме, которую SalesDoc не знает."""
+    rows = salesdoc.fetch_warehouses()
+    for w in rows:
+        sid = str(w.get("sd_id") or "").strip()
+        if not sid:
+            continue
+        row = db.query(models.SalesDocStore).filter_by(store_id=sid).first()
+        if row is None:
+            row = models.SalesDocStore(store_id=sid)
+            db.add(row)
+        if w.get("name"):
+            row.name = w["name"]  # организацию не трогаем — она задаётся вручную
+    return len(rows)
+
+
 def sync_stock(db: Session, updated_since: str | None = None) -> int:
     """Остатки по складам и позициям — в зеркало.
 
@@ -305,6 +325,7 @@ def sync_stock(db: Session, updated_since: str | None = None) -> int:
             n += 1
             _upsert(db, models.SalesDocStock, key, {
                 "store_sd_id": store,
+                "store_name": w.get("name") or None,
                 "product_sd_id": str(p.get("SD_id") or "") or None,
                 "product_name": p.get("name") or "",
                 "code_1c": str(p.get("code_1C") or "") or None,
@@ -335,9 +356,12 @@ def stock_by_store(db: Session, store_ids=None, q: str | None = None,
              for s in db.query(models.SalesDocStore).all() if s.store_id}
     grouped: dict[str, dict] = {}
     for r in query.order_by(models.SalesDocStock.product_name).all():
-        name, org = names.get(r.store_sd_id, (r.store_sd_id, None))
+        # Название склада: из справочника SalesDoc, иначе из самих остатков,
+        # и лишь в крайнем случае — идентификатор.
+        name, org = names.get(r.store_sd_id, (None, None))
+        name = name or r.store_name or r.store_sd_id
         g = grouped.setdefault(r.store_sd_id, {
-            "store_id": r.store_sd_id, "store": name or r.store_sd_id,
+            "store_id": r.store_sd_id, "store": name,
             "org": org, "positions": 0, "total_qty": 0.0, "items": [],
         })
         qty = float(r.quantity or 0)
@@ -369,6 +393,7 @@ def sync(full: bool = False) -> dict:
                     ("orders", sync_orders, "getOrder", models.SalesDocOrder),
                     ("payments", sync_payments, "getPayment", models.SalesDocPayment),
                     ("clients", sync_clients, None, models.SalesDocClient),
+                    ("warehouses", sync_warehouses, None, models.SalesDocStore),
                     ("stock", sync_stock, None, models.SalesDocStock)):
                 st = _state(db, kind)
                 since = None

@@ -369,6 +369,7 @@ class SalesDocStock(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     sd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     store_sd_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    store_name: Mapped[str | None] = mapped_column(String, nullable=True)
     product_sd_id: Mapped[str | None] = mapped_column(String, nullable=True)
     product_name: Mapped[str] = mapped_column(String, default="", index=True)
     code_1c: Mapped[str | None] = mapped_column(String, nullable=True)

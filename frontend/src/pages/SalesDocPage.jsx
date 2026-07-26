@@ -750,6 +750,7 @@ function StockPanel() {
               {data.warehouses.map((w) => (
                 <div key={w.store_id} className="stock-store">
                   <button className="btn btn-ghost stock-store-head"
+                    title={`ИД склада в SalesDoc: ${w.store_id}`}
                     onClick={() => setOpenStore(openStore === w.store_id ? null : w.store_id)}>
                     {openStore === w.store_id ? '▾' : '▸'} {w.store}
                     <span className="muted">
