@@ -220,11 +220,13 @@ def freshness(
     _: models.User = Depends(get_current_user),
     org: str = Query(default="all"),
 ):
-    """До какого числа есть данные по каждому виду операций.
+    """Дата последней операции по каждому виду и время последней загрузки из 1С.
 
-    Автозагрузка из 1С идёт по разным выгрузкам, и любая из них может отстать
-    (файл не обновили, приём сорвался). Здесь это видно сразу: если оплаты
-    банка заканчиваются раньше остальных — значит отстала именно их выгрузка."""
+    Важно различать две вещи: «операций не было» и «данные не загрузились».
+    Дата последней операции сама по себе ни о чём не говорит — по банку может
+    неделю не быть платежей, и это нормально. Признак проблемы — когда давно
+    не приходили сами выгрузки, поэтому отдельно отдаём время последнего
+    успешного приёма файла."""
     out = []
     for t in TYPE_ORDER:
         cfg = TYPES[t]
@@ -242,14 +244,12 @@ def freshness(
             "last_date": last.isoformat() if last else None,
             "count": int(count or 0),
         })
-    # Самая свежая дата среди всех видов — точка отсчёта для «отставания».
-    newest = max((r["last_date"] for r in out if r["last_date"]), default=None)
-    for r in out:
-        r["days_behind"] = (
-            (date.fromisoformat(newest) - date.fromisoformat(r["last_date"])).days
-            if newest and r["last_date"] else None
-        )
-    return {"newest": newest, "types": out}
+
+    last_import = db.query(func.max(models.ImportLog.created_at)).scalar()
+    return {
+        "types": out,
+        "last_import": last_import.isoformat() if last_import else None,
+    }
 
 
 @router.get("")

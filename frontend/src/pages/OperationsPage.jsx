@@ -9,33 +9,42 @@ const fmtDate = (iso) => (iso ? iso.split('-').reverse().join('.') : '—')
 
 const PAGE_SIZES = [25, 50, 100, 200]
 
-// Полоса свежести: до какого числа доехали данные по каждому виду операций.
-// Отстающие подсвечены — сразу видно, какая выгрузка из 1С не обновляется.
+// Полоса свежести: дата последней операции по каждому виду и время последней
+// загрузки из 1С. Даты не подсвечиваем: «операций не было» — это не проблема
+// (по банку может неделю не быть платежей). Тревожит только одно — когда давно
+// не приходили сами выгрузки, и это видно по времени последней загрузки.
 function FreshnessBar({ fresh, current, onPick }) {
-  const LAG_WARN = 2 // дня отставания, после которых подсвечиваем
+  const imported = fresh.last_import ? new Date(fresh.last_import) : null
+  const hoursAgo = imported ? (Date.now() - imported.getTime()) / 3600000 : null
+  const syncStale = hoursAgo != null && hoursAgo > 24
+
   return (
     <div className="fresh-bar">
-      <span className="muted fresh-title">Данные загружены до:</span>
-      {fresh.types.map((t) => {
-        const lag = t.days_behind
-        const stale = lag != null && lag >= LAG_WARN
-        return (
-          <button
-            key={t.type}
-            className={`fresh-chip ${stale ? 'fresh-stale' : ''} ${t.type === current ? 'fresh-current' : ''}`}
-            onClick={() => onPick(t.type)}
-            title={
-              t.last_date
-                ? `${t.label}: ${t.count.toLocaleString('ru-RU')} записей` +
-                  (stale ? `, отстаёт на ${lag} дн.` : '')
-                : `${t.label}: данных нет`
-            }
-          >
-            {t.label}: <b>{fmtDate(t.last_date)}</b>
-            {stale && ` · −${lag} дн.`}
-          </button>
-        )
-      })}
+      <span className="muted fresh-title">Последняя операция:</span>
+      {fresh.types.map((t) => (
+        <button
+          key={t.type}
+          className={`fresh-chip ${t.type === current ? 'fresh-current' : ''}`}
+          onClick={() => onPick(t.type)}
+          title={t.last_date
+            ? `${t.label}: ${t.count.toLocaleString('ru-RU')} записей`
+            : `${t.label}: данных нет`}
+        >
+          {t.label}: <b>{fmtDate(t.last_date)}</b>
+        </button>
+      ))}
+      {imported && (
+        <span
+          className={`fresh-chip fresh-sync ${syncStale ? 'fresh-stale' : ''}`}
+          title={syncStale
+            ? 'Выгрузки из 1С давно не приходили — проверьте автозагрузку'
+            : 'Когда портал последний раз принимал выгрузку из 1С'}
+        >
+          загрузка из 1С: <b>{imported.toLocaleString('ru-RU', {
+            day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+          })}</b>
+        </span>
+      )}
     </div>
   )
 }

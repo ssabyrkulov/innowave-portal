@@ -2661,6 +2661,7 @@ button.summary-card {
 .fresh-chip:hover { background: var(--side-hover); color: var(--text); }
 .fresh-chip b { color: var(--text); font-weight: 600; }
 .fresh-current { border-color: var(--text); }
+.fresh-sync { cursor: default; margin-left: auto; }
 .fresh-stale { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
 .fresh-stale b { color: var(--warn); }
 
