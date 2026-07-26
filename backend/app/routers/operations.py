@@ -214,6 +214,44 @@ def operation_types(_: models.User = Depends(get_current_user)):
     ]
 
 
+@router.get("/freshness")
+def freshness(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
+):
+    """До какого числа есть данные по каждому виду операций.
+
+    Автозагрузка из 1С идёт по разным выгрузкам, и любая из них может отстать
+    (файл не обновили, приём сорвался). Здесь это видно сразу: если оплаты
+    банка заканчиваются раньше остальных — значит отстала именно их выгрузка."""
+    out = []
+    for t in TYPE_ORDER:
+        cfg = TYPES[t]
+        M = cfg["model"]
+        date_col = cfg["date_col"](M)
+        query = models.org_scope(db.query(M), M, org)
+        if cfg["base"] is not None:
+            query = query.filter(cfg["base"](M))
+        last, count = query.with_entities(
+            func.max(date_col), func.count(M.id)
+        ).one()
+        out.append({
+            "type": t,
+            "label": cfg["label"],
+            "last_date": last.isoformat() if last else None,
+            "count": int(count or 0),
+        })
+    # Самая свежая дата среди всех видов — точка отсчёта для «отставания».
+    newest = max((r["last_date"] for r in out if r["last_date"]), default=None)
+    for r in out:
+        r["days_behind"] = (
+            (date.fromisoformat(newest) - date.fromisoformat(r["last_date"])).days
+            if newest and r["last_date"] else None
+        )
+    return {"newest": newest, "types": out}
+
+
 @router.get("")
 def list_operations(
     db: Session = Depends(get_db),

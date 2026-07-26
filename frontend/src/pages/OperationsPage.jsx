@@ -9,6 +9,37 @@ const fmtDate = (iso) => (iso ? iso.split('-').reverse().join('.') : '—')
 
 const PAGE_SIZES = [25, 50, 100, 200]
 
+// Полоса свежести: до какого числа доехали данные по каждому виду операций.
+// Отстающие подсвечены — сразу видно, какая выгрузка из 1С не обновляется.
+function FreshnessBar({ fresh, current, onPick }) {
+  const LAG_WARN = 2 // дня отставания, после которых подсвечиваем
+  return (
+    <div className="fresh-bar">
+      <span className="muted fresh-title">Данные загружены до:</span>
+      {fresh.types.map((t) => {
+        const lag = t.days_behind
+        const stale = lag != null && lag >= LAG_WARN
+        return (
+          <button
+            key={t.type}
+            className={`fresh-chip ${stale ? 'fresh-stale' : ''} ${t.type === current ? 'fresh-current' : ''}`}
+            onClick={() => onPick(t.type)}
+            title={
+              t.last_date
+                ? `${t.label}: ${t.count.toLocaleString('ru-RU')} записей` +
+                  (stale ? `, отстаёт на ${lag} дн.` : '')
+                : `${t.label}: данных нет`
+            }
+          >
+            {t.label}: <b>{fmtDate(t.last_date)}</b>
+            {stale && ` · −${lag} дн.`}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function renderCell(col, value) {
   if (col.type === 'date') return fmtDate(value)
   if (value == null || value === '') return '—'
@@ -27,11 +58,13 @@ export default function OperationsPage() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [fresh, setFresh] = useState(null)
   const qTimer = useRef(null)
 
   // Список вкладок один раз
   useEffect(() => {
     api.operationTypes().then(setTypes).catch((e) => setError(e.message))
+    api.operationsFreshness().then(setFresh).catch(() => {})
   }, [])
 
   // Дебаунс текстового поиска: печатаем в qInput, в фильтры уходит с паузой
@@ -100,6 +133,10 @@ export default function OperationsPage() {
           </button>
         ))}
       </div>
+
+      {/* Свежесть данных: до какого числа загружено по каждому виду. Если
+          какая-то выгрузка из 1С отстала, это видно сразу. */}
+      {fresh && <FreshnessBar fresh={fresh} current={type} onPick={switchTab} />}
 
       {/* Фильтры */}
       <div className="filters ops-filters">

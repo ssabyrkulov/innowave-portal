@@ -186,6 +186,7 @@ export const api = {
   },
 
   operationTypes: () => request('/operations/types'),
+  operationsFreshness: () => request('/operations/freshness'),
   operations: (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v != null && v !== '')
