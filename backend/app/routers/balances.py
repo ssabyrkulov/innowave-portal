@@ -32,12 +32,23 @@ def _num(value) -> float | None:
 
 
 def _load_rows(content: bytes):
+    """Строки первого листа книги.
+
+    Под защитой весь разбор, а не только открытие: на некоторых файлах 1С
+    ошибка возникала уже при чтении листа и уходила наружу «сырым» 500.
+    Читаем без read_only — этот режим разбирает XML лениво и на файлах с
+    нестандартной разметкой ведёт себя капризно."""
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Не удалось открыть файл Excel")
-    ws = wb[wb.sheetnames[0]]
-    return list(ws.iter_rows(values_only=True))
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        ws = wb[wb.sheetnames[0]]
+        return list(ws.iter_rows(values_only=True))
+    except HTTPException:
+        raise
+    except Exception as err:  # noqa: BLE001 — важен понятный ответ, не тип
+        raise HTTPException(
+            status_code=400,
+            detail=f"Не удалось прочитать файл Excel: {type(err).__name__}: {err}",
+        ) from err
 
 
 def import_cash_balances_workbook(
