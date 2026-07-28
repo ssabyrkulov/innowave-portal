@@ -2707,6 +2707,9 @@ button.summary-card {
   font-weight: 700; font-size: 13.5px; margin-bottom: 4px;
 }
 .rc-table table { font-size: 12.5px; }
+/* Строки 1С и SalesDoc сравниваются глазами построчно, поэтому подписи не
+   переносим: из-за переноса правая колонка «съезжала» вниз. */
+.rc-table td, .rc-table th { white-space: nowrap; }
 .rc-empty { padding: 6px 2px; font-size: 12.5px; }
 @media (max-width: 720px) {
   .rc-cols { grid-template-columns: 1fr; }

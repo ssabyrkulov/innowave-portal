@@ -442,14 +442,25 @@ function ReconcileDetailModal({ row, onClose }) {
           <div className="rc-col">
             <div className="rc-col-title">SalesDoc {row.in_sd ? '' : '· нет'}</div>
             <RcSection title="Реализации" total={sd?.orders?.total} count={sd?.orders?.count}
-              rows={(sd?.orders?.items || []).map((o) => ({
-                cells: [o.date, o.status_label, money(o.amount)],
-                muted: !o.counted,
-              }))}
+              rows={(sd?.orders?.items || [])
+                // Отменённые заказы не показываем: в сумму они не идут и
+                // только сбивают построчное сравнение с 1С.
+                .filter((o) => o.status !== 5)
+                .map((o) => ({
+                  cells: [o.date, o.status_label, money(o.amount)],
+                  muted: !o.counted,
+                }))}
               head={['Дата', 'Статус', 'Сумма']} />
             <RcSection title="Оплаты" total={sd?.payments?.total} count={sd?.payments?.count}
               rows={(sd?.payments?.items || []).map((p) => ({
-                cells: [p.date, p.type_name ? `${p.txn_label} · ${p.type_name}` : p.txn_label, money(p.amount)],
+                // У обычной оплаты пишем только способ («Наличный»): слово
+                // «Оплата» и так следует из названия блока, а длинная подпись
+                // переносилась на вторую строку и ломала выравнивание с 1С.
+                cells: [
+                  p.date,
+                  p.counted ? (p.type_name || 'Оплата') : p.txn_label,
+                  money(p.amount),
+                ],
                 muted: !p.counted,
               }))}
               head={['Дата', 'Вид', 'Сумма']} />
