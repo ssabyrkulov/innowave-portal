@@ -467,8 +467,8 @@ function ReconcileDetailModal({ row, onClose }) {
             {sd?.payments && sd.payments.matched === 0 && (
               <div className="muted sd-pay-diag">
                 {sd.payments.scanned > 0
-                  ? `Проверено ${sd.payments.scanned} оплат SalesDoc за период — ни одна не привязана к этому клиенту (оплата записана на другого клиента/кассу).`
-                  : 'SalesDoc не вернул ни одной оплаты за период.'}
+                  ? `Проверено ${sd.payments.scanned} операций SalesDoc за период — ни одна не привязана к этому клиенту (оплата записана на другого клиента/кассу).`
+                  : 'Оплат этого клиента в SalesDoc не найдено. Если в SalesDoc они есть — данные ещё не догрузились, нажмите «↻ Обновить».'}
               </div>
             )}
             <RcSection title="Возвраты" total={sd?.returns?.total} count={sd?.returns?.count}

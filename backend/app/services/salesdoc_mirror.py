@@ -47,9 +47,17 @@ _sync_lock = threading.Lock()
 _worker_started = False
 
 
+# Запас на конце окна. Сервер живёт по UTC, а операции заводят в Бишкеке
+# (+6): вечером по местному времени серверная дата ещё вчерашняя, и «сегодняшний»
+# платёж оказывался за границей окна — в SalesDoc он есть, а в зеркало не
+# попадал. Плюс в учёте встречаются документы, выписанные наперёд.
+FUTURE_MARGIN = timedelta(days=7)
+
+
 def _window() -> tuple[str, str]:
     today = date.today()
-    return f"{today.year - HISTORY_YEARS}-01-01", today.isoformat()
+    return (f"{today.year - HISTORY_YEARS}-01-01",
+            (today + FUTURE_MARGIN).isoformat())
 
 
 def _state(db: Session, kind: str) -> models.SalesDocSyncState:

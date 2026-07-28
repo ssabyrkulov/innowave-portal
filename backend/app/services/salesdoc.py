@@ -242,13 +242,18 @@ def call_all(method: str, key, params: dict | None = None, page_limit: int = 100
         result, pagination = call(method, params)
         chunk = _pick(result, keys)
         out.extend(chunk)
-        if not pagination:
+        if not pagination or not chunk:
             break
-        total = pagination.get("total") or 0
-        limit = pagination.get("limit") or page_limit
-        if page * limit >= total or not chunk:
+        # Считаем ФАКТИЧЕСКИ полученные строки, а не «страница × лимит».
+        # SalesDoc может отдать на странице меньше, чем мы запросили: тогда
+        # расчётный счётчик убегал вперёд, цикл обрывался раньше времени и
+        # хвост записей терялся — на практике пропадали самые свежие операции.
+        total = int(pagination.get("total") or 0)
+        if total and len(out) >= total:
             break
         page += 1
+        if page > 1000:  # страховка от бесконечного цикла при странном ответе
+            break
 
     if ck is not None:
         global _last_sync
@@ -947,9 +952,11 @@ def fetch_orders_total(date_from: str, date_to: str, store_ids=None,
 def reason_window() -> tuple[str, str]:
     """Окно «всей истории» для причины расхождения. Единое для эндпоинта и
     фонового прогрева, чтобы ключи кэша совпадали (клик читал из кэша)."""
-    from datetime import date
+    from datetime import date, timedelta
     today = date.today()
-    return f"{today.year - 3}-01-01", today.isoformat()
+    # Конец окна с запасом: сервер по UTC, операции заводят в Бишкеке (+6) —
+    # вечером «сегодняшний» документ на день опережает серверную дату.
+    return f"{today.year - 3}-01-01", (today + timedelta(days=7)).isoformat()
 
 
 def warm_cache(force: bool = False) -> bool:
