@@ -69,18 +69,34 @@ def reconnect(_: models.User = Depends(require_roles(models.Role.admin, models.R
 
 
 def _store_ids_for_org(db: Session, org: str) -> set | None:
-    """SD_id складов выбранной фирмы (в нижнем регистре). None — фильтр не
-    применяем (выбраны «Обе» или привязка складов ещё не настроена)."""
+    """SD_id складов выбранной фирмы плюс склады БЕЗ привязки к фирме.
+
+    None — фильтр не применяем (выбраны «Обе» или привязка ещё не настроена).
+
+    Склады без привязки включаем намеренно. Раньше они молча выпадали: при
+    выборе фирмы реализации с такого склада исчезали, и клиент выглядел так,
+    будто отгрузок в SalesDoc у него нет вовсе (оплаты при этом оставались —
+    они по складам не делятся). Лучше показать лишнее и предупредить, чем
+    незаметно спрятать.
+    """
     o = (org or "").strip().lower()
     if o not in models.ORGS:
         return None
-    ids = {
-        s.store_id.lower()
-        for s in db.query(models.SalesDocStore)
-        .filter(models.SalesDocStore.organization == o).all()
-        if s.store_id
-    }
-    return ids or None
+    rows = [s for s in db.query(models.SalesDocStore).all() if s.store_id]
+    mine = {s.store_id.lower() for s in rows if s.organization == o}
+    if not mine:
+        return None
+    unmapped = {s.store_id.lower() for s in rows if not s.organization}
+    return mine | unmapped
+
+
+def _unmapped_stores(db: Session) -> list[str]:
+    """Склады, которым не задана фирма — их операции попадают в обе фирмы."""
+    return [
+        s.name or s.store_id
+        for s in db.query(models.SalesDocStore).all()
+        if s.store_id and not s.organization
+    ]
 
 
 class StoreItem(BaseModel):
@@ -373,6 +389,9 @@ def reconcile_debt(
         # фирмы наш долг — только её, а долг SD — суммарный: это ожидаемо.
         "sd_account_wide": (org or "").strip().lower() in models.ORGS,
         "synced_at": salesdoc.last_sync(),  # epoch последнего обновления кэша
+        # Склады без привязки к фирме: их реализации попадают в обе фирмы,
+        # поэтому о них честно предупреждаем.
+        "unmapped_stores": _unmapped_stores(db),
         "rows": rows,
     }
 

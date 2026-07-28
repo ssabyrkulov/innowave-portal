@@ -175,6 +175,15 @@ export default function SalesDocPage() {
 
       <MatchingPanel onLinked={() => loadAll(range, onlyDiff)} />
 
+      {debt?.unmapped_stores?.length > 0 && (
+        <p className="note-readonly sd-warn">
+          Складам не задана фирма: <b>{debt.unmapped_stores.join(', ')}</b>. Их
+          реализации показываются в обеих фирмах — иначе они бы исчезали при
+          переключении. Задайте фирму в панели «Склады SalesDoc → фирмы», чтобы
+          деление стало точным.
+        </p>
+      )}
+
       {debt?.sd_account_wide && (
         <p className="note-readonly sd-warn">
           Выбрана одна фирма. Реализации SalesDoc делятся по складу, а <b>баланс
