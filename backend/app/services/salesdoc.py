@@ -917,6 +917,61 @@ def speed_probe(sd_id: str, code_1c: str | None, date_from: str, date_to: str) -
     return out
 
 
+def client_debug(sd_id: str | None, code_1c: str | None,
+                 date_from: str, date_to: str) -> dict:
+    """Почему по клиенту не видно операций: что реально отдаёт SalesDoc.
+
+    Тянем журналы напрямую (мимо зеркала) и считаем, сколько записей ссылаются
+    на этого клиента по каждому ключу — SD_id, CS_id (F1-<SD_id>) и коду 1С.
+    Показываем и «сырые» ссылки на клиента, чтобы увидеть, в каком виде
+    SalesDoc его записал: чаще всего расхождение именно в этом."""
+    sid = str(sd_id or "").lower()
+    code = str(code_1c or "")
+    period = {"period": {"date": {"from": date_from, "to": date_to}}}
+
+    def hits(rows, getter):
+        by_sd = by_cs = by_code = 0
+        samples: list = []
+        for r in rows:
+            cli = getter(r) or {}
+            c_sd = str(cli.get("SD_id") or "").lower()
+            c_cs = str(cli.get("CS_id") or "").lower()
+            c_code = str(cli.get("code_1C") or "")
+            match = False
+            if sid and c_sd == sid:
+                by_sd += 1
+                match = True
+            if sid and c_cs and c_cs.split("-", 1)[-1] == sid:
+                by_cs += 1
+                match = True
+            if code and c_code and c_code == code:
+                by_code += 1
+                match = True
+            if match and len(samples) < 5:
+                samples.append(cli)
+        return {"by_sd_id": by_sd, "by_cs_id": by_cs, "by_code_1c": by_code,
+                "scanned": len(rows), "client_refs": samples}
+
+    orders = call_all("getOrder", ("orders", "order"),
+                      {"filter": {"include": "all", "status": [1, 2, 3, 4, 5], **period}})
+    payments = call_all("getPayment", ("payments", "payment"), {"filter": period})
+    try:
+        defects = call_all(
+            "getOrderDefect",
+            ("defects", "orderDefects", "defect", "orderDefect", "orders"),
+            {"filter": {"status": ALL_DEFECT_STATUSES, **period}})
+    except SalesDocError:
+        defects = []
+
+    return {
+        "sd_id": sd_id, "code_1C": code_1c,
+        "date_from": date_from, "date_to": date_to,
+        "orders": hits(orders, lambda o: o.get("client")),
+        "payments": hits(payments, lambda p: p.get("client")),
+        "defects": hits(defects, lambda d: d.get("client")),
+    }
+
+
 def fetch_orders_total(date_from: str, date_to: str, store_ids=None,
                        use_cache: bool = False) -> dict:
     """Сумма заказов (реализаций) за период и разбивка по клиентам (по имени).

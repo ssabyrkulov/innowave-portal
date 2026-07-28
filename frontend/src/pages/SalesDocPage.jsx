@@ -424,6 +424,8 @@ function ReconcileDetailModal({ row, onClose }) {
 
         {diag && <ReconcileVerdict diag={diag} />}
 
+        <ClientDebug row={row} />
+
         <div className="rc-cols">
           {/* ---- 1С ---- */}
           <div className="rc-col">
@@ -578,6 +580,62 @@ function ReconcileVerdict({ diag }) {
         <ul className="sd-diag-list">
           {diag.lines.map((l, i) => <li key={i}>{l}</li>)}
         </ul>
+      )}
+    </div>
+  )
+}
+
+// «Почему не видно?» — сверяет, что лежит в зеркале и что отдаёт SalesDoc
+// напрямую по этому клиенту. Отвечает на вопрос «в SD операция есть, а в
+// портале нет»: сразу видно, потерялась запись при выгрузке или SalesDoc
+// записал её на другой идентификатор клиента.
+function ClientDebug({ row }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  function run() {
+    setLoading(true); setError(null)
+    api.salesdocClientDebug({ sd_id: row.sd_id, code_1c: row.code_1C })
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+
+  return (
+    <div className="cd-debug">
+      <button className="btn btn-sm btn-ghost" disabled={loading} onClick={run}>
+        {loading ? 'Проверяю…' : '🔎 Почему не видно?'}
+      </button>
+      {error && <div className="error">{error}</div>}
+      {data && (
+        <div className="an-grid">
+          <AnRow label="В зеркале по этому клиенту"
+            value={`реализаций ${data.mirror.orders} · оплат ${data.mirror.payments}`} />
+          <AnRow label="SalesDoc отдаёт по этому клиенту"
+            value={`реализаций ${data.live.orders.by_sd_id + data.live.orders.by_cs_id}`
+              + ` · оплат ${data.live.payments.by_sd_id + data.live.payments.by_cs_id}`
+              + ` · возвратов ${data.live.defects.by_sd_id + data.live.defects.by_cs_id}`}
+            warn={data.live.payments.by_sd_id + data.live.payments.by_cs_id
+                  > data.mirror.payments} />
+          <AnRow label="Найдено по коду 1С"
+            value={`реализаций ${data.live.orders.by_code_1c}`
+              + ` · оплат ${data.live.payments.by_code_1c}`} />
+          <AnRow label="Всего просмотрено в SalesDoc"
+            value={`${data.live.orders.scanned} заказов · ${data.live.payments.scanned} операций`} />
+          <AnRow label="Всего строк в зеркале"
+            value={`${data.mirror.orders_total_rows} заказов · ${data.mirror.payments_total_rows} операций`} />
+          {data.live.payments.client_refs.length > 0 && (
+            <>
+              <div className="an-sub">Как SalesDoc записал клиента в оплатах</div>
+              {data.live.payments.client_refs.map((c, i) => (
+                <div key={i} className="an-store">
+                  <span className="muted">
+                    SD_id: {c.SD_id || '—'} · CS_id: {c.CS_id || '—'} · код 1С: {c.code_1C || '—'}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
       )}
     </div>
   )

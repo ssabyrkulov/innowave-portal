@@ -167,6 +167,12 @@ export const api = {
     ).toString()
     return request(`/salesdoc/stock${qs ? `?${qs}` : ''}`)
   },
+  salesdocClientDebug: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString()
+    return request(`/salesdoc/client-debug${qs ? `?${qs}` : ''}`)
+  },
   salesdocMirror: () => request('/salesdoc/mirror'),
   salesdocMirrorSync: (full = false) =>
     request(`/salesdoc/mirror/sync${full ? '?full=true' : ''}`, { method: 'POST' }),

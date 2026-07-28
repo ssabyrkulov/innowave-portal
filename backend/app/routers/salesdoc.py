@@ -692,6 +692,50 @@ def stock(
             "ready": state["ready"]}
 
 
+@router.get("/client-debug")
+def client_debug(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    sd_id: str | None = Query(default=None),
+    code_1c: str | None = Query(default=None),
+):
+    """Разбор «в SalesDoc операция есть, а в портале нет» по одному клиенту:
+    что лежит в зеркале и что отдаёт SalesDoc напрямую."""
+    _require_configured()
+    if not sd_id and not code_1c:
+        raise HTTPException(status_code=400, detail="Нужен sd_id или code_1c")
+    df, dt = salesdoc.reason_window()
+
+    sid = (sd_id or "").lower() or None
+    def mirror_count(model):
+        from sqlalchemy import or_
+        conds = []
+        if sid:
+            conds.append(model.client_sd_id == sid)
+        if code_1c:
+            conds.append(model.client_code_1c == str(code_1c))
+        if not conds:
+            return 0
+        return db.query(model).filter(or_(*conds)).count()
+
+    try:
+        live = salesdoc.client_debug(sd_id, code_1c, df, dt)
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    return {
+        "mirror": {
+            "orders": mirror_count(models.SalesDocOrder),
+            "payments": db.query(models.SalesDocPayment).filter(
+                models.SalesDocPayment.client_sd_id == sid).count() if sid else 0,
+            "orders_total_rows": db.query(models.SalesDocOrder).count(),
+            "payments_total_rows": db.query(models.SalesDocPayment).count(),
+            "synced_at": salesdoc_mirror.status(db)["synced_at"],
+        },
+        "live": live,
+    }
+
+
 @router.get("/mirror")
 def mirror_status(
     db: Session = Depends(get_db),

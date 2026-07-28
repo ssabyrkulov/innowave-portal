@@ -2780,3 +2780,5 @@ button.summary-card {
 .an-store { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .sd-reconnect-msg { font-size: 12.5px; align-self: center; }
 .sd-pay-diag { font-size: 12px; margin-top: 4px; }
+.cd-debug { margin: 0 0 14px; }
+.cd-debug .an-grid { margin-top: 8px; }
