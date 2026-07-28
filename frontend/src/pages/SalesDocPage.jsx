@@ -814,10 +814,15 @@ function StockPanel() {
                     {openStore === w.store_id ? '▾' : '▸'} {w.store}
                     <span className="muted">
                       {' '}· {ORG_LABELS[w.org] || 'фирма не задана'}
-                      {' '}· {qty(w.total_qty)} шт · {w.positions} поз.
+                      {' '}· {w.positions
+                        ? `${qty(w.total_qty)} шт · ${w.positions} поз.`
+                        : 'пусто'}
                     </span>
                   </button>
                   {openStore === w.store_id && (
+                    w.items.length === 0 ? (
+                      <div className="muted rc-empty">Остатков нет</div>
+                    ) : (
                     <div className="table-wrap rc-table">
                       <table>
                         <thead>
@@ -833,6 +838,7 @@ function StockPanel() {
                         </tbody>
                       </table>
                     </div>
+                    )
                   )}
                 </div>
               ))}

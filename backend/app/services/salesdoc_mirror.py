@@ -355,6 +355,20 @@ def stock_by_store(db: Session, store_ids=None, q: str | None = None,
     names = {s.store_id.lower(): (s.name, s.organization)
              for s in db.query(models.SalesDocStore).all() if s.store_id}
     grouped: dict[str, dict] = {}
+
+    # Показываем ВСЕ склады из справочника, даже пустые: иначе склад без
+    # остатков (возвратный, перевалочный) просто исчезал из списка и выглядел
+    # как потерянный. При поиске по товару пустые не показываем — они бы
+    # только мешали результатам.
+    if not q:
+        for sid, (name, org) in names.items():
+            if store_ids and sid not in store_ids:
+                continue
+            grouped[sid] = {
+                "store_id": sid, "store": name or sid, "org": org,
+                "positions": 0, "total_qty": 0.0, "items": [],
+            }
+
     for r in query.order_by(models.SalesDocStock.product_name).all():
         # Название склада: из справочника SalesDoc, иначе из самих остатков,
         # и лишь в крайнем случае — идентификатор.
