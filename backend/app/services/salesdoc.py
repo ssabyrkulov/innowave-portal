@@ -490,6 +490,11 @@ def fetch_clients(use_cache: bool = False) -> list[dict]:
 
 
 ORDER_STATUS = {1: "Новый", 2: "Отправлен", 3: "Доставлен", 4: "Закрыт", 5: "Отменён"}
+# Статусы для запроса возвратных документов. Указываем явно: у getOrderDefect
+# фильтр статусов по умолчанию — [1], то есть без списка сервер отдаёт только
+# новые документы, а проведённые возвраты остаются невидимыми (та же ловушка,
+# что была у getOrder).
+ALL_DEFECT_STATUSES = [1, 2, 3, 4, 5]
 # В сумму реализаций идут только отгруженные: Отправлен/Доставлен/Закрыт.
 # «Новый» ещё не отгружен, «Отменён» — не продажа.
 SHIPPED_STATUSES = {2, 3, 4}
@@ -567,7 +572,8 @@ def fetch_client_returns(sd_id, code_1c, date_from, date_to) -> dict:
     """Возвраты клиента за период."""
     params = {
         "client": _client_ref(sd_id, code_1c),
-        "filter": {"period": {"date": {"from": date_from, "to": date_to}}},
+        "filter": {"status": ALL_DEFECT_STATUSES,
+                   "period": {"date": {"from": date_from, "to": date_to}}},
     }
     rows = call_all("getOrderDefect", ("defects", "orderDefects", "defect", "orderDefect", "orders"), params)
     items, total = [], 0.0
@@ -740,7 +746,7 @@ def returns_diagnostic(date_from: str, date_to: str) -> dict:
     def_total = 0.0
     for r in call_all("getOrderDefect",
                       ("defects", "orderDefects", "defect", "orderDefect", "orders"),
-                      {"filter": period}):
+                      {"filter": {"status": ALL_DEFECT_STATUSES, **period}}):
         amt = float(r.get("summa") or r.get("totalSumma") or 0)
         k = _client_key_any(r.get("client"))
         def_count += 1
@@ -841,10 +847,11 @@ def speed_probe(sd_id: str, code_1c: str | None, date_from: str, date_to: str) -
     # --- 2. Возвраты-документы: тот же тест ---
     d_with = timed(lambda: call_all(
         "getOrderDefect", ("defects", "orderDefects", "defect", "orderDefect", "orders"),
-        {"client": _client_ref(sd_id, code_1c), "filter": period}))
+        {"client": _client_ref(sd_id, code_1c),
+         "filter": {"status": ALL_DEFECT_STATUSES, **period}}))
     d_all = timed(lambda: call_all(
         "getOrderDefect", ("defects", "orderDefects", "defect", "orderDefect", "orders"),
-        {"filter": period}))
+        {"filter": {"status": ALL_DEFECT_STATUSES, **period}}))
     out["defects"] = {
         "with_client_filter": {"returned": len(d_with["rows"]), "ms": d_with["ms"],
                                "error": d_with["error"]},
@@ -1066,7 +1073,7 @@ def fetch_reconcile_components(date_from: str, date_to: str, store_ids=None,
         for r in call_all(
             "getOrderDefect",
             ("defects", "orderDefects", "defect", "orderDefect", "orders"),
-            {"filter": period},
+            {"filter": {"status": ALL_DEFECT_STATUSES, **period}},
         ):
             amt = float(r.get("summa") or r.get("totalSumma") or 0)
             accumulate(r.get("client"), amt, returns_sd, returns_code)
