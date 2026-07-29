@@ -929,9 +929,13 @@ def client_debug(sd_id: str | None, code_1c: str | None,
     code = str(code_1c or "")
     period = {"period": {"date": {"from": date_from, "to": date_to}}}
 
-    def hits(rows, getter):
+    def hits(rows, getter, txn_of=None):
         by_sd = by_cs = by_code = 0
         samples: list = []
+        # Разбивка по видам операций: баланс SalesDoc двигают не только оплаты,
+        # но и списание долга, начальный остаток, конверсия. Когда операции
+        # сходятся, а баланс — нет, ответ обычно именно здесь.
+        by_txn: dict = {}
         for r in rows:
             cli = getter(r) or {}
             c_sd = str(cli.get("SD_id") or "").lower()
@@ -947,10 +951,21 @@ def client_debug(sd_id: str | None, code_1c: str | None,
             if code and c_code and c_code == code:
                 by_code += 1
                 match = True
-            if match and len(samples) < 5:
-                samples.append(cli)
-        return {"by_sd_id": by_sd, "by_cs_id": by_cs, "by_code_1c": by_code,
-                "scanned": len(rows), "client_refs": samples}
+            if match:
+                if len(samples) < 5:
+                    samples.append(cli)
+                if txn_of is not None:
+                    t = _to_int(txn_of(r))
+                    name = PAY_TXN.get(t, str(t))
+                    d = by_txn.setdefault(name, {"count": 0, "sum": 0.0})
+                    d["count"] += 1
+                    d["sum"] += float(r.get("amount") or 0)
+        out = {"by_sd_id": by_sd, "by_cs_id": by_cs, "by_code_1c": by_code,
+               "scanned": len(rows), "client_refs": samples}
+        if txn_of is not None:
+            out["by_txn"] = [{"txn": k, **v} for k, v in
+                             sorted(by_txn.items(), key=lambda x: -abs(x[1]["sum"]))]
+        return out
 
     orders = call_all("getOrder", ("orders", "order"),
                       {"filter": {"include": "all", "status": [1, 2, 3, 4, 5], **period}})
@@ -967,7 +982,8 @@ def client_debug(sd_id: str | None, code_1c: str | None,
         "sd_id": sd_id, "code_1C": code_1c,
         "date_from": date_from, "date_to": date_to,
         "orders": hits(orders, lambda o: o.get("client")),
-        "payments": hits(payments, lambda p: p.get("client")),
+        "payments": hits(payments, lambda p: p.get("client"),
+                         txn_of=lambda p: p.get("transactionType")),
         "defects": hits(defects, lambda d: d.get("client")),
     }
 

@@ -568,7 +568,7 @@ function diagnoseReconcile(row, t) {
           `По реализациям, оплатам и возвратам долг должен быть ${money(sdTxnNet)}, а баланс SalesDoc = ${money(Number(row.sd_debt || 0))}.`,
           gap > 0
             ? 'В SalesDoc есть сумма сверх проведённых операций — чаще всего оплата, попавшая в журнал, но не применённая к балансу, либо входящий остаток. Это правится в SalesDoc — новая загрузка из 1С на это не влияет.'
-            : 'Баланс SalesDoc меньше, чем следует из операций — возможно, в балансе учтена лишняя оплата или возврат.',
+            : 'Баланс SalesDoc меньше, чем следует из операций: значит его уменьшила операция, которой нет среди реализаций, оплат и возвратов — списание долга, начальный остаток или конверсия. Нажмите «Почему не видно?» — там весь журнал по клиенту с разбивкой по видам.',
         ],
       }
     }
@@ -639,6 +639,22 @@ function ClientDebug({ row }) {
             value={`${data.live.orders.scanned} заказов · ${data.live.payments.scanned} операций`} />
           <AnRow label="Всего строк в зеркале"
             value={`${data.mirror.orders_total_rows} заказов · ${data.mirror.payments_total_rows} операций`} />
+          {data.live.payments.by_txn?.length > 0 && (
+            <>
+              <div className="an-sub">Операции журнала SalesDoc по этому клиенту</div>
+              {data.live.payments.by_txn.map((t) => (
+                <div key={t.txn} className="an-store">
+                  <span>{t.txn}</span>
+                  <span className="num">{money(t.sum)} · {t.count}</span>
+                </div>
+              ))}
+              <div className="muted sd-pay-diag">
+                Баланс SalesDoc двигают не только оплаты: списание долга,
+                начальный остаток и конверсия тоже. Если операции сходятся, а
+                баланс — нет, причина обычно в этом списке.
+              </div>
+            </>
+          )}
           {data.live.payments.client_refs.length > 0 && (
             <>
               <div className="an-sub">Как SalesDoc записал клиента в оплатах</div>
