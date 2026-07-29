@@ -229,6 +229,8 @@ export default function SalesDocPage() {
 
       <ShipmentsComparePanel />
 
+      <WhyPanel />
+
       <OrderChangesPanel />
 
       <AnalyzePanel />
@@ -1311,6 +1313,75 @@ function StoreStats({ rows }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// «Почему эта точка здесь, а соседняя нет» — вопрос, на который каждый раз
+// приходилось отвечать расследованием. Панель разбирает решение по шагам.
+function WhyPanel() {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    if (q.trim().length < 2) return
+    setLoading(true); setError(null)
+    api.salesdocWhy(q.trim())
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={() => setOpen(!open)}>
+        {open ? '▾' : '▸'} 🔎 Почему точка здесь / не здесь
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Введите часть названия точки — портал покажет по
+            шагам, почему она попала в список выбранной фирмы или не попала:
+            есть ли она в 1С каждой фирмы, какой долг в SalesDoc и на складах
+            какой фирмы лежат её реализации.</p>
+          <div className="rc-period">
+            <input className="filter-select" value={q} placeholder="Глобус"
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && load()} />
+            <button className="btn btn-sm" onClick={load} disabled={loading}>
+              {loading ? 'Ищу…' : 'Разобрать'}
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+          {data && data.clients.length === 0 && (
+            <div className="muted">В SalesDoc таких точек не нашлось.</div>
+          )}
+          {data?.clients.map((c, i) => (
+            <div key={i} className="order-raw">
+              <div><b>{c.name}</b> <span className="muted">· {c.sd_id}</span></div>
+              <div>Долг в SalesDoc: <b>{money(c.sd_debt)}</b></div>
+              <div>
+                В 1С: {Object.entries(c.in_1c).map(([firm, debt]) => (
+                  <span key={firm} className="why-firm">
+                    {ORG_LABELS[firm] || firm}:{' '}
+                    {debt == null ? <span className="muted">нет</span> : <b>{money(debt)}</b>}
+                  </span>
+                ))}
+              </div>
+              <div>
+                Реализации на складах фирм:{' '}
+                {c.store_orgs.length
+                  ? <b>{c.store_orgs.map((f) => ORG_LABELS[f] || f).join(', ')}</b>
+                  : <span className="muted">нет реализаций на складах с привязкой</span>}
+                {c.unmapped_stores.length > 0 && (
+                  <> · склады без фирмы: <b>{c.unmapped_stores.join(', ')}</b></>
+                )}
+              </div>
+              <div className="why-verdict">{c.verdict}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

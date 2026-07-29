@@ -1061,6 +1061,82 @@ def store_orders(
     }
 
 
+@router.get("/why")
+def why_here(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(can_view),
+    query: str = Query(..., min_length=2, description="Часть имени точки"),
+    org: str = Query(default="all"),
+):
+    """Почему точка есть (или её нет) в списке сверки выбранной фирмы.
+
+    Вопрос «почему эта точка здесь, а соседняя нет» возникает постоянно, и
+    ответ каждый раз собирался расследованием. Здесь он выдаётся по шагам: есть
+    ли точка в 1С по каждой фирме, какой у неё долг в SalesDoc и на складах
+    какой фирмы лежат её реализации."""
+    o = (org or "").strip().lower()
+    q = query.strip().lower()
+
+    sd_clients = salesdoc_mirror.clients_for_reconcile(db)
+    hits = [c for c in sd_clients if q in (c["name"] or "").lower()][:20]
+    client_orgs = salesdoc_mirror.client_store_orgs(db)
+    links = {
+        _match_key(l.client_1c): l.sd_id.lower()
+        for l in db.query(models.SalesDocClientLink).all()
+    }
+
+    # Дебиторка 1С по каждой фирме отдельно — точка может быть заведена в одной
+    # и отсутствовать в другой, и именно это чаще всего всё и объясняет.
+    per_org: dict[str, dict] = {}
+    for firm in models.ORGS:
+        rec = receivables(db=db, _=user, org=firm)
+        per_org[firm] = {_match_key(c["client"]): c for c in rec["clients"]}
+
+    out = []
+    for c in hits:
+        sid = (c["sd_id"] or "").lower()
+        key = _match_key(c["name"])
+        info = client_orgs.get(sid) or {}
+        stores_orgs = sorted(info.get("orgs") or [])
+        debt = round(float(c.get("debt") or 0), 2)
+        in_1c = {
+            firm: (per_org[firm].get(key) or {}).get("debt")
+            for firm in models.ORGS
+        }
+        if o in models.ORGS:
+            if in_1c.get(o) is not None:
+                verdict = ("в списке как «обе»: точка есть и в 1С этой фирмы — "
+                           "если суммы сходятся, при включённом «только "
+                           "расхождения» строки не видно")
+            elif abs(debt) < 0.5:
+                verdict = "не в списке: долг в SalesDoc нулевой"
+            elif stores_orgs and o not in stores_orgs:
+                verdict = ("не в списке: в 1С этой фирмы точки нет, а её "
+                           "реализации лежат на складах другой фирмы — "
+                           + ", ".join(stores_orgs))
+            elif not stores_orgs:
+                verdict = ("в списке как «только SD»: в 1С этой фирмы точки "
+                           "нет, а фирму определить не по чему — реализаций "
+                           "на складах с привязкой у неё нет")
+            else:
+                verdict = ("в списке как «только SD»: в 1С этой фирмы точки "
+                           "нет, а реализации лежат на её складах")
+        else:
+            verdict = "выбраны обе фирмы — фильтр по фирме не применяется"
+        out.append({
+            "sd_id": sid,
+            "name": c["name"],
+            "code_1C": c["code_1C"],
+            "sd_debt": debt,
+            "store_orgs": stores_orgs,
+            "unmapped_stores": info.get("unmapped") or [],
+            "in_1c": in_1c,
+            "linked_manually": links.get(key) == sid,
+            "verdict": verdict,
+        })
+    return {"org": o, "query": query, "clients": out}
+
+
 @router.get("/payment-raw")
 def payment_raw(
     db: Session = Depends(get_db),

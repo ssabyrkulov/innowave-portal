@@ -2780,6 +2780,8 @@ button.summary-card {
   border-radius: 8px; padding: 10px 12px; margin: 8px 0; display: grid; gap: 6px;
 }
 .order-raw-sib ul { margin: 4px 0 0; padding-left: 18px; }
+.why-firm { margin-right: 14px; }
+.why-verdict { border-top: 1px solid var(--border); padding-top: 6px; font-weight: 600; }
 .order-raw-json { max-height: 320px; overflow: auto; font-size: 11px; margin: 6px 0 0; }
 .store-row .filter-select { min-width: 180px; }
 .store-map-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
