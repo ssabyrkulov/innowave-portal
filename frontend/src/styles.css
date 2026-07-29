@@ -2782,3 +2782,10 @@ button.summary-card {
 .sd-pay-diag { font-size: 12px; margin-top: 4px; }
 .cd-debug { margin: 0 0 14px; }
 .cd-debug .an-grid { margin-top: 8px; }
+/* Номер документа под датой: мелко и приглушённо, чтобы не спорить с суммой */
+.rc-note {
+  font-size: 10.5px;
+  color: var(--faint);
+  margin-top: 1px;
+  letter-spacing: -0.01em;
+}

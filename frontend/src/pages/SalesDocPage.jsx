@@ -24,6 +24,14 @@ function monthRange() {
 const money = (v) => formatMoney(v)
 const cls = (diff) => (Math.abs(Number(diff || 0)) >= 0.5 ? 'sd-diff-bad' : 'sd-diff-ok')
 
+// Идентификаторы SalesDoc бывают длинными (UUID) — показываем начало, полное
+// значение остаётся в подсказке при наведении.
+function shortId(id) {
+  if (!id) return null
+  const s = String(id)
+  return 'ИД ' + (s.length > 14 ? s.slice(0, 12) + '…' : s)
+}
+
 // epoch (сек) → ЧЧ:ММ — когда кэш SalesDoc последний раз обновлялся.
 function fmtClock(epoch) {
   return new Date(epoch * 1000).toLocaleTimeString('ru-RU', {
@@ -445,8 +453,11 @@ function ReconcileDetailModal({ row, onClose }) {
           <div className="rc-col">
             <div className="rc-col-title">1С {row.in_1c ? '' : '· нет'}</div>
             <RcSection title="Реализации" total={s1} count={cShip.length}
-              rows={cShip.map((s) => [s.date, s.doc_number || '—', money(s.amount)])}
-              head={['Дата', 'Документ', 'Сумма']} />
+              rows={cShip.map((s) => ({
+                cells: [s.date, money(s.amount)],
+                note: s.doc_number ? `док. ${s.doc_number}` : null,
+              }))}
+              head={['Дата', 'Сумма']} />
             <RcSection title="Оплаты" total={p1} count={cPay.length}
               rows={cPay.map((p) => [p.date, p.kind === 'cash' ? 'касса' : 'банк', money(p.amount_kgs)])}
               head={['Дата', 'Тип', 'Сумма']} />
@@ -467,11 +478,11 @@ function ReconcileDetailModal({ row, onClose }) {
                   // равные суммы, и без него не понять, какая из них какой
                   // накладной 1С соответствует. code_1C — номер, присвоенный
                   // при обмене с 1С; если его нет, показываем ИД SalesDoc.
-                  cells: [o.date, o.code_1C || o.sd_id || '—', o.status_label,
-                          money(o.amount)],
+                  cells: [o.date, o.status_label, money(o.amount)],
+                  note: o.code_1C ? `док. ${o.code_1C}` : shortId(o.sd_id),
                   muted: !o.counted,
                 }))}
-              head={['Дата', 'Документ', 'Статус', 'Сумма']} />
+              head={['Дата', 'Статус', 'Сумма']} />
             {sd?.orders?.hidden_by_store > 0 && (
               <div className="muted sd-pay-diag">
                 Ещё {sd.orders.hidden_by_store} реализаций скрыто отбором по
@@ -486,13 +497,13 @@ function ReconcileDetailModal({ row, onClose }) {
                 // переносилась на вторую строку и ломала выравнивание с 1С.
                 cells: [
                   p.date,
-                  p.sd_id || '—',
                   p.counted ? (p.type_name || 'Оплата') : p.txn_label,
                   money(p.amount),
                 ],
+                note: shortId(p.sd_id),
                 muted: !p.counted,
               }))}
-              head={['Дата', 'ИД', 'Вид', 'Сумма']} />
+              head={['Дата', 'Вид', 'Сумма']} />
             {sd?.payments && sd.payments.matched === 0 && (
               <div className="muted sd-pay-diag">
                 {sd.payments.scanned > 0
@@ -501,9 +512,11 @@ function ReconcileDetailModal({ row, onClose }) {
               </div>
             )}
             <RcSection title="Возвраты" total={sd?.returns?.total} count={sd?.returns?.count}
-              rows={(sd?.returns?.items || []).map((r) => [r.date, r.sd_id || '—',
-                                                          money(r.amount)])}
-              head={['Дата', 'ИД', 'Сумма']} />
+              rows={(sd?.returns?.items || []).map((r) => ({
+                cells: [r.date, money(r.amount)],
+                note: shortId(r.sd_id),
+              }))}
+              head={['Дата', 'Сумма']} />
           </div>
         </div>
       </div>
@@ -716,10 +729,16 @@ function RcSection({ title, total, count, rows, head }) {
               {rows.map((r, i) => {
                 const cells = Array.isArray(r) ? r : r.cells
                 const muted = !Array.isArray(r) && r.muted
+                // Номер документа — мелкой строкой под датой, а не колонкой:
+                // идентификаторы SalesDoc длинные и выдавливали сумму за край.
+                const note = !Array.isArray(r) && r.note
                 return (
                   <tr key={i} className={muted ? 'rc-row-muted' : ''}>
                     {cells.map((c, j) => (
-                      <td key={j} className={j === cells.length - 1 ? 'num' : ''}>{j === 0 ? fdate(c) : c}</td>
+                      <td key={j} className={j === cells.length - 1 ? 'num' : ''}>
+                        {j === 0 ? fdate(c) : c}
+                        {j === 0 && note && <div className="rc-note" title={note}>{note}</div>}
+                      </td>
                     ))}
                   </tr>
                 )
