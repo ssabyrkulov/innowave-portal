@@ -269,21 +269,27 @@ def reconcile_debt(
     # Фирма клиента SalesDoc — по складам его заказов. Нужна, чтобы при выборе
     # одной фирмы показывать только её точки (в т.ч. «только SD»).
     o = (org or "").strip().lower()
-    client_orgs = None
+    client_orgs = None  # sd_id → {"orgs": {фирмы}, "unmapped": [склады без фирмы]}
     if o in models.ORGS:
-        store_org = {
-            s.store_id.lower(): s.organization
-            for s in db.query(models.SalesDocStore).all()
-            if s.store_id and s.organization
-        }
-        if store_org:
-            df, dt = salesdoc.reason_window()
-            try:
-                client_orgs = salesdoc.fetch_client_store_orgs(
-                    store_org, df, dt, use_cache=True
-                )
-            except salesdoc.SalesDocError:
-                client_orgs = None
+        if mirror_ready:
+            client_orgs = salesdoc_mirror.client_store_orgs(db)
+        else:
+            store_org = {
+                s.store_id.lower(): s.organization
+                for s in db.query(models.SalesDocStore).all()
+                if s.store_id and s.organization
+            }
+            if store_org:
+                df, dt = salesdoc.reason_window()
+                try:
+                    live = salesdoc.fetch_client_store_orgs(
+                        store_org, df, dt, use_cache=True
+                    )
+                    client_orgs = {
+                        k: {"orgs": v, "unmapped": []} for k, v in live.items()
+                    }
+                except salesdoc.SalesDocError:
+                    client_orgs = None
 
     rec = receivables(db=db, _=user, org=org)
     rows = []
@@ -332,13 +338,28 @@ def reconcile_debt(
     for entry in sd_by_id.values():
         if entry["sd_id"] in matched_ids or abs(entry["debt"]) < 0.5:
             continue
-        entry_orgs = client_orgs.get(entry["sd_id"]) if client_orgs is not None else None
-        # При выбранной фирме показываем только её точки.
+        info = client_orgs.get(entry["sd_id"]) if client_orgs is not None else None
+        entry_orgs = (info or {}).get("orgs") or set()
+        # При выбранной фирме показываем только её точки. Фирму точки SalesDoc
+        # определяем по складам её реализаций — но склад известен не всегда,
+        # и тогда мы не прячем строку молча, а показываем и объясняем почему
+        # (иначе «почему этот клиент здесь?» невозможно понять из интерфейса).
+        org_note = None
         if o in models.ORGS and client_orgs is not None:
-            if not entry_orgs or o not in entry_orgs:
-                continue
-        row_org = list(entry_orgs)[0] if entry_orgs and len(entry_orgs) == 1 else None
+            if o in entry_orgs:
+                pass  # точка этой фирмы — вопросов нет
+            elif info is None:
+                org_note = "фирма не определена: в SalesDoc нет реализаций этой точки"
+            elif info.get("unmapped"):
+                org_note = (
+                    "фирма не определена: реализации на складах без фирмы — "
+                    + ", ".join(info["unmapped"])
+                )
+            else:
+                continue  # точка другой фирмы
+        row_org = list(entry_orgs)[0] if len(entry_orgs) == 1 else None
         rows.append({
+            "org_note": org_note,
             "name": entry["name"],
             "our_debt": 0.0,
             "sd_debt": entry["debt"],

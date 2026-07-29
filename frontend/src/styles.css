@@ -2803,3 +2803,12 @@ button.summary-card {
   text-overflow: ellipsis;
 }
 .rc-note-warn { color: var(--warn); font-weight: 600; max-width: none; }
+/* Почему точка «только SD» попала в выбранную фирму — подпись под именем. */
+.rc-org-note {
+  font-size: 10.5px;
+  color: var(--warn);
+  margin-top: 2px;
+  max-width: 320px;
+  white-space: normal;
+  line-height: 1.25;
+}

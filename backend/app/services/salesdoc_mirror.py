@@ -293,6 +293,45 @@ def clients_for_reconcile(db: Session) -> list[dict]:
     ]
 
 
+def client_store_orgs(db: Session) -> dict[str, dict]:
+    """Фирма каждой точки SalesDoc — по складам её реализаций, из зеркала.
+
+    Раньше это считалось живым запросом в SalesDoc: выкачивался весь журнал
+    заказов за 4 года только ради карты «клиент → фирма». Запрос тяжёлый, и
+    когда он падал, привязка молча становилась пустой — тогда точки «только SD»
+    показывались сразу в обеих фирмах. Теперь берём то же самое из зеркала:
+    мгновенно и без сбоев.
+
+    Возвращает {sd_id клиента: {"orgs": множество фирм по складам с привязкой,
+    "unmapped": названия складов без привязки}}. Пустой словарь означает, что
+    реализаций у точки нет вовсе — фирму определить не по чему.
+    """
+    stores = {
+        s.store_id.lower(): s
+        for s in db.query(models.SalesDocStore).all() if s.store_id
+    }
+    out: dict[str, dict] = {}
+    rows = (
+        db.query(models.SalesDocOrder.client_sd_id, models.SalesDocOrder.store_sd_id)
+        .distinct()
+        .all()
+    )
+    for cli, store_id in rows:
+        if not cli:
+            continue
+        entry = out.setdefault(str(cli).lower(), {"orgs": set(), "unmapped": []})
+        store = stores.get(str(store_id or "").lower())
+        if store is None:
+            continue
+        if store.organization:
+            entry["orgs"].add(store.organization)
+        else:
+            name = store.name or store.store_id
+            if name not in entry["unmapped"]:
+                entry["unmapped"].append(name)
+    return out
+
+
 def sync_warehouses(db: Session, updated_since: str | None = None) -> int:
     """Названия складов из SalesDoc — в справочник привязки.
 
