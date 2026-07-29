@@ -342,6 +342,29 @@ class SalesDocPayment(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocOrderChange(Base):
+    """Замеченная смена склада (или статуса) у документа SalesDoc.
+
+    В самом SalesDoc история изменений склад не пишет: в журнале документа
+    остаётся первый склад, а последующие правки нигде не сохраняются — понять,
+    когда и на что склад поменяли, невозможно. Раз зеркало раз в час
+    перечитывает журнал целиком, мы такие правки видим и записываем: это
+    единственное место, где эта история вообще существует.
+    """
+
+    __tablename__ = "salesdoc_order_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    order_sd_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    field: Mapped[str] = mapped_column(String, nullable=False)  # store|status
+    old_value: Mapped[str | None] = mapped_column(String, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    client_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    noticed_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True)
+
+
 class SalesDocClient(Base):
     """Зеркало точки SalesDoc: справочник + текущий долг.
 

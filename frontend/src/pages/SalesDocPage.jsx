@@ -193,6 +193,8 @@ export default function SalesDocPage() {
 
       <ShipmentsComparePanel />
 
+      <OrderChangesPanel />
+
       <AnalyzePanel />
 
       <PaymentsDebugPanel />
@@ -1179,6 +1181,69 @@ function StoreStats({ rows }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// История смен склада и статуса — та, которой в SalesDoc нет. Зеркало раз в
+// час перечитывает журнал целиком, поэтому правку оно видит, даже если сам
+// SalesDoc её нигде не сохранил.
+function OrderChangesPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocOrderChanges()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  const rows = data?.changes || []
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🕓 Изменения документов SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">В SalesDoc правки склада в истории документа не
+            сохраняются: там остаётся первый склад, а когда и на что его
+            поменяли — узнать негде. Портал перечитывает журнал целиком раз в
+            час, поэтому такие правки замечает и записывает здесь. История
+            копится с момента этой доработки — задним числом её взять неоткуда.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Загрузка…</div>}
+          {data && rows.length === 0 && (
+            <div className="muted">Изменений пока не замечено.</div>
+          )}
+          {rows.length > 0 && (
+            <div className="table-wrap rc-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Замечено</th><th>Документ</th><th>Точка</th>
+                    <th>Что</th><th>Было → стало</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((c, i) => (
+                    <tr key={i}>
+                      <td>{(c.noticed_at || '').replace('T', ' ').slice(0, 16)}</td>
+                      <td>{shortId(c.order_sd_id)}<div className="rc-note">{fdateShort(c.doc_date)}</div></td>
+                      <td>{c.client}</td>
+                      <td>{c.field_label}</td>
+                      <td>{c.old} → <b>{c.new}</b></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

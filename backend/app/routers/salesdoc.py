@@ -1014,6 +1014,17 @@ def store_orders(
     }
 
 
+@router.get("/order-changes")
+def order_changes(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+):
+    """Смены склада и статуса документов, замеченные зеркалом.
+
+    В SalesDoc такой истории нет — правки склада там не сохраняются."""
+    return {"changes": salesdoc_mirror.order_changes(db)}
+
+
 @router.get("/order-raw")
 def order_raw(
     db: Session = Depends(get_db),

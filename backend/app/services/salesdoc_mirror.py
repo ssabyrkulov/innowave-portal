@@ -90,6 +90,30 @@ def _client_keys(cli: dict | None) -> tuple[str | None, str | None]:
     return sd, code
 
 
+def _log_order_change(db: Session, sd_id: str, store_sd_id) -> None:
+    """Записывает смену склада документа, если она случилась.
+
+    SalesDoc такие правки нигде не хранит: в истории документа остаётся первый
+    склад, а изменения не сохраняются — из-за этого и вышла путаница, когда
+    портал и журнал SalesDoc показывали у одного документа разные склады. Раз
+    мы раз в час перечитываем журнал целиком, правку видно нам — и только у нас
+    эта история и может остаться.
+
+    Смену статуса не пишем: Новый → Отправлен → Доставлен → Закрыт проходит
+    каждый документ, и этот шум похоронил бы редкие правки склада."""
+    row = db.query(models.SalesDocOrder).filter_by(sd_id=sd_id).first()
+    if row is None:
+        return  # новый документ — сравнивать не с чем
+    old, new = row.store_sd_id, store_sd_id
+    if old is None or new is None or str(old) == str(new):
+        return
+    db.add(models.SalesDocOrderChange(
+        order_sd_id=sd_id, field="store",
+        old_value=str(old), new_value=str(new),
+        doc_date=row.date, client_sd_id=row.client_sd_id,
+    ))
+
+
 def _upsert(db: Session, model, sd_id: str, values: dict) -> None:
     """Обновляем запись зеркала по SD_id либо создаём новую."""
     row = db.query(model).filter_by(sd_id=sd_id).first()
@@ -213,10 +237,12 @@ def sync_orders(db: Session, updated_since: str | None = None) -> int:
             continue
         seen.add(sd_id)
         cli_sd, cli_code = _client_keys(o.get("client"))
+        store_sd_id = str((o.get("store") or {}).get("SD_id") or "").lower() or None
+        _log_order_change(db, sd_id, store_sd_id)
         _upsert(db, models.SalesDocOrder, sd_id, {
             "client_sd_id": cli_sd,
             "client_code_1c": cli_code,
-            "store_sd_id": str((o.get("store") or {}).get("SD_id") or "").lower() or None,
+            "store_sd_id": store_sd_id,
             "date": _day(o.get("dateDocument") or o.get("dateCreate")),
             "status": o.get("status"),
             "amount": float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0),
@@ -415,6 +441,48 @@ def store_orders(db: Session, store_id: str, limit: int = 500) -> list[dict]:
             "counted": r.status in salesdoc.SHIPPED_STATUSES,
         }
         for r in q.order_by(models.SalesDocOrder.date.desc()).limit(limit).all()
+    ]
+
+
+def order_changes(db: Session, limit: int = 200) -> list[dict]:
+    """История смен склада и статуса документов — та, которой нет в SalesDoc."""
+    stores = {
+        s.store_id.lower(): (s.name or s.store_id)
+        for s in db.query(models.SalesDocStore).all() if s.store_id
+    }
+    names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+
+    def label(field: str, value: str | None) -> str:
+        if value is None:
+            return "—"
+        if field == "store":
+            return stores.get(value.lower(), value)
+        return salesdoc.ORDER_STATUS.get(_int(value), value)
+
+    def _int(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    rows = (
+        db.query(models.SalesDocOrderChange)
+        .order_by(models.SalesDocOrderChange.noticed_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "order_sd_id": c.order_sd_id,
+            "field": c.field,
+            "field_label": "склад" if c.field == "store" else "статус",
+            "old": label(c.field, c.old_value),
+            "new": label(c.field, c.new_value),
+            "doc_date": c.doc_date and c.doc_date.isoformat(),
+            "client": names.get(c.client_sd_id or "", c.client_sd_id or ""),
+            "noticed_at": c.noticed_at and c.noticed_at.isoformat(),
+        }
+        for c in rows
     ]
 
 

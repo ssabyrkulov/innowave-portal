@@ -174,6 +174,7 @@ export const api = {
     return request(`/salesdoc/client-debug${qs ? `?${qs}` : ''}`)
   },
   salesdocCashboxes: () => request('/salesdoc/cashboxes'),
+  salesdocOrderChanges: () => request('/salesdoc/order-changes'),
   salesdocOrderRaw: (sdId) =>
     request(`/salesdoc/order-raw?sd_id=${encodeURIComponent(sdId)}`),
   salesdocStoreOrders: (storeId) =>
