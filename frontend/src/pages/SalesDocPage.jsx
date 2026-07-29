@@ -338,9 +338,14 @@ function inRange(iso, r) {
 }
 
 function ReconcileDetailModal({ row, onClose }) {
-  // По умолчанию — вся история (долг накопительный): с начала данных до сегодня.
-  const today = toISODate(new Date())
-  const [dr, setDr] = useState({ from: `${new Date().getFullYear() - 3}-01-01`, to: today })
+  // По умолчанию — вся история (долг накопительный). Конец периода — конец
+  // следующего года, а не «сегодня»: в SalesDoc попадаются операции с датой в
+  // будущем (опечатка в годе при ручном вводе), и они тоже двигают баланс —
+  // если их не показать, получается «операции сходятся, а баланс нет».
+  const [dr, setDr] = useState({
+    from: `${new Date().getFullYear() - 3}-01-01`,
+    to: `${new Date().getFullYear() + 1}-12-31`,
+  })
   const [oneC, setOneC] = useState(null)
   const [sd, setSd] = useState(null)
   const [err, setErr] = useState(null)

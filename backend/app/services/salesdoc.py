@@ -1023,11 +1023,12 @@ def fetch_orders_total(date_from: str, date_to: str, store_ids=None,
 def reason_window() -> tuple[str, str]:
     """Окно «всей истории» для причины расхождения. Единое для эндпоинта и
     фонового прогрева, чтобы ключи кэша совпадали (клик читал из кэша)."""
-    from datetime import date, timedelta
+    from datetime import date
     today = date.today()
-    # Конец окна с запасом: сервер по UTC, операции заводят в Бишкеке (+6) —
-    # вечером «сегодняшний» документ на день опережает серверную дату.
-    return f"{today.year - 3}-01-01", (today + timedelta(days=7)).isoformat()
+    # Конец окна — конец следующего года: в SalesDoc встречаются операции,
+    # датированные будущим (обычно опечатка в годе при ручном вводе), и они
+    # тоже двигают баланс клиента.
+    return f"{today.year - 3}-01-01", f"{today.year + 1}-12-31"
 
 
 def warm_cache(force: bool = False) -> bool:
