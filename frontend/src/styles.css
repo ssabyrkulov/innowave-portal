@@ -2781,7 +2781,13 @@ button.summary-card {
 .an-sub { font-weight: 700; margin: 12px 0 4px; font-size: 13px; }
 .an-store { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .sd-reconnect-msg { font-size: 12.5px; align-self: center; }
-.sd-pay-diag { font-size: 12px; margin-top: 4px; }
+/* Пояснение под блоком (скрытые реализации, ненайденные оплаты). Нужен отступ
+   снизу: без него текст вплотную налезал на заголовок следующего раздела. */
+.sd-pay-diag {
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 4px 0 14px;
+}
 .cd-debug { margin: 0 0 14px; }
 .cd-debug .an-grid { margin-top: 8px; }
 /* Номер документа под датой: мелко и приглушённо, чтобы не спорить с суммой.
