@@ -49,6 +49,42 @@ function orderNote(o) {
   return shortId(o.sd_id)
 }
 
+// Построчное сопоставление двух списков (1С и SalesDoc) по сумме и дате.
+// Раньше колонки жили независимо и сравнивались только итоги: видно было «в
+// SalesDoc не проведены оплаты на 186 575», но не видно КАКИЕ. Пара считается
+// по совпадению суммы (до копеек) и близкой дате — в SalesDoc документ часто
+// датирован на день позже, чем в 1С.
+const PAIR_TOL_DAYS = 3
+
+function daysBetween(a, b) {
+  if (!a || !b) return 1e9
+  return Math.abs(Date.parse(a) - Date.parse(b)) / 86400000
+}
+
+function pairLists(left, right, amountOf) {
+  const usedR = new Set()
+  const pairedL = new Set()
+  // Сначала точные совпадения по дате, потом «в пределах нескольких дней»:
+  // иначе близкий по дате чужой документ мог перехватить пару.
+  for (const exact of [true, false]) {
+    left.forEach((l, li) => {
+      if (pairedL.has(li)) return
+      const la = amountOf(l)
+      const ri = right.findIndex((r, i) => {
+        if (usedR.has(i)) return false
+        if (Math.abs(amountOf(r) - la) >= 0.5) return false
+        const d = daysBetween(l.date, r.date)
+        return exact ? d === 0 : d <= PAIR_TOL_DAYS
+      })
+      if (ri >= 0) { usedR.add(ri); pairedL.add(li) }
+    })
+  }
+  return {
+    leftUnpaired: (i) => !pairedL.has(i),
+    rightUnpaired: (i) => !usedR.has(i),
+  }
+}
+
 // 2025-11-12 → 12.11.2025
 function fdateShort(iso) {
   return iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split('-').reverse().join('.') : (iso || '—')
@@ -444,6 +480,19 @@ function ReconcileDetailModal({ row, onClose }) {
   const cRet = (oneC?.returns || []).filter((r) => inRange(r.date, dr))
   const sum = (arr, k) => arr.reduce((s, x) => s + Number(x[k] || 0), 0)
 
+  // Построчные пары: какие именно документы остались без пары. Итог «не
+  // проведены оплаты на 186 575» без этого не отвечал на вопрос «какие».
+  const sdShip = (sd?.orders?.items || []).filter((o) => o.status !== 5)
+  const sdPay = sd?.payments?.items || []
+  const shipPairs = useMemo(
+    () => pairLists(cShip, sdShip, (x) => Number(x.amount || 0)),
+    [cShip, sdShip]
+  )
+  const payPairs = useMemo(
+    () => pairLists(cPay, sdPay, (x) => Number(x.amount_kgs ?? x.amount ?? 0)),
+    [cPay, sdPay]
+  )
+
   // Суммы по компонентам с обеих сторон — по ним ставим «диагноз» расхождения.
   const s1 = sum(cShip, 'amount')
   const p1 = sum(cPay, 'amount_kgs')
@@ -490,18 +539,26 @@ function ReconcileDetailModal({ row, onClose }) {
           <div className="rc-col">
             <div className="rc-col-title">1С {row.in_1c ? '' : '· нет'}</div>
             <RcSection title="Реализации" total={s1} count={cShip.length}
-              rows={cShip.map((s) => ({
+              rows={cShip.map((s, i) => ({
                 cells: [s.date, money(s.amount)],
                 // Номер документа и склад отгрузки: по складу видно, чьей
                 // фирме документ, и почему он мог не сойтись с SalesDoc.
-                note: [s.doc_number && `док. ${s.doc_number}`, s.warehouse]
-                  .filter(Boolean).join(' · ') || null,
+                // Если пары в SalesDoc нет — это и есть ответ «какие именно».
+                note: shipPairs.leftUnpaired(i)
+                  ? 'нет пары в SalesDoc'
+                  : ([s.doc_number && `док. ${s.doc_number}`, s.warehouse]
+                      .filter(Boolean).join(' · ') || null),
+                warn: shipPairs.leftUnpaired(i),
               }))}
               head={['Дата', 'Сумма']} />
             <RcSection title="Оплаты" total={p1} count={cPay.length}
               // Названия кассы/счёта в выгрузке 1С нет — только вид оплаты
               // (касса или банк), он и стоит в колонке «Тип».
-              rows={cPay.map((p) => [p.date, p.kind === 'cash' ? 'касса' : 'банк', money(p.amount_kgs)])}
+              rows={cPay.map((p, i) => ({
+                cells: [p.date, p.kind === 'cash' ? 'касса' : 'банк', money(p.amount_kgs)],
+                note: payPairs.leftUnpaired(i) ? 'нет пары в SalesDoc' : null,
+                warn: payPairs.leftUnpaired(i),
+              }))}
               head={['Дата', 'Тип', 'Сумма']} />
             <RcSection title="Возвраты" total={r1} count={cRet.length}
               rows={cRet.map((r) => [r.date, money(r.amount)])} head={['Дата', 'Сумма']} />
@@ -511,11 +568,8 @@ function ReconcileDetailModal({ row, onClose }) {
           <div className="rc-col">
             <div className="rc-col-title">SalesDoc {row.in_sd ? '' : '· нет'}</div>
             <RcSection title="Реализации" total={sd?.orders?.total} count={sd?.orders?.count}
-              rows={(sd?.orders?.items || [])
-                // Отменённые заказы не показываем: в сумму они не идут и
-                // только сбивают построчное сравнение с 1С.
-                .filter((o) => o.status !== 5)
-                .map((o) => ({
+              rows={sdShip
+                .map((o, i) => ({
                   // Номер обязателен: в один день бывает несколько отгрузок на
                   // равные суммы, и без него не понять, какая из них какой
                   // накладной 1С соответствует. code_1C — номер, присвоенный
@@ -525,8 +579,10 @@ function ReconcileDetailModal({ row, onClose }) {
                   // сразу видно, чьей фирме документ и почему пара не сошлась.
                   note: isFuture(o.date)
                     ? 'дата в будущем!'
-                    : [orderNote(o), o.store].filter(Boolean).join(' · '),
-                  warn: isFuture(o.date),
+                    : shipPairs.rightUnpaired(i)
+                      ? 'нет пары в 1С'
+                      : [orderNote(o), o.store].filter(Boolean).join(' · '),
+                  warn: isFuture(o.date) || shipPairs.rightUnpaired(i),
                   muted: !o.counted,
                 }))}
               head={['Дата', 'Статус', 'Сумма']} />
@@ -542,7 +598,7 @@ function ReconcileDetailModal({ row, onClose }) {
               </div>
             )}
             <RcSection title="Оплаты" total={sd?.payments?.total} count={sd?.payments?.count}
-              rows={(sd?.payments?.items || []).map((p) => ({
+              rows={sdPay.map((p, i) => ({
                 // У обычной оплаты пишем только способ («Наличный»): слово
                 // «Оплата» и так следует из названия блока, а длинная подпись
                 // переносилась на вторую строку и ломала выравнивание с 1С.
@@ -558,8 +614,10 @@ function ReconcileDetailModal({ row, onClose }) {
                 // по их складам и видно, чьей фирме эта оплата.
                 note: isFuture(p.date)
                   ? 'дата в будущем!'
-                  : (p.stores?.length ? p.stores.join(', ') : shortId(p.sd_id)),
-                warn: isFuture(p.date),
+                  : payPairs.rightUnpaired(i)
+                    ? 'нет пары в 1С'
+                    : (p.stores?.length ? p.stores.join(', ') : shortId(p.sd_id)),
+                warn: isFuture(p.date) || payPairs.rightUnpaired(i),
                 muted: !p.counted,
                 action: (
                   <button className="store-stat store-stat-link"
@@ -826,7 +884,9 @@ function RcSection({ title, total, count, rows, head }) {
                         {j === 0 ? fdate(c) : c}
                         {j === 0 && note && (
                           <div className={`rc-note ${warn ? 'rc-note-warn' : ''}`}
-                            title={warn ? 'Скорее всего опечатка в годе — в SalesDoc такая запись не видна из-за фильтра по периоду, но баланс двигает' : note}>
+                            title={note === 'дата в будущем!'
+                              ? 'Скорее всего опечатка в годе — в SalesDoc такая запись не видна из-за фильтра по периоду, но баланс двигает'
+                              : note}>
                             {note}
                           </div>
                         )}
