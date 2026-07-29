@@ -1061,6 +1061,44 @@ def store_orders(
     }
 
 
+@router.get("/payment-raw")
+def payment_raw(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    sd_id: str = Query(..., description="ИД операции журнала оплат SalesDoc"),
+):
+    """Сырой ответ SalesDoc по одной оплате — со всеми полями.
+
+    У оплаты нет склада, поэтому к фирме её отнести не по чему. Прежде чем
+    что-то придумывать, надо увидеть, какие признаки в операции вообще есть."""
+    _require_configured()
+    row = db.query(models.SalesDocPayment).filter(
+        models.SalesDocPayment.sd_id == sd_id).first()
+    if row is None or row.date is None:
+        raise HTTPException(status_code=404, detail="Оплаты нет в зеркале")
+    df = (row.date - timedelta(days=1)).isoformat()
+    dt = (row.date + timedelta(days=1)).isoformat()
+    try:
+        raw = salesdoc.raw_payment(sd_id, df, dt)
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {
+        "mirror": {
+            "sd_id": row.sd_id,
+            "date": row.date.isoformat(),
+            "amount": float(row.amount or 0),
+            "txn": row.txn,
+            "type_name": row.type_name,
+            "cashbox_sd_id": row.cashbox_sd_id,
+            "cashbox_name": row.cashbox_name,
+        },
+        # Список полей отдельно: сразу видно, есть ли в операции хоть один
+        # признак фирмы, или его там нет вовсе.
+        "fields": sorted(raw.keys()) if isinstance(raw, dict) else [],
+        "raw": raw,
+    }
+
+
 @router.get("/order-changes")
 def order_changes(
     db: Session = Depends(get_db),

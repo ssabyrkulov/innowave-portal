@@ -973,6 +973,25 @@ def raw_order(sd_id: str, date_from: str, date_to: str) -> dict | None:
     return None
 
 
+def raw_payment(sd_id: str, date_from: str, date_to: str) -> dict | None:
+    """Сырой ответ SalesDoc по одной операции журнала оплат.
+
+    Нужен, чтобы увидеть все поля операции целиком: у оплаты нет склада, и
+    вопрос «к какой фирме её отнести» упирается в то, есть ли там вообще хоть
+    какой-то признак — касса, филиал, пользователь."""
+    want = str(sd_id or "").strip().lower()
+    if not want:
+        return None
+    rows = call_all("getPayment", ("payments", "payment"), {"filter": {
+        "period": {"date": {"from": date_from, "to": date_to}},
+    }})
+    for p in rows:
+        ids = {str(p.get("SD_id") or "").lower(), str(p.get("CS_id") or "").lower()}
+        if want in ids:
+            return p
+    return None
+
+
 def raw_orders_of_day(date_from: str, date_to: str, client_sd_id: str | None,
                       limit: int = 20) -> list[dict]:
     """Сырые документы за период (при желании — только по одной точке).

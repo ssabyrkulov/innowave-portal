@@ -434,6 +434,10 @@ function ReconcileDetailModal({ row, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row, dr])
 
+  // Какая оплата раскрыта «сырым ответом» — чтобы посмотреть, есть ли в ней
+  // вообще хоть какой-то признак фирмы.
+  const [rawPay, setRawPay] = useState(null)
+
   // 1С за тот же период, что и SD — для сопоставимости.
   const cShip = (oneC?.shipments || []).filter((s) => inRange(s.date, dr))
   const cPay = (oneC?.payments || []).filter((p) => inRange(p.date, dr))
@@ -557,8 +561,25 @@ function ReconcileDetailModal({ row, onClose }) {
                   : (p.cashbox ? `касса ${p.cashbox}` : shortId(p.sd_id)),
                 warn: isFuture(p.date),
                 muted: !p.counted,
+                action: (
+                  <button className="store-stat store-stat-link"
+                    onClick={() => setRawPay(rawPay === p.sd_id ? null : p.sd_id)}>
+                    {rawPay === p.sd_id ? 'скрыть ответ SD' : 'сырой ответ SD'}
+                  </button>
+                ),
               }))}
               head={['Дата', 'Вид', 'Сумма']} />
+            {/* Оплаты в SalesDoc не делятся по фирмам — склада у них нет.
+                Поэтому карточка показывает их одинаково при любой выбранной
+                фирме, и это надо говорить прямо: иначе оплата читается как
+                «заплатили именно этой фирме». */}
+            {sd?.payments?.items?.length > 0 && (
+              <div className="muted sd-pay-diag">
+                Оплаты показаны все, независимо от выбранной фирмы: в журнале
+                оплат SalesDoc склада нет, а значит и признака фирмы тоже.
+              </div>
+            )}
+            {rawPay && <PaymentRaw sdId={rawPay} />}
             {sd?.payments && sd.payments.matched === 0 && (
               <div className="muted sd-pay-diag">
                 {sd.payments.scanned > 0
@@ -788,6 +809,7 @@ function RcSection({ title, total, count, rows, head }) {
                 // идентификаторы SalesDoc длинные и выдавливали сумму за край.
                 const note = !Array.isArray(r) && r.note
                 const warn = !Array.isArray(r) && r.warn
+                const action = !Array.isArray(r) && r.action
                 return (
                   <tr key={i} className={muted ? 'rc-row-muted' : ''}>
                     {cells.map((c, j) => (
@@ -799,6 +821,7 @@ function RcSection({ title, total, count, rows, head }) {
                             {note}
                           </div>
                         )}
+                        {j === 0 && action}
                       </td>
                     ))}
                   </tr>
@@ -1879,6 +1902,43 @@ function StoreOrders({ storeId }) {
       <div className="muted store-orders-total">
         Отгружено: <b>{money(data.amount)}</b> · всего документов {data.count}
       </div>
+    </div>
+  )
+}
+
+// Сырой ответ SalesDoc по оплате: список полей операции целиком. Ответ на
+// вопрос «есть ли в оплате хоть какой-то признак фирмы» — только тут.
+function PaymentRaw({ sdId }) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    setData(null); setError(null)
+    api.salesdocPaymentRaw(sdId)
+      .then((d) => alive && setData(d)).catch((e) => alive && setError(e.message))
+    return () => { alive = false }
+  }, [sdId])
+
+  if (error) return <div className="error">{error}</div>
+  if (!data) return <div className="muted store-orders">Спрашиваю SalesDoc…</div>
+  return (
+    <div className="order-raw">
+      <div>
+        <b>В зеркале:</b> {money(data.mirror.amount)}, вид {data.mirror.txn},
+        способ {data.mirror.type_name || '—'}, касса{' '}
+        <code>{data.mirror.cashbox_name || data.mirror.cashbox_sd_id || 'не задана'}</code>
+      </div>
+      <div>
+        <b>Поля операции в SalesDoc:</b>{' '}
+        {data.fields.length > 0
+          ? <code>{data.fields.join(', ')}</code>
+          : <span className="muted">операция в ответе не найдена</span>}
+      </div>
+      <details>
+        <summary className="muted">Показать ответ целиком (JSON)</summary>
+        <pre className="order-raw-json">{JSON.stringify(data.raw, null, 2)}</pre>
+      </details>
     </div>
   )
 }

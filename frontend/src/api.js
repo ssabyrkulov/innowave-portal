@@ -175,6 +175,8 @@ export const api = {
   },
   salesdocCashboxes: () => request('/salesdoc/cashboxes'),
   salesdocOrderChanges: () => request('/salesdoc/order-changes'),
+  salesdocPaymentRaw: (sdId) =>
+    request(`/salesdoc/payment-raw?sd_id=${encodeURIComponent(sdId)}`),
   salesdocOrderRaw: (sdId) =>
     request(`/salesdoc/order-raw?sd_id=${encodeURIComponent(sdId)}`),
   salesdocStoreOrders: (storeId) =>
