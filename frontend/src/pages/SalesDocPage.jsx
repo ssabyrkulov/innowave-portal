@@ -32,6 +32,16 @@ function shortId(id) {
   return 'ИД ' + (s.length > 14 ? s.slice(0, 12) + '…' : s)
 }
 
+// Подпись под датой у реализации SalesDoc. В поле «код 1С» там лежит либо
+// номер накладной (обмен с 1С отработал), либо служебный GUID — длинный и
+// нечитаемый, его сокращаем.
+function orderNote(o) {
+  const code = o.code_1C ? String(o.code_1C) : ''
+  if (code && code.length <= 20) return `док. ${code}`
+  if (code) return `док. ${code.slice(0, 12)}…`
+  return shortId(o.sd_id)
+}
+
 // epoch (сек) → ЧЧ:ММ — когда кэш SalesDoc последний раз обновлялся.
 function fmtClock(epoch) {
   return new Date(epoch * 1000).toLocaleTimeString('ru-RU', {
@@ -479,7 +489,7 @@ function ReconcileDetailModal({ row, onClose }) {
                   // накладной 1С соответствует. code_1C — номер, присвоенный
                   // при обмене с 1С; если его нет, показываем ИД SalesDoc.
                   cells: [o.date, o.status_label, money(o.amount)],
-                  note: o.code_1C ? `док. ${o.code_1C}` : shortId(o.sd_id),
+                  note: orderNote(o),
                   muted: !o.counted,
                 }))}
               head={['Дата', 'Статус', 'Сумма']} />

@@ -2617,7 +2617,9 @@ button.summary-card {
 }
 .client-link:hover { color: var(--primary); border-bottom-color: var(--primary); }
 
-.modal-wide { max-width: 760px; width: 100%; max-height: 88vh; overflow-y: auto; }
+/* Карточка сверки показывает две колонки таблиц рядом (1С и SalesDoc),
+   поэтому ей нужно заметно больше места, чем обычному окну. */
+.modal-wide { max-width: 1180px; width: 96vw; max-height: 88vh; overflow-y: auto; }
 .cd-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .cd-head h2 { margin: 0; }
 .cd-summary { margin: 12px 0 8px; }
@@ -2782,10 +2784,15 @@ button.summary-card {
 .sd-pay-diag { font-size: 12px; margin-top: 4px; }
 .cd-debug { margin: 0 0 14px; }
 .cd-debug .an-grid { margin-top: 8px; }
-/* Номер документа под датой: мелко и приглушённо, чтобы не спорить с суммой */
+/* Номер документа под датой: мелко и приглушённо, чтобы не спорить с суммой.
+   Ширину ограничиваем и режем многоточием — в поле «код 1С» SalesDoc иногда
+   лежит длинный GUID, и без ограничения он распирал бы всю таблицу. */
 .rc-note {
   font-size: 10.5px;
   color: var(--faint);
   margin-top: 1px;
   letter-spacing: -0.01em;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
