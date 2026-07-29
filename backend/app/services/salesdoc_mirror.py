@@ -536,6 +536,10 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
             o_count += 1
         orders.append({
             "date": o.date and o.date.isoformat(),
+            # Идентификаторы нужны, чтобы различать одинаковые строки: в один
+            # день по клиенту бывает несколько отгрузок на равные суммы, и без
+            # номера непонятно, какая из них какой накладной 1С соответствует.
+            "sd_id": o.sd_id,
             "code_1C": o.code_1c,
             "status": o.status,
             "status_label": salesdoc.ORDER_STATUS.get(o.status, str(o.status)),
@@ -552,7 +556,8 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
         amt = float(p.amount or 0)
         if p.txn == salesdoc.SHELF_RETURN_TXN:   # «Возврат с полки» — это возврат
             r_total += amt
-            rets.append({"date": p.date and p.date.isoformat(), "amount": round(amt, 2)})
+            rets.append({"date": p.date and p.date.isoformat(), "sd_id": p.sd_id,
+                         "amount": round(amt, 2)})
             continue
         counted = p.txn == salesdoc.PAYMENT_TXN
         if counted:
@@ -560,6 +565,7 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
             p_count += 1
         pays.append({
             "date": p.date and p.date.isoformat(),
+            "sd_id": p.sd_id,
             "amount": round(amt, 2),
             "txn": p.txn,
             "txn_label": salesdoc.PAY_TXN.get(p.txn, str(p.txn) if p.txn is not None else "—"),

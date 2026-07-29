@@ -463,10 +463,15 @@ function ReconcileDetailModal({ row, onClose }) {
                 // только сбивают построчное сравнение с 1С.
                 .filter((o) => o.status !== 5)
                 .map((o) => ({
-                  cells: [o.date, o.status_label, money(o.amount)],
+                  // Номер обязателен: в один день бывает несколько отгрузок на
+                  // равные суммы, и без него не понять, какая из них какой
+                  // накладной 1С соответствует. code_1C — номер, присвоенный
+                  // при обмене с 1С; если его нет, показываем ИД SalesDoc.
+                  cells: [o.date, o.code_1C || o.sd_id || '—', o.status_label,
+                          money(o.amount)],
                   muted: !o.counted,
                 }))}
-              head={['Дата', 'Статус', 'Сумма']} />
+              head={['Дата', 'Документ', 'Статус', 'Сумма']} />
             {sd?.orders?.hidden_by_store > 0 && (
               <div className="muted sd-pay-diag">
                 Ещё {sd.orders.hidden_by_store} реализаций скрыто отбором по
@@ -481,12 +486,13 @@ function ReconcileDetailModal({ row, onClose }) {
                 // переносилась на вторую строку и ломала выравнивание с 1С.
                 cells: [
                   p.date,
+                  p.sd_id || '—',
                   p.counted ? (p.type_name || 'Оплата') : p.txn_label,
                   money(p.amount),
                 ],
                 muted: !p.counted,
               }))}
-              head={['Дата', 'Вид', 'Сумма']} />
+              head={['Дата', 'ИД', 'Вид', 'Сумма']} />
             {sd?.payments && sd.payments.matched === 0 && (
               <div className="muted sd-pay-diag">
                 {sd.payments.scanned > 0
@@ -495,8 +501,9 @@ function ReconcileDetailModal({ row, onClose }) {
               </div>
             )}
             <RcSection title="Возвраты" total={sd?.returns?.total} count={sd?.returns?.count}
-              rows={(sd?.returns?.items || []).map((r) => [r.date, money(r.amount)])}
-              head={['Дата', 'Сумма']} />
+              rows={(sd?.returns?.items || []).map((r) => [r.date, r.sd_id || '—',
+                                                          money(r.amount)])}
+              head={['Дата', 'ИД', 'Сумма']} />
           </div>
         </div>
       </div>

@@ -562,6 +562,7 @@ def fetch_client_orders(sd_id, code_1c, date_from, date_to, store_ids=None) -> d
             counted += 1
         items.append({
             "date": _day(o.get("dateDocument") or o.get("dateCreate")),
+            "sd_id": o.get("SD_id") or o.get("CS_id"),
             "code_1C": o.get("code_1C"),
             "status": st,
             "status_label": ORDER_STATUS.get(st, str(st)),
@@ -660,6 +661,7 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
         )
         items.append({
             "date": _day(p.get("paymentDate")),
+            "sd_id": p.get("SD_id") or p.get("CS_id"),
             "amount": round(amt, 2),
             "txn": txn,
             "txn_label": PAY_TXN.get(txn, str(txn) if txn is not None else "—"),
