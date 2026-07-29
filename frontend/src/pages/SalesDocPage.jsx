@@ -1938,6 +1938,26 @@ function PaymentRaw({ sdId }) {
         способ {data.mirror.type_name || '—'}, касса{' '}
         <code>{data.mirror.cashbox_name || data.mirror.cashbox_sd_id || 'не задана'}</code>
       </div>
+      {/* Главное в ответе — какие заказы гасит оплата: склада у неё нет, а у
+          заказа есть, и это единственный признак фирмы. */}
+      <div>
+        <b>Гасит заказы:</b>{' '}
+        {data.linked.length === 0
+          ? <span className="muted">ни одного — оплата ни к чему не привязана,
+              поделить её по фирмам нечем</span>
+          : null}
+      </div>
+      {data.linked.length > 0 && (
+        <ul className="order-raw-sib">
+          {data.linked.map((o, i) => (
+            <li key={i}>
+              {o.found
+                ? <>{fdateShort(o.date)} · склад <b>{o.store || '—'}</b> · {o.status} · {money(o.amount)}</>
+                : <span className="muted">{o.sd_id} — заказа нет в зеркале</span>}
+            </li>
+          ))}
+        </ul>
+      )}
       <div>
         <b>Поля операции в SalesDoc:</b>{' '}
         {data.fields.length > 0

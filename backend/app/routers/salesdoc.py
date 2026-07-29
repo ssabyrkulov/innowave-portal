@@ -1082,6 +1082,30 @@ def payment_raw(
         raw = salesdoc.raw_payment(sd_id, df, dt)
     except salesdoc.SalesDocError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    # Заказы, которые гасит оплата, — разворачиваем в понятные строки со
+    # складом. Это и есть признак фирмы; если список пуст, оплата ни к чему не
+    # привязана и поделить её нечем.
+    store_names = {
+        s.store_id.lower(): (s.name or s.store_id)
+        for s in db.query(models.SalesDocStore).all() if s.store_id
+    }
+    linked = []
+    for it in (raw or {}).get("orders") or []:
+        oid = str((it.get("SD_id") or it.get("CS_id")) if isinstance(it, dict) else it or "").lower()
+        if not oid:
+            continue
+        o = db.query(models.SalesDocOrder).filter(
+            models.SalesDocOrder.sd_id == oid).first()
+        linked.append({
+            "sd_id": oid,
+            "found": o is not None,
+            "date": o.date.isoformat() if o and o.date else None,
+            "store": store_names.get(o.store_sd_id or "", o.store_sd_id or "")
+                     if o else None,
+            "amount": float(o.amount or 0) if o else None,
+            "status": salesdoc.ORDER_STATUS.get(o.status, str(o.status)) if o else None,
+        })
+
     return {
         "mirror": {
             "sd_id": row.sd_id,
@@ -1091,7 +1115,9 @@ def payment_raw(
             "type_name": row.type_name,
             "cashbox_sd_id": row.cashbox_sd_id,
             "cashbox_name": row.cashbox_name,
+            "order_ids": row.order_ids,
         },
+        "linked": linked,
         # Список полей отдельно: сразу видно, есть ли в операции хоть один
         # признак фирмы, или его там нет вовсе.
         "fields": sorted(raw.keys()) if isinstance(raw, dict) else [],
