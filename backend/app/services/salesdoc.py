@@ -503,6 +503,7 @@ ALL_DEFECT_STATUSES = [1, 2, 3, 4, 5]
 # В сумму реализаций идут только отгруженные: Отправлен/Доставлен/Закрыт.
 # «Новый» ещё не отгружен, «Отменён» — не продажа.
 SHIPPED_STATUSES = {2, 3, 4}
+CANCELLED_STATUS = 5
 
 
 def _client_ref(sd_id: str | None, code_1c: str | None) -> dict:

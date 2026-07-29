@@ -364,22 +364,35 @@ def client_store_orgs(db: Session) -> dict[str, dict]:
     показывались сразу в обеих фирмах. Теперь берём то же самое из зеркала:
     мгновенно и без сбоев.
 
+    Отменённые документы не в счёт: точка не становится клиентом фирмы от того,
+    что на её склад однажды выписали и тут же отменили заказ. Именно так и
+    вышло, что точка со всеми отгрузками Innowave считалась ещё и клиентом
+    гигиены.
+
     Возвращает {sd_id клиента: {"orgs": множество фирм по складам с привязкой,
-    "stores": {фирма: [названия складов]}, "unmapped": названия складов без
-    привязки}}. Отсутствие клиента в словаре означает, что реализаций у точки
-    нет вовсе — фирму определить не по чему.
+    "stores": {фирма: [склады с количеством и периодом]}, "unmapped": то же по
+    складам без привязки}}. Отсутствие клиента в словаре означает, что
+    реализаций у точки нет вовсе — фирму определить не по чему.
     """
     stores = {
         s.store_id.lower(): s
         for s in db.query(models.SalesDocStore).all() if s.store_id
     }
     out: dict[str, dict] = {}
+    from sqlalchemy import func
+
     rows = (
-        db.query(models.SalesDocOrder.client_sd_id, models.SalesDocOrder.store_sd_id)
-        .distinct()
+        db.query(models.SalesDocOrder.client_sd_id,
+                 models.SalesDocOrder.store_sd_id,
+                 func.count(models.SalesDocOrder.id),
+                 func.min(models.SalesDocOrder.date),
+                 func.max(models.SalesDocOrder.date))
+        .filter(models.SalesDocOrder.status != salesdoc.CANCELLED_STATUS)
+        .group_by(models.SalesDocOrder.client_sd_id,
+                  models.SalesDocOrder.store_sd_id)
         .all()
     )
-    for cli, store_id in rows:
+    for cli, store_id, cnt, first, last in rows:
         if not cli:
             continue
         entry = out.setdefault(
@@ -388,13 +401,16 @@ def client_store_orgs(db: Session) -> dict[str, dict]:
         if store is None:
             continue
         name = store.name or store.store_id
+        # Количество и период по каждому складу: «склад этой фирмы» без цифр
+        # выглядит как приговор, а на деле там может быть одна старая отгрузка.
+        item = {"name": name, "count": int(cnt or 0),
+                "first": first and first.isoformat(),
+                "last": last and last.isoformat()}
         if store.organization:
             entry["orgs"].add(store.organization)
-            named = entry["stores"].setdefault(store.organization, [])
-            if name not in named:
-                named.append(name)
-        elif name not in entry["unmapped"]:
-            entry["unmapped"].append(name)
+            entry["stores"].setdefault(store.organization, []).append(item)
+        else:
+            entry["unmapped"].append(item)
     return out
 
 

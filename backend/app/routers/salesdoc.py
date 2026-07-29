@@ -378,14 +378,17 @@ def reconcile_debt(
                 # возникает именно к строкам без пары в 1С, и ответ должен быть
                 # виден сразу, а не выясняться расследованием.
                 named = (info or {}).get("stores", {}).get(o) or []
-                org_note = ("склады этой фирмы: " + ", ".join(named)) if named else None
+                org_note = ("реализации на складах этой фирмы: " + ", ".join(
+                    f"{s['name']} — {s['count']} шт., "
+                    f"{s['first']} … {s['last']}" for s in named
+                )) if named else None
             elif info is None:
                 org_note = "фирма не определена: в SalesDoc нет реализаций этой точки"
                 org_note_warn = True
             elif info.get("unmapped"):
                 org_note = (
                     "фирма не определена: реализации на складах без фирмы — "
-                    + ", ".join(info["unmapped"])
+                    + ", ".join(s["name"] for s in info["unmapped"])
                 )
                 org_note_warn = True
             else:
@@ -1150,7 +1153,12 @@ def why_here(
             "code_1C": c["code_1C"],
             "sd_debt": debt,
             "store_orgs": stores_orgs,
-            "unmapped_stores": info.get("unmapped") or [],
+            "stores": {
+                firm: [f"{s['name']} — {s['count']} шт., {s['first']} … {s['last']}"
+                       for s in items]
+                for firm, items in (info.get("stores") or {}).items()
+            },
+            "unmapped_stores": [s["name"] for s in (info.get("unmapped") or [])],
             "in_1c": in_1c,
             "similar": similar,
             "linked_manually": links.get(key) == sid,
