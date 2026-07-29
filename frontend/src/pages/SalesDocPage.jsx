@@ -1616,6 +1616,7 @@ function StoreMapping() {
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [savedMsg, setSavedMsg] = useState(null)
+  const [openStore, setOpenStore] = useState(null)
 
   function load() {
     setError(null)
@@ -1669,28 +1670,38 @@ function StoreMapping() {
           {rows === null && !error && <div className="muted">Загрузка…</div>}
           {rows && rows.length === 0 && <div className="muted">Складов не найдено.</div>}
           {rows && rows.map((r, i) => (
-            <div key={r.store_id} className="store-row">
-              <span className="store-name">
-                {r.name || r.store_id}
-                <span className="muted"> · {r.store_id}</span>
-                {/* Сколько отгрузок реально прошло по складу — привязку
-                    делаешь по факту, а не по названию. */}
-                <span className="store-stat">
-                  {r.stats
-                    ? `${r.stats.count} реализаций · ${money(r.stats.amount)} · ${fdateShort(r.stats.first)} — ${fdateShort(r.stats.last)}`
-                    : 'реализаций нет'}
+            <div key={r.store_id}>
+              <div className="store-row">
+                <span className="store-name">
+                  {r.name || r.store_id}
+                  <span className="muted"> · {r.store_id}</span>
+                  {/* Сколько отгрузок реально прошло по складу — привязку
+                      делаешь по факту, а не по названию. Клик разворачивает
+                      сами документы: «что за реализации тут лежат» — первый
+                      вопрос, который возникает к непонятному складу. */}
+                  {r.stats ? (
+                    <button className="store-stat store-stat-link"
+                      onClick={() => setOpenStore(openStore === r.store_id ? null : r.store_id)}>
+                      {`${r.stats.count} реализаций · ${money(r.stats.amount)} · `}
+                      {`${fdateShort(r.stats.first)} — ${fdateShort(r.stats.last)}`}
+                      {openStore === r.store_id ? ' ▾' : ' ▸'}
+                    </button>
+                  ) : (
+                    <span className="store-stat">реализаций нет</span>
+                  )}
                 </span>
-              </span>
-              <select
-                className="filter-select"
-                value={r.org || ''}
-                disabled={!can.editPayments}
-                onChange={(e) => setOrg(i, e.target.value)}
-              >
-                <option value="">— не задано —</option>
-                <option value="hygiene">{ORG_LABELS.hygiene}</option>
-                <option value="innowave">{ORG_LABELS.innowave}</option>
-              </select>
+                <select
+                  className="filter-select"
+                  value={r.org || ''}
+                  disabled={!can.editPayments}
+                  onChange={(e) => setOrg(i, e.target.value)}
+                >
+                  <option value="">— не задано —</option>
+                  <option value="hygiene">{ORG_LABELS.hygiene}</option>
+                  <option value="innowave">{ORG_LABELS.innowave}</option>
+                </select>
+              </div>
+              {openStore === r.store_id && <StoreOrders storeId={r.store_id} />}
             </div>
           ))}
           {rows && rows.length > 0 && can.editPayments && (
@@ -1703,6 +1714,56 @@ function StoreMapping() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// Документы, лежащие на конкретном складе SalesDoc.
+function StoreOrders({ storeId }) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    setData(null); setError(null)
+    api.salesdocStoreOrders(storeId)
+      .then((d) => alive && setData(d)).catch((e) => alive && setError(e.message))
+    return () => { alive = false }
+  }, [storeId])
+
+  if (error) return <div className="error">{error}</div>
+  if (!data) return <div className="muted store-orders">Загрузка…</div>
+  if (data.items.length === 0) {
+    return <div className="muted store-orders">Реализаций на этом складе нет.</div>
+  }
+  return (
+    <div className="store-orders">
+      <div className="table-wrap rc-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Дата</th><th>Документ</th><th>Точка</th><th>Статус</th>
+              <th className="num">Сумма</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.items.map((r, i) => (
+              // Отменённые и новые показываем приглушённо: они на складе есть,
+              // но в сумму отгрузок не идут.
+              <tr key={i} className={r.counted ? '' : 'rc-row-muted'}>
+                <td>{fdateShort(r.date)}</td>
+                <td>{r.doc_number || <span className="muted">{shortId(r.sd_id)}</span>}</td>
+                <td>{r.client}</td>
+                <td>{r.status_label}</td>
+                <td className="num">{money(r.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="muted store-orders-total">
+        Отгружено: <b>{money(data.amount)}</b> · всего документов {data.count}
+      </div>
     </div>
   )
 }

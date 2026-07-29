@@ -996,6 +996,22 @@ def shipments_compare(
     }
 
 
+@router.get("/store-orders")
+def store_orders(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    store_id: str = Query(default="", description="SD_id склада; пусто — склад не указан"),
+):
+    """Реализации, лежащие на конкретном складе SalesDoc."""
+    rows = salesdoc_mirror.store_orders(db, store_id)
+    return {
+        "store_id": store_id,
+        "count": len(rows),
+        "amount": round(sum(r["amount"] for r in rows if r["counted"]), 2),
+        "items": rows,
+    }
+
+
 @router.get("/cashboxes")
 def cashboxes(
     db: Session = Depends(get_db),

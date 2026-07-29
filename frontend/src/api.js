@@ -174,6 +174,8 @@ export const api = {
     return request(`/salesdoc/client-debug${qs ? `?${qs}` : ''}`)
   },
   salesdocCashboxes: () => request('/salesdoc/cashboxes'),
+  salesdocStoreOrders: (storeId) =>
+    request(`/salesdoc/store-orders?store_id=${encodeURIComponent(storeId)}`),
   salesdocShipmentsCompare: (params) =>
     request('/salesdoc/shipments-compare?' + new URLSearchParams(params).toString()),
   salesdocMirror: () => request('/salesdoc/mirror'),

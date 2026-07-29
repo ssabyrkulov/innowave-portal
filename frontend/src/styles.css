@@ -2763,6 +2763,13 @@ button.summary-card {
 .store-name { font-size: 14px; }
 /* Статистика склада — второй строкой, чтобы длина не ломала ряд. */
 .store-stat { display: block; font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+.store-stat-link {
+  background: none; border: 0; padding: 0; text-align: left; cursor: pointer;
+  font: inherit; color: var(--primary);
+}
+.store-stat-link:hover { text-decoration: underline; }
+.store-orders { margin: 4px 0 14px; padding-left: 12px; border-left: 2px solid var(--border); }
+.store-orders-total { font-size: 12px; margin-top: 6px; }
 .store-row .filter-select { min-width: 180px; }
 .store-map-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .sd-warn { border-left: 3px solid var(--out); }

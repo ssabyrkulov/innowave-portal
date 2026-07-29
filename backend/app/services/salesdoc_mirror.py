@@ -384,6 +384,32 @@ def orders_by_store(db: Session) -> dict[str, dict]:
     }
 
 
+def store_orders(db: Session, store_id: str, limit: int = 500) -> list[dict]:
+    """Реализации конкретного склада: дата, номер, точка, сумма, статус.
+
+    Нужно, чтобы на вопрос «что вообще лежит на этом складе» отвечал портал, а
+    не ручной поиск в SalesDoc. Пустой store_id — заказы, у которых склад не
+    проставлен вовсе."""
+    sid = (store_id or "").strip().lower()
+    q = db.query(models.SalesDocOrder)
+    q = q.filter(models.SalesDocOrder.store_sd_id == sid) if sid else \
+        q.filter(models.SalesDocOrder.store_sd_id.is_(None))
+    names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+    return [
+        {
+            "date": r.date and r.date.isoformat(),
+            "sd_id": r.sd_id,
+            "doc_number": r.code_1c,
+            "client": names.get(r.client_sd_id or "", r.client_sd_id or r.client_code_1c or ""),
+            "amount": round(float(r.amount or 0), 2),
+            "status": r.status,
+            "status_label": salesdoc.ORDER_STATUS.get(r.status, str(r.status)),
+            "counted": r.status in salesdoc.SHIPPED_STATUSES,
+        }
+        for r in q.order_by(models.SalesDocOrder.date.desc()).limit(limit).all()
+    ]
+
+
 def cashboxes(db: Session) -> list[dict]:
     """Кассы из журнала оплат: сколько операций и на какую сумму на каждой.
 
