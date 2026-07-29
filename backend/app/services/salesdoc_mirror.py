@@ -358,15 +358,22 @@ def orders_by_store(db: Session) -> dict[str, dict]:
     какую сумму и с какой по какую дату. Отвечает на вопрос «по каким складам
     вообще шли отгрузки» и заодно показывает, какие склады мёртвые.
 
-    Считаем все статусы: отменённые и новые тоже показывают, что склад
-    используется, — а для привязки к фирме важен именно факт использования."""
-    from sqlalchemy import func
+    Отгруженные считаем отдельно от общего числа: отменённый документ на складе
+    лежит, но ни в какую сумму не идёт. Без этого разделения склад с двумя
+    отменёнными заказами выглядел как рабочий на 25 200 — и решение о привязке
+    принималось по несуществующим деньгам."""
+    from sqlalchemy import case, func
 
+    shipped = case(
+        (models.SalesDocOrder.status.in_(list(salesdoc.SHIPPED_STATUSES)), 1),
+        else_=0,
+    )
     rows = (
         db.query(
             models.SalesDocOrder.store_sd_id,
             func.count(models.SalesDocOrder.id),
-            func.sum(models.SalesDocOrder.amount),
+            func.sum(shipped),
+            func.sum(shipped * models.SalesDocOrder.amount),
             func.min(models.SalesDocOrder.date),
             func.max(models.SalesDocOrder.date),
         )
@@ -376,11 +383,12 @@ def orders_by_store(db: Session) -> dict[str, dict]:
     return {
         (sid or ""): {
             "count": int(cnt or 0),
-            "amount": round(float(total or 0), 2),
+            "shipped_count": int(ship_cnt or 0),
+            "amount": round(float(ship_sum or 0), 2),
             "first": first and first.isoformat(),
             "last": last and last.isoformat(),
         }
-        for sid, cnt, total, first, last in rows
+        for sid, cnt, ship_cnt, ship_sum, first, last in rows
     }
 
 

@@ -101,7 +101,9 @@ def _unmapped_stores(db: Session) -> list[str]:
         s.name or s.store_id
         for s in db.query(models.SalesDocStore).all()
         if s.store_id and not s.organization
-        and (stats.get(s.store_id.lower()) or {}).get("count")
+        # Только отгруженные: отменённые документы ни в одну сумму не идут,
+        # дублировать в двух фирмах там нечего.
+        and (stats.get(s.store_id.lower()) or {}).get("shipped_count")
     ]
 
 

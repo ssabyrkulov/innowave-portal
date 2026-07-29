@@ -1682,8 +1682,10 @@ function StoreMapping() {
                   {r.stats ? (
                     <button className="store-stat store-stat-link"
                       onClick={() => setOpenStore(openStore === r.store_id ? null : r.store_id)}>
-                      {`${r.stats.count} реализаций · ${money(r.stats.amount)} · `}
-                      {`${fdateShort(r.stats.first)} — ${fdateShort(r.stats.last)}`}
+                      {`${r.stats.shipped_count} отгружено · ${money(r.stats.amount)}`}
+                      {r.stats.count > r.stats.shipped_count
+                        && ` (+${r.stats.count - r.stats.shipped_count} новых/отменённых)`}
+                      {` · ${fdateShort(r.stats.first)} — ${fdateShort(r.stats.last)}`}
                       {openStore === r.store_id ? ' ▾' : ' ▸'}
                     </button>
                   ) : (
