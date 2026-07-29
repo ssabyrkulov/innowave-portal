@@ -811,6 +811,185 @@ def mirror_status(
     return salesdoc_mirror.status(db)
 
 
+def _doc_key(value) -> str | None:
+    """Ключ документа для сопоставления 1С ↔ SalesDoc.
+
+    В SalesDoc номер накладной 1С лежит в code_1C — но иногда там оказывается
+    служебный GUID (обмен отработал наполовину). GUID ключом быть не может, его
+    отбрасываем."""
+    s = re.sub(r"\s+", "", str(value or "")).lower()
+    if not s or len(s) > 30 or re.fullmatch(r"[0-9a-f-]{32,}", s):
+        return None
+    return s
+
+
+def _doc_tail(key: str | None) -> str | None:
+    """Запасной ключ: последняя группа цифр без ведущих нулей («0000-000331» →
+    «331»). Нужен, когда в системах разный префикс нумерации."""
+    if not key:
+        return None
+    groups = re.findall(r"\d+", key)
+    if not groups:
+        return None
+    tail = groups[-1].lstrip("0")
+    return tail if len(tail) >= 2 else None
+
+
+LIST_CAP = 300  # сколько строк отдаём в каждый список; остальное — счётчиком
+
+
+@router.get("/shipments-compare")
+def shipments_compare(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    org: str = Query(default="all"),
+):
+    """Сверка реализаций 1С ↔ SalesDoc: сколько документов и на какую сумму с
+    каждой стороны, разбивка по складам и поимённые списки непарных документов.
+
+    Сопоставляем по номеру накладной: в SalesDoc он приходит в code_1C после
+    обмена с 1С. Документ без номера с обеих сторон в пару не встанет — такие
+    честно показываем в «нет пары».
+    """
+    o = (org or "").strip().lower()
+
+    # --- 1С: строки продаж сводим в документы ---
+    sales_q = models.org_scope(
+        db.query(models.Sale).filter(models.Sale.date >= date_from,
+                                     models.Sale.date <= date_to),
+        models.Sale, org,
+    )
+    our_docs: dict = {}
+    our_loose: list[dict] = []
+    for s in sales_q.all():
+        line = float(s.amount) * (1 - float(s.discount_pct or 0) / 100)
+        item = {
+            "date": s.date.isoformat(),
+            "doc_number": s.doc_number,
+            "client": s.client,
+            "warehouse": s.warehouse or "(склад не указан)",
+            "amount": round(line, 2),
+        }
+        if not s.doc_number:
+            our_loose.append(item)
+            continue
+        d = our_docs.get(s.doc_number)
+        if d is None:
+            d = our_docs[s.doc_number] = {**item, "amount": 0.0, "doc_total": None}
+        d["amount"] += line
+        if s.doc_total is not None:
+            d["doc_total"] = float(s.doc_total)
+    our_list = []
+    for d in our_docs.values():
+        amt = d["doc_total"] if d["doc_total"] is not None else d["amount"]
+        our_list.append({**d, "amount": round(float(amt), 2)})
+    our_list += our_loose
+
+    # --- SalesDoc: реализации из зеркала, только отгруженные ---
+    store_ids = _store_ids_for_org(db, org)
+    store_names = {
+        s.store_id.lower(): (s.name or s.store_id)
+        for s in db.query(models.SalesDocStore).all() if s.store_id
+    }
+    sd_q = db.query(models.SalesDocOrder).filter(
+        models.SalesDocOrder.date >= date_from,
+        models.SalesDocOrder.date <= date_to,
+        models.SalesDocOrder.status.in_(list(salesdoc.SHIPPED_STATUSES)),
+    )
+    if store_ids:
+        sd_q = sd_q.filter(models.SalesDocOrder.store_sd_id.in_(store_ids))
+    sd_list = [
+        {
+            "date": r.date and r.date.isoformat(),
+            "doc_number": r.code_1c,
+            "sd_id": r.sd_id,
+            "client": r.client_sd_id or r.client_code_1c or "",
+            "store": store_names.get(r.store_sd_id or "", r.store_sd_id or "(склад не указан)"),
+            "amount": round(float(r.amount or 0), 2),
+        }
+        for r in sd_q.all()
+    ]
+    # Имена точек — чтобы в списке «нет пары» стояло название, а не «p4_1244».
+    names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+    for r in sd_list:
+        r["client"] = names.get(r["client"], r["client"])
+
+    # --- Сопоставление по номеру документа ---
+    sd_by_key: dict = {}
+    sd_by_tail: dict = {}
+    for r in sd_list:
+        k = _doc_key(r["doc_number"])
+        r["_key"] = k
+        if k:
+            sd_by_key.setdefault(k, []).append(r)
+            t = _doc_tail(k)
+            if t:
+                sd_by_tail.setdefault(t, []).append(r)
+
+    matched, mismatched, only_1c = 0, [], []
+    used: set = set()
+    for d in our_list:
+        k = _doc_key(d["doc_number"])
+        pool = sd_by_key.get(k) or sd_by_tail.get(_doc_tail(k)) or []
+        pair = next((r for r in pool if id(r) not in used), None)
+        if pair is None:
+            only_1c.append(d)
+            continue
+        used.add(id(pair))
+        matched += 1
+        # Пара нашлась, но суммы разные — это отдельная, самая частая беда.
+        if abs(d["amount"] - pair["amount"]) >= 0.5:
+            mismatched.append({
+                "date": d["date"], "doc_number": d["doc_number"],
+                "client": d["client"], "warehouse": d["warehouse"],
+                "store": pair["store"],
+                "our_amount": d["amount"], "sd_amount": pair["amount"],
+                "diff": round(d["amount"] - pair["amount"], 2),
+            })
+    only_sd = [r for r in sd_list if id(r) not in used]
+
+    def by_store(rows, key, amount_key="amount") -> list[dict]:
+        agg: dict = {}
+        for r in rows:
+            a = agg.setdefault(r[key], {"name": r[key], "count": 0, "amount": 0.0})
+            a["count"] += 1
+            a["amount"] += r[amount_key]
+        for a in agg.values():
+            a["amount"] = round(a["amount"], 2)
+        return sorted(agg.values(), key=lambda x: -x["count"])
+
+    def cut(rows: list) -> list:
+        rows = sorted(rows, key=lambda x: (x.get("date") or ""), reverse=True)
+        return [{k: v for k, v in r.items() if not k.startswith("_")}
+                for r in rows[:LIST_CAP]]
+
+    return {
+        "period": {"from": date_from.isoformat(), "to": date_to.isoformat()},
+        "org": o,
+        "our": {
+            "count": len(our_list),
+            "amount": round(sum(d["amount"] for d in our_list), 2),
+            "by_store": by_store(our_list, "warehouse"),
+        },
+        "sd": {
+            "count": len(sd_list),
+            "amount": round(sum(r["amount"] for r in sd_list), 2),
+            "by_store": by_store(sd_list, "store"),
+        },
+        "matched": matched,
+        "mismatched_count": len(mismatched),
+        "only_1c_count": len(only_1c),
+        "only_sd_count": len(only_sd),
+        "mismatched": cut(mismatched),
+        "only_1c": cut(only_1c),
+        "only_sd": cut(only_sd),
+        "cap": LIST_CAP,
+        "unmapped_stores": _unmapped_stores(db),
+    }
+
+
 @router.get("/cashboxes")
 def cashboxes(
     db: Session = Depends(get_db),

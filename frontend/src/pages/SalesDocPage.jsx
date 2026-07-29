@@ -191,6 +191,8 @@ export default function SalesDocPage() {
 
       <StoreMapping />
 
+      <ShipmentsComparePanel />
+
       <AnalyzePanel />
 
       <PaymentsDebugPanel />
@@ -1035,6 +1037,148 @@ function StockPanel() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// Реализации 1С ↔ SalesDoc: сколько документов с каждой стороны, разбивка по
+// складам и поимённые списки тех, что не нашли пару. Сопоставление идёт по
+// номеру накладной — в SalesDoc он приходит в code_1C после обмена с 1С.
+function ShipmentsComparePanel() {
+  const [open, setOpen] = useState(false)
+  const [dr, setDr] = useState(() => ({
+    from: `${new Date().getFullYear()}-01-01`,
+    to: toISODate(new Date()),
+  }))
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [tab, setTab] = useState('only_1c')
+
+  function load(r = dr) {
+    setLoading(true); setError(null)
+    api.salesdocShipmentsCompare({ date_from: r.from, date_to: r.to })
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  const TABS = [
+    ['only_1c', 'Нет в SalesDoc', data?.only_1c_count],
+    ['only_sd', 'Нет в 1С', data?.only_sd_count],
+    ['mismatched', 'Пара есть, суммы разные', data?.mismatched_count],
+  ]
+  const list = data?.[tab] || []
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 📦 Реализации: 1С ↔ SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Сколько документов реализации в каждой системе,
+            по каким складам они прошли и какие именно не нашли пару.
+            Сопоставление — по номеру накладной (в SalesDoc он лежит в поле
+            «код 1С»). Учитываются только отгруженные документы SalesDoc:
+            «Новый» ещё не отгружен, «Отменён» — не продажа.</p>
+          <div className="rc-period">
+            <span className="muted">Период:</span>
+            <input type="date" className="filter-select" value={dr.from}
+              onChange={(e) => setDr((d) => ({ ...d, from: e.target.value }))} />
+            <span className="muted">—</span>
+            <input type="date" className="filter-select" value={dr.to}
+              onChange={(e) => setDr((d) => ({ ...d, to: e.target.value }))} />
+            <button className="btn btn-sm" onClick={() => load()} disabled={loading}>
+              {loading ? 'Считаю…' : 'Показать'}
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+          {data && (
+            <>
+              <div className="sc-totals">
+                <div><span className="muted">1С</span><b>{data.our.count} док.</b><span>{money(data.our.amount)}</span></div>
+                <div><span className="muted">SalesDoc</span><b>{data.sd.count} док.</b><span>{money(data.sd.amount)}</span></div>
+                <div><span className="muted">Совпало по номеру</span><b>{data.matched}</b><span /></div>
+              </div>
+
+              <div className="rc-cols sc-stores">
+                <div className="rc-col">
+                  <div className="rc-col-title">Склады 1С</div>
+                  <StoreStats rows={data.our.by_store} />
+                </div>
+                <div className="rc-col">
+                  <div className="rc-col-title">Склады SalesDoc</div>
+                  <StoreStats rows={data.sd.by_store} />
+                </div>
+              </div>
+
+              <div className="sc-tabs">
+                {TABS.map(([key, label, n]) => (
+                  <button key={key}
+                    className={`btn btn-sm ${tab === key ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setTab(key)}>
+                    {label} · {n ?? 0}
+                  </button>
+                ))}
+              </div>
+              {list.length === 0 ? (
+                <div className="muted rc-empty">Таких документов нет 🎉</div>
+              ) : (
+                <div className="table-wrap rc-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Дата</th><th>Документ</th><th>Клиент</th><th>Склад</th>
+                        <th className="num">{tab === 'mismatched' ? '1С / SalesDoc' : 'Сумма'}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {list.map((r, i) => (
+                        <tr key={i}>
+                          <td>{fdateShort(r.date)}</td>
+                          <td>{r.doc_number || <span className="muted">без номера</span>}</td>
+                          <td>{r.client}</td>
+                          <td>{r.warehouse || r.store}</td>
+                          <td className="num">
+                            {tab === 'mismatched'
+                              ? `${money(r.our_amount)} / ${money(r.sd_amount)}`
+                              : money(r.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {list.length >= data.cap && (
+                <div className="muted sd-pay-diag">
+                  Показаны первые {data.cap} строк — сузьте период, чтобы увидеть остальные.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StoreStats({ rows }) {
+  if (!rows || rows.length === 0) return <div className="muted rc-empty">Нет записей</div>
+  return (
+    <div className="table-wrap rc-table">
+      <table>
+        <thead><tr><th>Склад</th><th className="num">Док.</th><th className="num">Сумма</th></tr></thead>
+        <tbody>
+          {rows.map((s, i) => (
+            <tr key={i}>
+              <td>{s.name}</td>
+              <td className="num">{s.count}</td>
+              <td className="num">{money(s.amount)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

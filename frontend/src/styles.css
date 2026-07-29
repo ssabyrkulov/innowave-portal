@@ -2753,6 +2753,13 @@ button.summary-card {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border);
 }
+/* ---------- Сверка реализаций 1С ↔ SalesDoc ---------- */
+.sc-totals { display: flex; flex-wrap: wrap; gap: 24px; margin: 12px 0 4px; }
+.sc-totals > div { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.sc-totals b { font-size: 18px; }
+.sc-stores { margin: 12px 0; }
+.sc-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 8px; }
+
 .store-name { font-size: 14px; }
 /* Статистика склада — второй строкой, чтобы длина не ломала ряд. */
 .store-stat { display: block; font-size: 11.5px; color: var(--faint); margin-top: 2px; }
