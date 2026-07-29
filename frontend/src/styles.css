@@ -2796,3 +2796,4 @@ button.summary-card {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.rc-note-warn { color: var(--warn); font-weight: 600; max-width: none; }

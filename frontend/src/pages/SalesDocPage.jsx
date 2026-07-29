@@ -32,6 +32,13 @@ function shortId(id) {
   return 'ИД ' + (s.length > 14 ? s.slice(0, 12) + '…' : s)
 }
 
+// Дата в будущем — признак опечатки в годе при ручном вводе. Такие записи
+// двигают баланс, но в интерфейсе SalesDoc их обычно не видно: там стоит
+// фильтр по периоду, и запись «проваливается» за его край.
+function isFuture(iso) {
+  return Boolean(iso) && iso > toISODate(new Date())
+}
+
 // Подпись под датой у реализации SalesDoc. В поле «код 1С» там лежит либо
 // номер накладной (обмен с 1С отработал), либо служебный GUID — длинный и
 // нечитаемый, его сокращаем.
@@ -489,7 +496,8 @@ function ReconcileDetailModal({ row, onClose }) {
                   // накладной 1С соответствует. code_1C — номер, присвоенный
                   // при обмене с 1С; если его нет, показываем ИД SalesDoc.
                   cells: [o.date, o.status_label, money(o.amount)],
-                  note: orderNote(o),
+                  note: isFuture(o.date) ? 'дата в будущем!' : orderNote(o),
+                  warn: isFuture(o.date),
                   muted: !o.counted,
                 }))}
               head={['Дата', 'Статус', 'Сумма']} />
@@ -510,7 +518,11 @@ function ReconcileDetailModal({ row, onClose }) {
                   p.counted ? (p.type_name || 'Оплата') : p.txn_label,
                   money(p.amount),
                 ],
-                note: shortId(p.sd_id),
+                // Дата в будущем — почти всегда опечатка в годе при ручном
+                // вводе. В интерфейсе SalesDoc такие записи часто не видны
+                // (там стоит фильтр по периоду), а баланс они двигают.
+                note: isFuture(p.date) ? 'дата в будущем!' : shortId(p.sd_id),
+                warn: isFuture(p.date),
                 muted: !p.counted,
               }))}
               head={['Дата', 'Вид', 'Сумма']} />
@@ -742,12 +754,18 @@ function RcSection({ title, total, count, rows, head }) {
                 // Номер документа — мелкой строкой под датой, а не колонкой:
                 // идентификаторы SalesDoc длинные и выдавливали сумму за край.
                 const note = !Array.isArray(r) && r.note
+                const warn = !Array.isArray(r) && r.warn
                 return (
                   <tr key={i} className={muted ? 'rc-row-muted' : ''}>
                     {cells.map((c, j) => (
                       <td key={j} className={j === cells.length - 1 ? 'num' : ''}>
                         {j === 0 ? fdate(c) : c}
-                        {j === 0 && note && <div className="rc-note" title={note}>{note}</div>}
+                        {j === 0 && note && (
+                          <div className={`rc-note ${warn ? 'rc-note-warn' : ''}`}
+                            title={warn ? 'Скорее всего опечатка в годе — в SalesDoc такая запись не видна из-за фильтра по периоду, но баланс двигает' : note}>
+                            {note}
+                          </div>
+                        )}
                       </td>
                     ))}
                   </tr>
