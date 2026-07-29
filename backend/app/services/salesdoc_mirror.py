@@ -519,8 +519,13 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
 
     # --- Реализации ---
     orders_q = match(models.SalesDocOrder)
+    # Сколько реализаций клиента вообще есть и сколько остаётся после отбора по
+    # складам выбранной фирмы. Разницу показываем в карточке: иначе «Реализации
+    # 0» выглядит как «в SalesDoc отгрузок нет», хотя они просто с чужого склада.
+    all_orders_count = orders_q.count()
     if store_ids:
         orders_q = orders_q.filter(models.SalesDocOrder.store_sd_id.in_(store_ids))
+    hidden_by_store = all_orders_count - orders_q.count()
     orders, o_total, o_count = [], 0.0, 0
     for o in orders_q.order_by(models.SalesDocOrder.date.desc()).all():
         counted = o.status in salesdoc.SHIPPED_STATUSES
@@ -562,7 +567,8 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
         })
 
     return {
-        "orders": {"total": round(o_total, 2), "count": o_count, "items": orders},
+        "orders": {"total": round(o_total, 2), "count": o_count, "items": orders,
+                   "hidden_by_store": hidden_by_store},
         "payments": {"total": round(p_total, 2), "count": p_count, "items": pays,
                      "scanned": len(pays) + len(rets), "matched": len(pays)},
         "returns": {"total": round(r_total, 2), "count": len(rets), "items": rets},

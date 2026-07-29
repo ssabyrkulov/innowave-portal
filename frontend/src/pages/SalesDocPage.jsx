@@ -462,6 +462,13 @@ function ReconcileDetailModal({ row, onClose }) {
                   muted: !o.counted,
                 }))}
               head={['Дата', 'Статус', 'Сумма']} />
+            {sd?.orders?.hidden_by_store > 0 && (
+              <div className="muted sd-pay-diag">
+                Ещё {sd.orders.hidden_by_store} реализаций скрыто отбором по
+                складам выбранной фирмы. Переключитесь на «Обе фирмы» или
+                задайте фирму складам, чтобы увидеть их.
+              </div>
+            )}
             <RcSection title="Оплаты" total={sd?.payments?.total} count={sd?.payments?.count}
               rows={(sd?.payments?.items || []).map((p) => ({
                 // У обычной оплаты пишем только способ («Наличный»): слово
