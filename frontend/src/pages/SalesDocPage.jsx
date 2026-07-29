@@ -644,6 +644,17 @@ function ClientDebug({ row }) {
             value={`${data.live.orders.scanned} заказов · ${data.live.payments.scanned} операций`} />
           <AnRow label="Всего строк в зеркале"
             value={`${data.mirror.orders_total_rows} заказов · ${data.mirror.payments_total_rows} операций`} />
+          {data.live.orders.by_store?.length > 0 && (
+            <>
+              <div className="an-sub">Заказы клиента по складам</div>
+              {data.live.orders.by_store.map((s) => (
+                <div key={s.store} className="an-store">
+                  <span>{s.store} <span className="muted">· {s.statuses}</span></span>
+                  <span className="num">{money(s.sum)} · {s.count}</span>
+                </div>
+              ))}
+            </>
+          )}
           {data.live.payments.by_txn?.length > 0 && (
             <>
               <div className="an-sub">Операции журнала SalesDoc по этому клиенту</div>

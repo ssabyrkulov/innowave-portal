@@ -917,6 +917,35 @@ def speed_probe(sd_id: str, code_1c: str | None, date_from: str, date_to: str) -
     return out
 
 
+def _client_order_stores(orders: list, sid: str, code: str) -> list[dict]:
+    """Заказы клиента в разрезе складов и статусов.
+
+    Отвечает на вопрос «почему реализаций ноль»: если заказы есть, но лежат на
+    складе, не привязанном к выбранной фирме, отбор их отсекал. Заодно видно,
+    не отменены ли они — отменённые в сумму не идут."""
+    wh = {}
+    try:
+        wh = {str(w["sd_id"]).lower(): w["name"] for w in fetch_warehouses()}
+    except SalesDocError:
+        pass
+    stat: dict = {}
+    for o in orders:
+        if not _client_matches(o.get("client"), sid, code):
+            continue
+        st = str((o.get("store") or {}).get("SD_id") or "").lower()
+        key = wh.get(st) or st or "(склад не указан)"
+        d = stat.setdefault(key, {"count": 0, "sum": 0.0, "statuses": {}})
+        d["count"] += 1
+        d["sum"] += float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
+        label = ORDER_STATUS.get(o.get("status"), str(o.get("status")))
+        d["statuses"][label] = d["statuses"].get(label, 0) + 1
+    return [
+        {"store": k, "count": v["count"], "sum": round(v["sum"], 2),
+         "statuses": ", ".join(f"{n}: {c}" for n, c in v["statuses"].items())}
+        for k, v in sorted(stat.items(), key=lambda x: -x[1]["sum"])
+    ]
+
+
 def client_debug(sd_id: str | None, code_1c: str | None,
                  date_from: str, date_to: str) -> dict:
     """Почему по клиенту не видно операций: что реально отдаёт SalesDoc.
@@ -981,7 +1010,13 @@ def client_debug(sd_id: str | None, code_1c: str | None,
     return {
         "sd_id": sd_id, "code_1C": code_1c,
         "date_from": date_from, "date_to": date_to,
-        "orders": hits(orders, lambda o: o.get("client")),
+        "orders": {
+            **hits(orders, lambda o: o.get("client")),
+            # По каким складам и статусам лежат заказы клиента: если склад не
+            # привязан к фирме, его отгрузки отсекались отбором — это первое,
+            # что нужно проверить, когда реализаций «ноль».
+            "by_store": _client_order_stores(orders, sid, code),
+        },
         "payments": hits(payments, lambda p: p.get("client"),
                          txn_of=lambda p: p.get("transactionType")),
         "defects": hits(defects, lambda d: d.get("client")),
