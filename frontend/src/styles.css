@@ -2770,6 +2770,12 @@ button.summary-card {
 .store-stat-link:hover { text-decoration: underline; }
 .store-orders { margin: 4px 0 14px; padding-left: 12px; border-left: 2px solid var(--border); }
 .store-orders-total { font-size: 12px; margin-top: 6px; }
+.order-raw {
+  font-size: 12.5px; background: var(--bg-soft, #fafafa); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; margin: 8px 0; display: grid; gap: 6px;
+}
+.order-raw-sib ul { margin: 4px 0 0; padding-left: 18px; }
+.order-raw-json { max-height: 320px; overflow: auto; font-size: 11px; margin: 6px 0 0; }
 .store-row .filter-select { min-width: 180px; }
 .store-map-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .sd-warn { border-left: 3px solid var(--out); }

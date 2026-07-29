@@ -7,7 +7,7 @@
 
 import difflib
 import re
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -1010,6 +1010,44 @@ def store_orders(
         "amount": round(sum(r["amount"] for r in rows if r["counted"]), 2),
         "items": rows,
     }
+
+
+@router.get("/order-raw")
+def order_raw(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    sd_id: str = Query(..., description="ИД документа SalesDoc"),
+):
+    """Сырой ответ SalesDoc по документу + соседние документы того же дня.
+
+    Когда портал и интерфейс SalesDoc показывают у документа разные склады,
+    спорить бесполезно — надо посмотреть, что отдаёт сам метод getOrder."""
+    _require_configured()
+    row = db.query(models.SalesDocOrder).filter(
+        models.SalesDocOrder.sd_id == sd_id).first()
+    if row is None or row.date is None:
+        raise HTTPException(status_code=404, detail="Документа нет в зеркале")
+    df = (row.date - timedelta(days=1)).isoformat()
+    dt = (row.date + timedelta(days=1)).isoformat()
+    try:
+        return {
+            "mirror": {
+                "sd_id": row.sd_id,
+                "date": row.date.isoformat(),
+                "store_sd_id": row.store_sd_id,
+                "status": row.status,
+                "amount": float(row.amount or 0),
+                "code_1C": row.code_1c,
+                "client_sd_id": row.client_sd_id,
+                "synced_at": row.synced_at and row.synced_at.isoformat(),
+            },
+            "raw": salesdoc.raw_order(sd_id, df, dt),
+            # Соседние документы той же точки за те же дни: видно, чем они
+            # отличаются и какое поле «разъезжается».
+            "siblings": salesdoc.raw_orders_of_day(df, dt, row.client_sd_id),
+        }
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.get("/cashboxes")

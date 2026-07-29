@@ -951,6 +951,53 @@ def _client_order_stores(orders: list, sid: str, code: str) -> list[dict]:
     ]
 
 
+def raw_order(sd_id: str, date_from: str, date_to: str) -> dict | None:
+    """Сырой ответ SalesDoc по одному документу — как он приходит из API.
+
+    Нужен, когда портал и интерфейс SalesDoc показывают у документа разные
+    склады: спорить бесполезно, надо смотреть, что именно отдаёт метод. Точечно
+    документ запросить нельзя (серверные фильтры getOrder не работают), поэтому
+    тянем узкий период и находим документ локально."""
+    want = str(sd_id or "").strip().lower()
+    if not want:
+        return None
+    rows = call_all("getOrder", ("orders", "order"), {"filter": {
+        "include": "all",
+        "status": [1, 2, 3, 4, 5],
+        "period": {"date": {"from": date_from, "to": date_to}},
+    }})
+    for o in rows:
+        ids = {str(o.get("SD_id") or "").lower(), str(o.get("CS_id") or "").lower()}
+        if want in ids:
+            return o
+    return None
+
+
+def raw_orders_of_day(date_from: str, date_to: str, client_sd_id: str | None,
+                      limit: int = 20) -> list[dict]:
+    """Сырые документы за период (при желании — только по одной точке).
+
+    Соседние документы того же дня показывают, чем они отличаются: у одного
+    склад один, у другого другой, и видно, какое именно поле разъезжается."""
+    want = str(client_sd_id or "").strip().lower()
+    rows = call_all("getOrder", ("orders", "order"), {"filter": {
+        "include": "all",
+        "status": [1, 2, 3, 4, 5],
+        "period": {"date": {"from": date_from, "to": date_to}},
+    }})
+    out = []
+    for o in rows:
+        if want:
+            cli = (o.get("client") or {})
+            ids = {str(cli.get("SD_id") or "").lower(), str(cli.get("CS_id") or "").lower()}
+            if want not in ids:
+                continue
+        out.append(o)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def client_debug(sd_id: str | None, code_1c: str | None,
                  date_from: str, date_to: str) -> dict:
     """Почему по клиенту не видно операций: что реально отдаёт SalesDoc.
