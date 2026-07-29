@@ -91,11 +91,17 @@ def _store_ids_for_org(db: Session, org: str) -> set | None:
 
 
 def _unmapped_stores(db: Session) -> list[str]:
-    """Склады, которым не задана фирма — их операции попадают в обе фирмы."""
+    """Склады без фирмы, по которым реально были реализации.
+
+    Пустой склад без привязки ни на что не влияет — его реализаций нет, дублить
+    в обеих фирмах нечего. Раньше такие тоже попадали в предупреждение, и оно
+    выглядело тревожнее, чем есть: из четырёх названий опасны были два."""
+    stats = salesdoc_mirror.orders_by_store(db)
     return [
         s.name or s.store_id
         for s in db.query(models.SalesDocStore).all()
         if s.store_id and not s.organization
+        and (stats.get(s.store_id.lower()) or {}).get("count")
     ]
 
 
