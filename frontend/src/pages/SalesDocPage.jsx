@@ -683,8 +683,16 @@ function diagnoseReconcile(row, t) {
   }
   if (!row.in_1c) {
     return {
-      level: 'bad', head: 'Точки нет в 1С',
-      lines: ['Клиент есть только в SalesDoc — в 1С отгрузок и оплат по нему нет.'],
+      // «Нет в 1С» значит «нет операций в 1С этой фирмы»: карточка контрагента
+      // может быть заведена, но пока по ней нет ни продаж, ни оплат, в
+      // дебиторку она не попадает. Формулировка важна — иначе читается как
+      // «контрагента вообще нет», и человек идёт искать его в справочнике.
+      level: 'bad', head: 'В 1С этой фирмы операций по точке нет',
+      lines: ['В 1С выбранной фирмы по этой точке нет ни отгрузок, ни оплат. ' +
+              'Сам контрагент в 1С может быть заведён — в дебиторку попадают ' +
+              'только точки с операциями. Проверьте в панели «Почему точка ' +
+              'здесь / не здесь»: там видно, есть ли операции у другой фирмы ' +
+              'и нет ли похожего имени, с которым не сработала склейка.'],
     }
   }
 
@@ -1361,13 +1369,25 @@ function WhyPanel() {
               <div><b>{c.name}</b> <span className="muted">· {c.sd_id}</span></div>
               <div>Долг в SalesDoc: <b>{money(c.sd_debt)}</b></div>
               <div>
-                В 1С: {Object.entries(c.in_1c).map(([firm, debt]) => (
+                Операции в 1С: {Object.entries(c.in_1c).map(([firm, debt]) => (
                   <span key={firm} className="why-firm">
                     {ORG_LABELS[firm] || firm}:{' '}
                     {debt == null ? <span className="muted">нет</span> : <b>{money(debt)}</b>}
                   </span>
                 ))}
               </div>
+              {/* Разница между «операций у фирмы нет» и «операции есть, но имя
+                  другое» решает, что делать: догружать или связать вручную. */}
+              {Object.entries(c.similar || {}).map(([firm, list]) => (
+                list.length > 0 && (
+                  <div key={firm} className="why-similar">
+                    Похожие имена в 1С ({ORG_LABELS[firm] || firm}):{' '}
+                    {list.map((s, k) => (
+                      <span key={k} className="why-firm">«{s.name}» — {money(s.debt)}</span>
+                    ))}
+                  </div>
+                )
+              ))}
               <div>
                 Реализации на складах фирм:{' '}
                 {c.store_orgs.length

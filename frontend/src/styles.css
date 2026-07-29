@@ -2781,6 +2781,7 @@ button.summary-card {
 }
 .order-raw-sib ul { margin: 4px 0 0; padding-left: 18px; }
 .why-firm { margin-right: 14px; }
+.why-similar { color: var(--warn); }
 .why-verdict { border-top: 1px solid var(--border); padding-top: 6px; font-weight: 600; }
 .order-raw-json { max-height: 320px; overflow: auto; font-size: 11px; margin: 6px 0 0; }
 .store-row .filter-select { min-width: 180px; }
