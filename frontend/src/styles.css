@@ -2803,12 +2803,15 @@ button.summary-card {
   text-overflow: ellipsis;
 }
 .rc-note-warn { color: var(--warn); font-weight: 600; max-width: none; }
-/* Почему точка «только SD» попала в выбранную фирму — подпись под именем. */
+/* Почему точка «только SD» попала в выбранную фирму — подпись под именем.
+   Обычная подпись серая (просто справка), жёлтая — когда фирму определить не
+   удалось и строка показана «на всякий случай». */
 .rc-org-note {
   font-size: 10.5px;
-  color: var(--warn);
+  color: var(--faint);
   margin-top: 2px;
   max-width: 320px;
   white-space: normal;
   line-height: 1.25;
 }
+.rc-org-note-warn { color: var(--warn); font-weight: 600; }

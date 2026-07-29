@@ -322,7 +322,11 @@ export default function SalesDocPage() {
                       <button className="client-link" onClick={() => setDetail(r)}>
                         {r.name}
                       </button>
-                      {r.org_note && <div className="rc-org-note">{r.org_note}</div>}
+                      {r.org_note && (
+                        <div className={`rc-org-note${r.org_note_warn ? ' rc-org-note-warn' : ''}`}>
+                          {r.org_note}
+                        </div>
+                      )}
                     </td>
                     <td data-label="Фирма" className="muted">
                       {ORG_LABELS[r.organization] || '—'}

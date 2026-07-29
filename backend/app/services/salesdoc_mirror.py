@@ -320,8 +320,9 @@ def client_store_orgs(db: Session) -> dict[str, dict]:
     мгновенно и без сбоев.
 
     Возвращает {sd_id клиента: {"orgs": множество фирм по складам с привязкой,
-    "unmapped": названия складов без привязки}}. Пустой словарь означает, что
-    реализаций у точки нет вовсе — фирму определить не по чему.
+    "stores": {фирма: [названия складов]}, "unmapped": названия складов без
+    привязки}}. Отсутствие клиента в словаре означает, что реализаций у точки
+    нет вовсе — фирму определить не по чему.
     """
     stores = {
         s.store_id.lower(): s
@@ -336,16 +337,19 @@ def client_store_orgs(db: Session) -> dict[str, dict]:
     for cli, store_id in rows:
         if not cli:
             continue
-        entry = out.setdefault(str(cli).lower(), {"orgs": set(), "unmapped": []})
+        entry = out.setdefault(
+            str(cli).lower(), {"orgs": set(), "stores": {}, "unmapped": []})
         store = stores.get(str(store_id or "").lower())
         if store is None:
             continue
+        name = store.name or store.store_id
         if store.organization:
             entry["orgs"].add(store.organization)
-        else:
-            name = store.name or store.store_id
-            if name not in entry["unmapped"]:
-                entry["unmapped"].append(name)
+            named = entry["stores"].setdefault(store.organization, [])
+            if name not in named:
+                named.append(name)
+        elif name not in entry["unmapped"]:
+            entry["unmapped"].append(name)
     return out
 
 

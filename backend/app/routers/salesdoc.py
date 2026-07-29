@@ -344,22 +344,29 @@ def reconcile_debt(
         # определяем по складам её реализаций — но склад известен не всегда,
         # и тогда мы не прячем строку молча, а показываем и объясняем почему
         # (иначе «почему этот клиент здесь?» невозможно понять из интерфейса).
-        org_note = None
+        org_note, org_note_warn = None, False
         if o in models.ORGS and client_orgs is not None:
             if o in entry_orgs:
-                pass  # точка этой фирмы — вопросов нет
+                # Пишем и когда всё в порядке: вопрос «почему эта точка здесь?»
+                # возникает именно к строкам без пары в 1С, и ответ должен быть
+                # виден сразу, а не выясняться расследованием.
+                named = (info or {}).get("stores", {}).get(o) or []
+                org_note = ("склады этой фирмы: " + ", ".join(named)) if named else None
             elif info is None:
                 org_note = "фирма не определена: в SalesDoc нет реализаций этой точки"
+                org_note_warn = True
             elif info.get("unmapped"):
                 org_note = (
                     "фирма не определена: реализации на складах без фирмы — "
                     + ", ".join(info["unmapped"])
                 )
+                org_note_warn = True
             else:
                 continue  # точка другой фирмы
         row_org = list(entry_orgs)[0] if len(entry_orgs) == 1 else None
         rows.append({
             "org_note": org_note,
+            "org_note_warn": org_note_warn,
             "name": entry["name"],
             "our_debt": 0.0,
             "sd_debt": entry["debt"],
