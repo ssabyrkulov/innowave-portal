@@ -1055,7 +1055,7 @@ function ShipmentsComparePanel() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [tab, setTab] = useState('only_1c')
+  const [filter, setFilter] = useState('')
 
   function load(r = dr) {
     setLoading(true); setError(null)
@@ -1064,12 +1064,21 @@ function ShipmentsComparePanel() {
   }
   function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
 
-  const TABS = [
-    ['only_1c', 'Нет в SalesDoc', data?.only_1c_count],
-    ['only_sd', 'Нет в 1С', data?.only_sd_count],
-    ['mismatched', 'Пара есть, суммы разные', data?.mismatched_count],
+  // Один список на всё: фильтр только сужает его, а не уводит в другую вкладку.
+  const FILTERS = [
+    ['', 'Все'],
+    ['diff', 'Суммы разные'],
+    ['only_1c', 'Нет в SalesDoc'],
+    ['only_sd', 'Нет в 1С'],
+    ['ok', 'Сходится'],
   ]
-  const list = data?.[tab] || []
+  const list = (data?.rows || []).filter((r) => !filter || r.verdict === filter)
+  const VERDICT = {
+    ok: ['сходится', 'sc-ok'],
+    diff: ['суммы разные', 'sc-diff'],
+    only_1c: ['нет в SalesDoc', 'sc-bad'],
+    only_sd: ['нет в 1С', 'sc-bad'],
+  }
 
   return (
     <div className="chart-card store-map">
@@ -1078,11 +1087,11 @@ function ShipmentsComparePanel() {
       </button>
       {open && (
         <div className="store-map-body">
-          <p className="muted">Сколько документов реализации в каждой системе,
-            по каким складам они прошли и какие именно не нашли пару.
-            Сопоставление — по номеру накладной (в SalesDoc он лежит в поле
-            «код 1С»). Учитываются только отгруженные документы SalesDoc:
-            «Новый» ещё не отгружен, «Отменён» — не продажа.</p>
+          <p className="muted">Каждая реализация одной строкой: склад и сумма с
+            обеих сторон, статус в SalesDoc и вердикт. Сопоставление — по номеру
+            накладной (в SalesDoc он в поле «код 1С»), а если номера нет — по
+            клиенту, дате и сумме. Учитываются только отгруженные документы
+            SalesDoc: «Новый» ещё не отгружен, «Отменён» — не продажа.</p>
           <div className="rc-period">
             <span className="muted">Период:</span>
             <input type="date" className="filter-select" value={dr.from}
@@ -1100,8 +1109,23 @@ function ShipmentsComparePanel() {
               <div className="sc-totals">
                 <div><span className="muted">1С</span><b>{data.our.count} док.</b><span>{money(data.our.amount)}</span></div>
                 <div><span className="muted">SalesDoc</span><b>{data.sd.count} док.</b><span>{money(data.sd.amount)}</span></div>
-                <div><span className="muted">Совпало по номеру</span><b>{data.matched}</b><span /></div>
+                <div><span className="muted">Сходится</span><b>{data.counts.ok}</b><span /></div>
+                <div><span className="muted">Расходится</span>
+                  <b>{data.counts.diff + data.counts.only_1c + data.counts.only_sd}</b><span /></div>
               </div>
+
+              {/* Выгрузка продаж 1С не всегда содержит номер и склад. Пока это
+                  так, сверять по номеру нечем — честно об этом говорим, иначе
+                  «совпало 0» читается как поломка сверки. */}
+              {data.our.no_number > 0 && (
+                <p className="note-readonly sd-warn">
+                  У {data.our.no_number} из {data.our.count} документов 1С нет
+                  номера{data.our.no_warehouse > 0 && `, у ${data.our.no_warehouse} — склада`}.
+                  {' '}По номеру сопоставлено {data.matched_by_number}, остальное — по
+                  клиенту, дате и сумме. Чтобы сверка стала точной, в выгрузку
+                  продаж из 1С нужно добавить колонки «Номер документа» и «Склад».
+                </p>
+              )}
 
               <div className="rc-cols sc-stores">
                 <div className="rc-col">
@@ -1115,46 +1139,60 @@ function ShipmentsComparePanel() {
               </div>
 
               <div className="sc-tabs">
-                {TABS.map(([key, label, n]) => (
+                {FILTERS.map(([key, label]) => (
                   <button key={key}
-                    className={`btn btn-sm ${tab === key ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => setTab(key)}>
-                    {label} · {n ?? 0}
+                    className={`btn btn-sm ${filter === key ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setFilter(key)}>
+                    {label}{key && ` · ${data.counts[key]}`}
                   </button>
                 ))}
               </div>
               {list.length === 0 ? (
                 <div className="muted rc-empty">Таких документов нет 🎉</div>
               ) : (
-                <div className="table-wrap rc-table">
+                <div className="table-wrap rc-table sc-table">
                   <table>
                     <thead>
                       <tr>
-                        <th>Дата</th><th>Документ</th><th>Клиент</th><th>Склад</th>
-                        <th className="num">{tab === 'mismatched' ? '1С / SalesDoc' : 'Сумма'}</th>
+                        <th>Дата</th><th>Клиент</th>
+                        <th>Склад 1С</th><th className="num">Сумма 1С</th>
+                        <th>Склад SalesDoc</th><th>Статус</th><th className="num">Сумма SD</th>
+                        <th className="num">Разница</th><th>Итог</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {list.map((r, i) => (
-                        <tr key={i}>
-                          <td>{fdateShort(r.date)}</td>
-                          <td>{r.doc_number || <span className="muted">без номера</span>}</td>
-                          <td>{r.client}</td>
-                          <td>{r.warehouse || r.store}</td>
-                          <td className="num">
-                            {tab === 'mismatched'
-                              ? `${money(r.our_amount)} / ${money(r.sd_amount)}`
-                              : money(r.amount)}
-                          </td>
-                        </tr>
-                      ))}
+                      {list.map((r, i) => {
+                        const [label, cls2] = VERDICT[r.verdict]
+                        return (
+                          <tr key={i}>
+                            <td>{fdateShort(r.date)}</td>
+                            <td>{r.client}
+                              {/* Номера документов с обеих сторон — мелко под
+                                  клиентом, чтобы не раздувать таблицу. */}
+                              <div className="rc-note" title={`1С: ${r.doc_number || '—'} · SD: ${r.sd_doc || '—'}`}>
+                                {r.doc_number || '—'} · {r.sd_doc || '—'}
+                              </div>
+                            </td>
+                            <td>{r.our_warehouse || <span className="muted">—</span>}</td>
+                            <td className="num">{r.our_amount == null ? '—' : money(r.our_amount)}</td>
+                            <td>{r.sd_store || <span className="muted">—</span>}</td>
+                            <td>{r.sd_status || <span className="muted">—</span>}</td>
+                            <td className="num">{r.sd_amount == null ? '—' : money(r.sd_amount)}</td>
+                            <td className={`num ${r.diff ? cls(r.diff) : ''}`}>
+                              {r.diff == null ? '—' : money(r.diff)}
+                            </td>
+                            <td><span className={`sd-reason ${cls2}`}>{label}</span></td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
               )}
-              {list.length >= data.cap && (
+              {data.total_rows > data.cap && (
                 <div className="muted sd-pay-diag">
-                  Показаны первые {data.cap} строк — сузьте период, чтобы увидеть остальные.
+                  Всего строк {data.total_rows}, показаны первые {data.cap} —
+                  сузьте период, чтобы увидеть остальные.
                 </div>
               )}
             </>

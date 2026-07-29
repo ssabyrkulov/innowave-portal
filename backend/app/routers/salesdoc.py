@@ -854,12 +854,12 @@ def shipments_compare(
     date_to: date = Query(...),
     org: str = Query(default="all"),
 ):
-    """Сверка реализаций 1С ↔ SalesDoc: сколько документов и на какую сумму с
-    каждой стороны, разбивка по складам и поимённые списки непарных документов.
+    """Сверка реализаций 1С ↔ SalesDoc одной таблицей: у каждой реализации
+    видно склад и сумму с обеих сторон, статус SalesDoc и вердикт.
 
-    Сопоставляем по номеру накладной: в SalesDoc он приходит в code_1C после
-    обмена с 1С. Документ без номера с обеих сторон в пару не встанет — такие
-    честно показываем в «нет пары».
+    Сопоставляем по номеру накладной (в SalesDoc он приходит в code_1C после
+    обмена с 1С), а если номера нет — по клиенту, дате и сумме. Второй способ
+    оказался основным: в выгрузке продаж 1С номер документа заполнен не всегда.
     """
     o = (org or "").strip().lower()
 
@@ -869,31 +869,34 @@ def shipments_compare(
                                      models.Sale.date <= date_to),
         models.Sale, org,
     )
+    # Без номера документа строки одного дня по одному клиенту всё равно надо
+    # свести в документ — иначе каждая позиция накладной станет отдельной
+    # «реализацией» и сверять будет нечего.
     our_docs: dict = {}
-    our_loose: list[dict] = []
     for s in sales_q.all():
         line = float(s.amount) * (1 - float(s.discount_pct or 0) / 100)
-        item = {
-            "date": s.date.isoformat(),
-            "doc_number": s.doc_number,
-            "client": s.client,
-            "warehouse": s.warehouse or "(склад не указан)",
-            "amount": round(line, 2),
-        }
-        if not s.doc_number:
-            our_loose.append(item)
-            continue
-        d = our_docs.get(s.doc_number)
+        key = (s.doc_number or f"~{s.client}|{s.date.isoformat()}")
+        d = our_docs.get(key)
         if d is None:
-            d = our_docs[s.doc_number] = {**item, "amount": 0.0, "doc_total": None}
+            d = our_docs[key] = {
+                "date": s.date.isoformat(),
+                "doc_number": s.doc_number,
+                "client": s.client,
+                "warehouse": s.warehouse or None,
+                "amount": 0.0,
+                "doc_total": None,
+                "positions": 0,
+            }
         d["amount"] += line
+        d["positions"] += 1
+        if s.warehouse and not d["warehouse"]:
+            d["warehouse"] = s.warehouse
         if s.doc_total is not None:
             d["doc_total"] = float(s.doc_total)
     our_list = []
     for d in our_docs.values():
         amt = d["doc_total"] if d["doc_total"] is not None else d["amount"]
         our_list.append({**d, "amount": round(float(amt), 2)})
-    our_list += our_loose
 
     # --- SalesDoc: реализации из зеркала, только отгруженные ---
     store_ids = _store_ids_for_org(db, org)
@@ -913,65 +916,108 @@ def shipments_compare(
             "date": r.date and r.date.isoformat(),
             "doc_number": r.code_1c,
             "sd_id": r.sd_id,
+            "client_sd_id": r.client_sd_id or "",
             "client": r.client_sd_id or r.client_code_1c or "",
             "store": store_names.get(r.store_sd_id or "", r.store_sd_id or "(склад не указан)"),
+            "status": r.status,
+            "status_label": salesdoc.ORDER_STATUS.get(r.status, str(r.status)),
             "amount": round(float(r.amount or 0), 2),
         }
         for r in sd_q.all()
     ]
-    # Имена точек — чтобы в списке «нет пары» стояло название, а не «p4_1244».
+    # Имена точек — чтобы в таблице стояло название, а не «p4_1244».
     names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
     for r in sd_list:
         r["client"] = names.get(r["client"], r["client"])
+        r["_ckey"] = _match_key(r["client"])
 
-    # --- Сопоставление по номеру документа ---
-    sd_by_key: dict = {}
-    sd_by_tail: dict = {}
+    # --- Индексы для сопоставления ---
+    sd_by_key: dict = {}      # по номеру накладной
+    sd_by_tail: dict = {}     # по числовому хвосту номера
+    sd_by_client: dict = {}   # по (клиент, дата) — когда номера нет
     for r in sd_list:
         k = _doc_key(r["doc_number"])
-        r["_key"] = k
         if k:
             sd_by_key.setdefault(k, []).append(r)
             t = _doc_tail(k)
             if t:
                 sd_by_tail.setdefault(t, []).append(r)
+        for ck in {r["client_sd_id"], r["_ckey"]}:
+            if ck:
+                sd_by_client.setdefault((ck, r["date"]), []).append(r)
 
-    matched, mismatched, only_1c = 0, [], []
     used: set = set()
+    rows: list[dict] = []
+    by_number = 0
+
+    def pick(pool: list, amount: float):
+        """Из подходящих документов берём сначала совпадающий по сумме — иначе
+        две отгрузки одного дня встали бы в пару крест-накрест."""
+        free = [r for r in pool if id(r) not in used]
+        exact = next((r for r in free if abs(r["amount"] - amount) < 0.5), None)
+        return exact or (free[0] if free else None)
+
     for d in our_list:
         k = _doc_key(d["doc_number"])
-        pool = sd_by_key.get(k) or sd_by_tail.get(_doc_tail(k)) or []
-        pair = next((r for r in pool if id(r) not in used), None)
+        pair = pick(sd_by_key.get(k, []) or sd_by_tail.get(_doc_tail(k), []), d["amount"])
+        how = "номер" if pair else None
         if pair is None:
-            only_1c.append(d)
+            ckeys = {_extract_sd_id(d["client"]), _match_key(d["client"])}
+            pool = [r for ck in ckeys if ck
+                    for r in sd_by_client.get((ck, d["date"]), [])]
+            pair = pick(pool, d["amount"])
+            how = "клиент + дата" if pair else None
+        if pair is not None:
+            used.add(id(pair))
+            if how == "номер":
+                by_number += 1
+        same = pair is not None and abs(d["amount"] - pair["amount"]) < 0.5
+        rows.append({
+            "date": d["date"],
+            "client": d["client"],
+            "doc_number": d["doc_number"],
+            "our_warehouse": d["warehouse"],
+            "our_amount": d["amount"],
+            "sd_doc": pair and (pair["doc_number"] or pair["sd_id"]),
+            "sd_store": pair and pair["store"],
+            "sd_status": pair and pair["status_label"],
+            "sd_amount": pair and pair["amount"],
+            "diff": round(d["amount"] - pair["amount"], 2) if pair else None,
+            "matched_by": how,
+            "verdict": "ok" if same else ("diff" if pair else "only_1c"),
+        })
+    for r in sd_list:
+        if id(r) in used:
             continue
-        used.add(id(pair))
-        matched += 1
-        # Пара нашлась, но суммы разные — это отдельная, самая частая беда.
-        if abs(d["amount"] - pair["amount"]) >= 0.5:
-            mismatched.append({
-                "date": d["date"], "doc_number": d["doc_number"],
-                "client": d["client"], "warehouse": d["warehouse"],
-                "store": pair["store"],
-                "our_amount": d["amount"], "sd_amount": pair["amount"],
-                "diff": round(d["amount"] - pair["amount"], 2),
-            })
-    only_sd = [r for r in sd_list if id(r) not in used]
+        rows.append({
+            "date": r["date"],
+            "client": r["client"],
+            "doc_number": None,
+            "our_warehouse": None,
+            "our_amount": None,
+            "sd_doc": r["doc_number"] or r["sd_id"],
+            "sd_store": r["store"],
+            "sd_status": r["status_label"],
+            "sd_amount": r["amount"],
+            "diff": None,
+            "matched_by": None,
+            "verdict": "only_sd",
+        })
 
-    def by_store(rows, key, amount_key="amount") -> list[dict]:
+    rows.sort(key=lambda x: (x["date"] or ""), reverse=True)
+    counts = {v: sum(1 for r in rows if r["verdict"] == v)
+              for v in ("ok", "diff", "only_1c", "only_sd")}
+
+    def by_store(items, key) -> list[dict]:
         agg: dict = {}
-        for r in rows:
-            a = agg.setdefault(r[key], {"name": r[key], "count": 0, "amount": 0.0})
+        for r in items:
+            name = r.get(key) or "(склад не указан)"
+            a = agg.setdefault(name, {"name": name, "count": 0, "amount": 0.0})
             a["count"] += 1
-            a["amount"] += r[amount_key]
+            a["amount"] += r["amount"]
         for a in agg.values():
             a["amount"] = round(a["amount"], 2)
         return sorted(agg.values(), key=lambda x: -x["count"])
-
-    def cut(rows: list) -> list:
-        rows = sorted(rows, key=lambda x: (x.get("date") or ""), reverse=True)
-        return [{k: v for k, v in r.items() if not k.startswith("_")}
-                for r in rows[:LIST_CAP]]
 
     return {
         "period": {"from": date_from.isoformat(), "to": date_to.isoformat()},
@@ -980,19 +1026,20 @@ def shipments_compare(
             "count": len(our_list),
             "amount": round(sum(d["amount"] for d in our_list), 2),
             "by_store": by_store(our_list, "warehouse"),
+            # Сколько документов 1С пришло без номера: пока их много, сверять
+            # по номеру нечем и всё держится на «клиент + дата».
+            "no_number": sum(1 for d in our_list if not d["doc_number"]),
+            "no_warehouse": sum(1 for d in our_list if not d["warehouse"]),
         },
         "sd": {
             "count": len(sd_list),
             "amount": round(sum(r["amount"] for r in sd_list), 2),
             "by_store": by_store(sd_list, "store"),
         },
-        "matched": matched,
-        "mismatched_count": len(mismatched),
-        "only_1c_count": len(only_1c),
-        "only_sd_count": len(only_sd),
-        "mismatched": cut(mismatched),
-        "only_1c": cut(only_1c),
-        "only_sd": cut(only_sd),
+        "counts": counts,
+        "matched_by_number": by_number,
+        "rows": rows[:LIST_CAP],
+        "total_rows": len(rows),
         "cap": LIST_CAP,
         "unmapped_stores": _unmapped_stores(db),
     }

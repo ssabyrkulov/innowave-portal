@@ -2759,6 +2759,11 @@ button.summary-card {
 .sc-totals b { font-size: 18px; }
 .sc-stores { margin: 12px 0; }
 .sc-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 8px; }
+.sc-ok { color: var(--in); }
+.sc-diff { color: var(--warn); font-weight: 600; }
+.sc-bad { color: var(--out); font-weight: 600; }
+/* Таблица широкая — пусть скроллится внутри себя, а не тянет страницу. */
+.sc-table table { min-width: 900px; }
 
 .store-name { font-size: 14px; }
 /* Статистика склада — второй строкой, чтобы длина не ломала ряд. */
