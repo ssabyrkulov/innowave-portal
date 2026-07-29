@@ -173,6 +173,7 @@ export const api = {
     ).toString()
     return request(`/salesdoc/client-debug${qs ? `?${qs}` : ''}`)
   },
+  salesdocCashboxes: () => request('/salesdoc/cashboxes'),
   salesdocMirror: () => request('/salesdoc/mirror'),
   salesdocMirrorSync: (full = false) =>
     request(`/salesdoc/mirror/sync${full ? '?full=true' : ''}`, { method: 'POST' }),

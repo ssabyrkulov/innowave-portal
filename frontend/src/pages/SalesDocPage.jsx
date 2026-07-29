@@ -194,6 +194,8 @@ export default function SalesDocPage() {
 
       <StockPanel />
 
+      <CashboxPanel />
+
       <SpeedProbePanel />
 
       <WarehouseReportPanel />
@@ -522,7 +524,11 @@ function ReconcileDetailModal({ row, onClose }) {
                 // Дата в будущем — почти всегда опечатка в годе при ручном
                 // вводе. В интерфейсе SalesDoc такие записи часто не видны
                 // (там стоит фильтр по периоду), а баланс они двигают.
-                note: isFuture(p.date) ? 'дата в будущем!' : shortId(p.sd_id),
+                // Касса важнее идентификатора: у оплаты нет склада, и именно
+                // касса показывает, к какой фирме операцию посадили.
+                note: isFuture(p.date)
+                  ? 'дата в будущем!'
+                  : (p.cashbox ? `касса ${p.cashbox}` : shortId(p.sd_id)),
                 warn: isFuture(p.date),
                 muted: !p.counted,
               }))}
@@ -1004,6 +1010,67 @@ function StockPanel() {
                 </div>
               ))}
             </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Кассы журнала оплат. У оплаты в SalesDoc нет склада, поэтому для точки, у
+// которой в SalesDoc одни оплаты, фирму по складам не вычислить. Касса —
+// единственный признак «куда посадили деньги»; сначала смотрим, разведены ли
+// кассы по фирмам, и только потом делаем из них привязку.
+function CashboxPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocCashboxes()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  const list = data?.cashboxes || []
+  const named = list.filter((c) => c.cashbox_id || c.name !== '(касса не указана)')
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 💰 Кассы SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Какие кассы встречаются в журнале оплат и сколько
+            операций на каждой. Если кассы разведены по фирмам, их можно
+            привязать так же, как склады, — и определять фирму точки, у которой
+            в SalesDoc только оплаты, без реализаций.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Считаю…</div>}
+          {data && named.length === 0 && (
+            <div className="note-readonly sd-warn">
+              SalesDoc не отдаёт кассу в журнале оплат — привязку по кассам
+              сделать не из чего. Фирму придётся задавать точке вручную.
+            </div>
+          )}
+          {named.length > 0 && (
+            <table className="table rc-table">
+              <thead>
+                <tr><th>Касса</th><th className="num">Операций</th><th className="num">Сумма</th></tr>
+              </thead>
+              <tbody>
+                {list.map((c, i) => (
+                  <tr key={i}>
+                    <td>{c.name}</td>
+                    <td className="num">{c.count}</td>
+                    <td className="num">{money(c.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       )}

@@ -108,6 +108,20 @@ def _order_filter(date_from: str, date_to: str, updated_since: str | None) -> di
     return {"filter": {"include": "all", "status": [1, 2, 3, 4, 5], "period": period}}
 
 
+def _cashbox(payment: dict) -> tuple[str | None, str | None]:
+    """Касса операции: (SD_id, название). Имя ключа в ответе SalesDoc не
+    зафиксировано в документации — перебираем известные написания, чтобы
+    поле не потерялось молча."""
+    for key in ("cashbox", "cashBox", "cash_box", "cashdesk", "cashDesk", "kassa"):
+        box = payment.get(key)
+        if isinstance(box, dict) and (box.get("SD_id") or box.get("name")):
+            sid = str(box.get("SD_id") or "").lower() or None
+            return sid, (box.get("name") or None)
+        if isinstance(box, str) and box.strip():
+            return None, box.strip()
+    return None, None
+
+
 def _payment_filter(date_from: str, date_to: str, updated_since: str | None) -> dict:
     """Оплаты: весь журнал — в нём же лежат «Возврат с полки» (тип 9)."""
     period = ({"dateUpdate": {"from": updated_since, "to": date_to}}
@@ -229,6 +243,7 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
         seen.add(sd_id)
         cli_sd, cli_code = _client_keys(p.get("client"))
         pt = p.get("paymentType") or {}
+        box = _cashbox(p)
         _upsert(db, models.SalesDocPayment, sd_id, {
             "client_sd_id": cli_sd,
             "client_code_1c": cli_code,
@@ -240,6 +255,8 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
                 or ptypes.get(("sd", str(pt.get("SD_id") or "").lower()))
                 or None
             ),
+            "cashbox_sd_id": box[0],
+            "cashbox_name": box[1],
         })
     if updated_since is None:  # полная выгрузка — вычищаем удалённое в SalesDoc
         db.flush()
@@ -329,6 +346,39 @@ def client_store_orgs(db: Session) -> dict[str, dict]:
             name = store.name or store.store_id
             if name not in entry["unmapped"]:
                 entry["unmapped"].append(name)
+    return out
+
+
+def cashboxes(db: Session) -> list[dict]:
+    """Кассы из журнала оплат: сколько операций и на какую сумму на каждой.
+
+    Нужно, чтобы понять, делятся ли кассы SalesDoc по фирмам. Если делятся —
+    касса станет вторым источником привязки: у оплаты склада нет, и для точки,
+    у которой в SalesDoc одни оплаты, фирму больше определять не по чему.
+    """
+    from sqlalchemy import func
+
+    rows = (
+        db.query(
+            models.SalesDocPayment.cashbox_sd_id,
+            models.SalesDocPayment.cashbox_name,
+            func.count(models.SalesDocPayment.id),
+            func.sum(models.SalesDocPayment.amount),
+        )
+        .group_by(models.SalesDocPayment.cashbox_sd_id,
+                  models.SalesDocPayment.cashbox_name)
+        .all()
+    )
+    out = [
+        {
+            "cashbox_id": sid,
+            "name": name or (sid or "(касса не указана)"),
+            "count": int(cnt or 0),
+            "amount": round(float(total or 0), 2),
+        }
+        for sid, name, cnt, total in rows
+    ]
+    out.sort(key=lambda x: -x["count"])
     return out
 
 
@@ -609,6 +659,9 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
             "txn": p.txn,
             "txn_label": salesdoc.PAY_TXN.get(p.txn, str(p.txn) if p.txn is not None else "—"),
             "type_name": p.type_name or "",
+            # Касса операции: у оплаты нет склада, и это единственный признак,
+            # по которому видно, к какой фирме её посадили.
+            "cashbox": p.cashbox_name or "",
             "counted": counted,
         })
 

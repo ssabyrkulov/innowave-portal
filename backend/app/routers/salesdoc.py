@@ -785,6 +785,18 @@ def mirror_status(
     return salesdoc_mirror.status(db)
 
 
+@router.get("/cashboxes")
+def cashboxes(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+):
+    """Кассы из журнала оплат SalesDoc: сколько операций и на какую сумму.
+
+    Если кассы разведены по фирмам, их можно будет привязать так же, как
+    склады, и определять фирму точки, у которой в SalesDoc одни оплаты."""
+    return {"cashboxes": salesdoc_mirror.cashboxes(db)}
+
+
 @router.post("/mirror/sync")
 def mirror_sync(
     _: models.User = Depends(can_edit),

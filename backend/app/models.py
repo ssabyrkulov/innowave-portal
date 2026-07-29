@@ -335,6 +335,10 @@ class SalesDocPayment(Base):
     amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     txn: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     type_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Касса, на которую посажена операция. У оплат склада нет, поэтому фирму
+    # такой точки по складам не определить — касса единственная зацепка.
+    cashbox_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    cashbox_name: Mapped[str | None] = mapped_column(String, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
