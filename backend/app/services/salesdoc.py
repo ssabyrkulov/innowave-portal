@@ -564,6 +564,8 @@ def fetch_client_orders(sd_id, code_1c, date_from, date_to, store_ids=None) -> d
             "date": _day(o.get("dateDocument") or o.get("dateCreate")),
             "sd_id": o.get("SD_id") or o.get("CS_id"),
             "code_1C": o.get("code_1C"),
+            "store": (o.get("store") or {}).get("name")
+                     or (o.get("store") or {}).get("SD_id") or "",
             "status": st,
             "status_label": ORDER_STATUS.get(st, str(st)),
             "amount": round(amt, 2),
@@ -666,6 +668,7 @@ def fetch_client_payments(sd_id, code_1c, date_from, date_to) -> dict:
             "txn": txn,
             "txn_label": PAY_TXN.get(txn, str(txn) if txn is not None else "—"),
             "type_name": type_name,
+            "cashbox": (p.get("cashbox") or {}).get("name") or "",
             "counted": is_counted,
         })
     items.sort(key=lambda x: x["date"], reverse=True)

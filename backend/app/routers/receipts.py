@@ -392,9 +392,15 @@ def client_detail(
                     "amount": 0.0,
                     "doc_total": float(s.doc_total) if s.doc_total is not None else None,
                     "positions": 0,
+                    # Склад отгрузки — по нему в сверке видно, к какой фирме
+                    # относится документ; в SalesDoc склад свой, и расхождение
+                    # часто объясняется именно разными складами.
+                    "warehouses": [],
                 }
             d["positions"] += 1
             d["amount"] += line_amt
+            if s.warehouse and s.warehouse not in d["warehouses"]:
+                d["warehouses"].append(s.warehouse)
             if s.doc_total is not None:
                 d["doc_total"] = float(s.doc_total)
         else:
@@ -404,6 +410,7 @@ def client_detail(
                 "amount": round(line_amt, 2),
                 "doc_total": None,
                 "positions": 1,
+                "warehouses": [s.warehouse] if s.warehouse else [],
             })
 
     shipments = []
@@ -417,6 +424,7 @@ def client_detail(
             "doc_number": d["doc_number"],
             "amount": amt,
             "positions": d["positions"],
+            "warehouse": ", ".join(d.get("warehouses") or []) or None,
         })
     shipments.sort(key=lambda x: x["date"], reverse=True)
 

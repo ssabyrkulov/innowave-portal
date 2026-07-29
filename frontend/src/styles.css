@@ -2798,7 +2798,9 @@ button.summary-card {
   color: var(--faint);
   margin-top: 1px;
   letter-spacing: -0.01em;
-  max-width: 150px;
+  /* Ширины хватает на «док. 0000-000331 · Склад-VS (Данияр)»; что не влезло,
+     видно в подсказке при наведении. */
+  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
 }

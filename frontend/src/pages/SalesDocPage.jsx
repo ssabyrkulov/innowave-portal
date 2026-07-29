@@ -479,10 +479,15 @@ function ReconcileDetailModal({ row, onClose }) {
             <RcSection title="Реализации" total={s1} count={cShip.length}
               rows={cShip.map((s) => ({
                 cells: [s.date, money(s.amount)],
-                note: s.doc_number ? `док. ${s.doc_number}` : null,
+                // Номер документа и склад отгрузки: по складу видно, чьей
+                // фирме документ, и почему он мог не сойтись с SalesDoc.
+                note: [s.doc_number && `док. ${s.doc_number}`, s.warehouse]
+                  .filter(Boolean).join(' · ') || null,
               }))}
               head={['Дата', 'Сумма']} />
             <RcSection title="Оплаты" total={p1} count={cPay.length}
+              // Названия кассы/счёта в выгрузке 1С нет — только вид оплаты
+              // (касса или банк), он и стоит в колонке «Тип».
               rows={cPay.map((p) => [p.date, p.kind === 'cash' ? 'касса' : 'банк', money(p.amount_kgs)])}
               head={['Дата', 'Тип', 'Сумма']} />
             <RcSection title="Возвраты" total={r1} count={cRet.length}
@@ -503,7 +508,11 @@ function ReconcileDetailModal({ row, onClose }) {
                   // накладной 1С соответствует. code_1C — номер, присвоенный
                   // при обмене с 1С; если его нет, показываем ИД SalesDoc.
                   cells: [o.date, o.status_label, money(o.amount)],
-                  note: isFuture(o.date) ? 'дата в будущем!' : orderNote(o),
+                  // Номер + склад одной строкой, как в колонке 1С: по складу
+                  // сразу видно, чьей фирме документ и почему пара не сошлась.
+                  note: isFuture(o.date)
+                    ? 'дата в будущем!'
+                    : [orderNote(o), o.store].filter(Boolean).join(' · '),
                   warn: isFuture(o.date),
                   muted: !o.counted,
                 }))}

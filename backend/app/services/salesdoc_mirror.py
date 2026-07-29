@@ -620,6 +620,12 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
     if store_ids:
         orders_q = orders_q.filter(models.SalesDocOrder.store_sd_id.in_(store_ids))
     hidden_by_store = all_orders_count - orders_q.count()
+    # Названия складов: в зеркале заказа лежит только идентификатор («d0_5»),
+    # а в сверке нужен человеческий склад — по нему видно, чьей фирме документ.
+    store_names = {
+        s.store_id.lower(): (s.name or s.store_id)
+        for s in db.query(models.SalesDocStore).all() if s.store_id
+    }
     orders, o_total, o_count = [], 0.0, 0
     for o in orders_q.order_by(models.SalesDocOrder.date.desc()).all():
         counted = o.status in salesdoc.SHIPPED_STATUSES
@@ -634,6 +640,7 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
             # номера непонятно, какая из них какой накладной 1С соответствует.
             "sd_id": o.sd_id,
             "code_1C": o.code_1c,
+            "store": store_names.get(o.store_sd_id or "", o.store_sd_id or ""),
             "status": o.status,
             "status_label": salesdoc.ORDER_STATUS.get(o.status, str(o.status)),
             "amount": round(amt, 2),
