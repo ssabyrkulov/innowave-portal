@@ -520,8 +520,12 @@ function ReconcileDetailModal({ row, onClose }) {
             {sd?.orders?.hidden_by_store > 0 && (
               <div className="muted sd-pay-diag">
                 Ещё {sd.orders.hidden_by_store} реализаций скрыто отбором по
-                складам выбранной фирмы. Переключитесь на «Обе фирмы» или
-                задайте фирму складам, чтобы увидеть их.
+                складам выбранной фирмы
+                {sd.orders.hidden_stores?.length > 0 && (
+                  <> — они лежат на складах: <b>{sd.orders.hidden_stores.join(', ')}</b></>
+                )}.
+                {' '}Переключитесь на «Обе фирмы» или задайте фирму складам,
+                чтобы увидеть их.
               </div>
             )}
             <RcSection title="Оплаты" total={sd?.payments?.total} count={sd?.payments?.count}

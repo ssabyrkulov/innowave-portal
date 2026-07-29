@@ -617,15 +617,26 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
     # складам выбранной фирмы. Разницу показываем в карточке: иначе «Реализации
     # 0» выглядит как «в SalesDoc отгрузок нет», хотя они просто с чужого склада.
     all_orders_count = orders_q.count()
-    if store_ids:
-        orders_q = orders_q.filter(models.SalesDocOrder.store_sd_id.in_(store_ids))
-    hidden_by_store = all_orders_count - orders_q.count()
     # Названия складов: в зеркале заказа лежит только идентификатор («d0_5»),
     # а в сверке нужен человеческий склад — по нему видно, чьей фирме документ.
     store_names = {
         s.store_id.lower(): (s.name or s.store_id)
         for s in db.query(models.SalesDocStore).all() if s.store_id
     }
+    # Склады скрытых реализаций. Без них сообщение «12 реализаций скрыто»
+    # бесполезно: не видно ни строк, ни складов — а именно склад и объясняет,
+    # почему точка оказалась в чужой фирме.
+    hidden_stores: list[str] = []
+    if store_ids:
+        for (sid,) in (orders_q.with_entities(models.SalesDocOrder.store_sd_id)
+                       .distinct().all()):
+            if (sid or "") in store_ids:
+                continue
+            name = store_names.get(sid or "", sid or "склад не указан")
+            if name not in hidden_stores:
+                hidden_stores.append(name)
+        orders_q = orders_q.filter(models.SalesDocOrder.store_sd_id.in_(store_ids))
+    hidden_by_store = all_orders_count - orders_q.count()
     orders, o_total, o_count = [], 0.0, 0
     for o in orders_q.order_by(models.SalesDocOrder.date.desc()).all():
         counted = o.status in salesdoc.SHIPPED_STATUSES
@@ -678,7 +689,8 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
 
     return {
         "orders": {"total": round(o_total, 2), "count": o_count, "items": orders,
-                   "hidden_by_store": hidden_by_store},
+                   "hidden_by_store": hidden_by_store,
+                   "hidden_stores": hidden_stores},
         "payments": {"total": round(p_total, 2), "count": p_count, "items": pays,
                      "scanned": len(pays) + len(rets), "matched": len(pays)},
         "returns": {"total": round(r_total, 2), "count": len(rets), "items": rets},
