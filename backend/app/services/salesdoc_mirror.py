@@ -353,6 +353,37 @@ def client_store_orgs(db: Session) -> dict[str, dict]:
     return out
 
 
+def orders_by_store(db: Session) -> dict[str, dict]:
+    """Реализации по складам за всю глубину зеркала: сколько документов, на
+    какую сумму и с какой по какую дату. Отвечает на вопрос «по каким складам
+    вообще шли отгрузки» и заодно показывает, какие склады мёртвые.
+
+    Считаем все статусы: отменённые и новые тоже показывают, что склад
+    используется, — а для привязки к фирме важен именно факт использования."""
+    from sqlalchemy import func
+
+    rows = (
+        db.query(
+            models.SalesDocOrder.store_sd_id,
+            func.count(models.SalesDocOrder.id),
+            func.sum(models.SalesDocOrder.amount),
+            func.min(models.SalesDocOrder.date),
+            func.max(models.SalesDocOrder.date),
+        )
+        .group_by(models.SalesDocOrder.store_sd_id)
+        .all()
+    )
+    return {
+        (sid or ""): {
+            "count": int(cnt or 0),
+            "amount": round(float(total or 0), 2),
+            "first": first and first.isoformat(),
+            "last": last and last.isoformat(),
+        }
+        for sid, cnt, total, first, last in rows
+    }
+
+
 def cashboxes(db: Session) -> list[dict]:
     """Кассы из журнала оплат: сколько операций и на какую сумму на каждой.
 

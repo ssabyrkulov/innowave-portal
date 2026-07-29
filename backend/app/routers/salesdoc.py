@@ -117,18 +117,37 @@ def list_warehouses(
     except salesdoc.SalesDocError as e:
         raise HTTPException(status_code=502, detail=str(e))
     saved = {s.store_id: s for s in db.query(models.SalesDocStore).all()}
-    return {
-        "warehouses": [
-            {
-                "store_id": w["sd_id"],
-                "code_1C": w["code_1C"],
-                "name": w["name"],
-                "org": saved[w["sd_id"]].organization if w["sd_id"] in saved else None,
-            }
-            for w in whs
-        ],
-        "orgs": list(models.ORGS),
-    }
+    # Сколько реализаций реально прошло по каждому складу. Без этого привязка
+    # делается вслепую: в справочнике SalesDoc склады есть, а какие из них
+    # рабочие, а какие пустые — не видно.
+    stats = salesdoc_mirror.orders_by_store(db)
+    out = []
+    seen: set = set()
+    for w in whs:
+        sid = w["sd_id"]
+        seen.add(str(sid or "").lower())
+        out.append({
+            "store_id": sid,
+            "code_1C": w["code_1C"],
+            "name": w["name"],
+            "org": saved[sid].organization if sid in saved else None,
+            "stats": stats.get(str(sid or "").lower()),
+        })
+    # Склад, по которому есть отгрузки, но которого нет в справочнике, —
+    # показываем отдельно, иначе его реализации остаются без объяснения.
+    for sid, st in stats.items():
+        if sid in seen:
+            continue
+        row = saved.get(sid)
+        out.append({
+            "store_id": sid or "(склад не указан)",
+            "code_1C": None,
+            "name": (row.name if row else None) or "(нет в справочнике SalesDoc)",
+            "org": row.organization if row else None,
+            "stats": st,
+        })
+    out.sort(key=lambda r: -((r["stats"] or {}).get("count") or 0))
+    return {"warehouses": out, "orgs": list(models.ORGS)}
 
 
 @router.post("/warehouses")

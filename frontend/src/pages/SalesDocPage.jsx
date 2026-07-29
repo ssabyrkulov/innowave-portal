@@ -49,6 +49,11 @@ function orderNote(o) {
   return shortId(o.sd_id)
 }
 
+// 2025-11-12 → 12.11.2025
+function fdateShort(iso) {
+  return iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split('-').reverse().join('.') : (iso || '—')
+}
+
 // epoch (сек) → ЧЧ:ММ — когда кэш SalesDoc последний раз обновлялся.
 function fmtClock(epoch) {
   return new Date(epoch * 1000).toLocaleTimeString('ru-RU', {
@@ -1524,6 +1529,13 @@ function StoreMapping() {
               <span className="store-name">
                 {r.name || r.store_id}
                 <span className="muted"> · {r.store_id}</span>
+                {/* Сколько отгрузок реально прошло по складу — привязку
+                    делаешь по факту, а не по названию. */}
+                <span className="store-stat">
+                  {r.stats
+                    ? `${r.stats.count} реализаций · ${money(r.stats.amount)} · ${fdateShort(r.stats.first)} — ${fdateShort(r.stats.last)}`
+                    : 'реализаций нет'}
+                </span>
               </span>
               <select
                 className="filter-select"
