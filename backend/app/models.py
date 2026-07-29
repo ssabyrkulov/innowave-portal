@@ -339,6 +339,11 @@ class SalesDocPayment(Base):
     # такой точки по складам не определить — касса единственная зацепка.
     cashbox_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     cashbox_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Заказы, которые закрывает эта оплата (поле orders в ответе SalesDoc),
+    # через запятую. Единственный признак фирмы у оплаты: сама она склада не
+    # знает, но заказ знает — а у заказа склад есть.
+    order_ids: Mapped[str | None] = mapped_column(String, nullable=True)
+    trade_sd_id: Mapped[str | None] = mapped_column(String, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

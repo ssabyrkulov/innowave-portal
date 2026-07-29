@@ -146,6 +146,22 @@ def _cashbox(payment: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _payment_orders(payment: dict) -> str | None:
+    """ИД заказов, которые закрывает оплата (поле orders), через запятую.
+
+    Склада у оплаты нет, а у заказа есть — значит фирму оплаты можно узнать
+    через заказы, которые она гасит. Другого признака в операции не оказалось:
+    касса в ответе одна на весь аккаунт («1»)."""
+    ids: list[str] = []
+    for it in payment.get("orders") or []:
+        v = it.get("SD_id") or it.get("CS_id") if isinstance(it, dict) else it
+        if v:
+            v = str(v).lower()
+            if v not in ids:
+                ids.append(v)
+    return ",".join(ids) or None
+
+
 def _payment_filter(date_from: str, date_to: str, updated_since: str | None) -> dict:
     """Оплаты: весь журнал — в нём же лежат «Возврат с полки» (тип 9)."""
     period = ({"dateUpdate": {"from": updated_since, "to": date_to}}
@@ -283,6 +299,9 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
             ),
             "cashbox_sd_id": box[0],
             "cashbox_name": box[1],
+            "order_ids": _payment_orders(p),
+            "trade_sd_id": str((p.get("trade") or {}).get("SD_id") or "").lower() or None
+            if isinstance(p.get("trade"), dict) else None,
         })
     if updated_since is None:  # полная выгрузка — вычищаем удалённое в SalesDoc
         db.flush()
@@ -728,8 +747,10 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
                   date_from: date, date_to: date, store_ids=None) -> dict:
     """Детализация клиента из зеркала — обычный SQL, без обращения к SalesDoc.
 
-    Реализации делятся по складу выбранной фирмы (store_ids), оплаты и
-    возвраты — общие по клиенту: склад в журнале оплат SalesDoc не хранит."""
+    Реализации делятся по складу выбранной фирмы (store_ids). У оплаты склада
+    нет, но в ответе SalesDoc есть поле orders — заказы, которые она гасит; по
+    их складам оплату к фирме отнести можно. Оплату без такой связи (аванс,
+    начальный остаток) поделить нечем — показываем при любой фирме."""
     sid = (sd_id or "").lower() or None
 
     def match(model):
@@ -792,9 +813,24 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
             "returns": round(float(o.returns_amount or 0), 2),
         })
 
+    # Склад каждого заказа этого клиента — чтобы отнести оплату к фирме через
+    # заказы, которые она гасит. Берём заказы ДО отбора по складам: оплата
+    # может гасить как раз чужой заказ, и об этом надо знать.
+    order_store = {
+        o.sd_id: o.store_sd_id
+        for o in match(models.SalesDocOrder).with_entities(
+            models.SalesDocOrder.sd_id, models.SalesDocOrder.store_sd_id).all()
+    }
+
+    def payment_stores(p) -> list[str]:
+        """Склады заказов, которые гасит оплата (пустой список — связи нет)."""
+        return [order_store[i] for i in (p.order_ids or "").split(",")
+                if i and i in order_store and order_store[i]]
+
     # --- Оплаты и возвраты: один журнал, разделяем по виду операции ---
     pays, p_total, p_count = [], 0.0, 0
     rets, r_total = [], 0.0
+    hidden_pay, hidden_pay_stores = 0, []
     for p in match(models.SalesDocPayment).order_by(
             models.SalesDocPayment.date.desc()).all():
         amt = float(p.amount or 0)
@@ -802,6 +838,16 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
             r_total += amt
             rets.append({"date": p.date and p.date.isoformat(), "sd_id": p.sd_id,
                          "amount": round(amt, 2)})
+            continue
+        # Оплата по заказам чужой фирмы — не наша. Оплату без связи с заказами
+        # (аванс, начальный остаток) поделить нечем, её оставляем.
+        pstores = payment_stores(p)
+        if store_ids and pstores and not (set(pstores) & set(store_ids)):
+            hidden_pay += 1
+            for s in pstores:
+                name = store_names.get(s, s)
+                if name not in hidden_pay_stores:
+                    hidden_pay_stores.append(name)
             continue
         counted = p.txn == salesdoc.PAYMENT_TXN
         if counted:
@@ -817,6 +863,9 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
             # Касса операции: у оплаты нет склада, и это единственный признак,
             # по которому видно, к какой фирме её посадили.
             "cashbox": p.cashbox_name or "",
+            # Склады заказов, которые гасит оплата: показываем в строке — по ним
+            # и видно, чьей фирме эта оплата.
+            "stores": sorted({store_names.get(s, s) for s in pstores}),
             "counted": counted,
         })
 
@@ -825,7 +874,9 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
                    "hidden_by_store": hidden_by_store,
                    "hidden_stores": hidden_stores},
         "payments": {"total": round(p_total, 2), "count": p_count, "items": pays,
-                     "scanned": len(pays) + len(rets), "matched": len(pays)},
+                     "scanned": len(pays) + len(rets), "matched": len(pays),
+                     "hidden_by_store": hidden_pay,
+                     "hidden_stores": hidden_pay_stores},
         "returns": {"total": round(r_total, 2), "count": len(rets), "items": rets},
         "errors": [],
     }
@@ -864,13 +915,42 @@ def reconcile_components(db: Session, date_from: date, date_to: date,
         return {"sd": by_sd, "code": by_code}
 
     O, P = models.SalesDocOrder, models.SalesDocPayment
+
+    def collect_payments(txn: int) -> dict:
+        """Оплаты с делением по фирме через заказы, которые они гасят.
+
+        Склада у оплаты нет, поэтому SQL-фильтром не обойтись: смотрим поле
+        orders. Оплату без связи с заказами (аванс, начальный остаток) поделить
+        нечем — она считается в обеих фирмах, иначе просто пропала бы."""
+        by_sd: dict[str, float] = {}
+        by_code: dict[str, float] = {}
+        need = set(store_ids) if store_ids else None
+        order_store = dict(db.query(O.sd_id, O.store_sd_id).all()) if need else {}
+        rows = (
+            db.query(P.client_sd_id, P.client_code_1c, P.amount, P.order_ids)
+            .filter(P.date >= date_from, P.date <= date_to, P.txn == txn)
+            .all()
+        )
+        for cli_sd, cli_code, amount, oids in rows:
+            if need and oids:
+                stores = {order_store.get(i) for i in oids.split(",") if i}
+                stores.discard(None)
+                if stores and not (stores & need):
+                    continue
+            amount = float(amount or 0)
+            if cli_sd:
+                by_sd[cli_sd] = by_sd.get(cli_sd, 0.0) + amount
+            elif cli_code:
+                by_code[cli_code] = by_code.get(cli_code, 0.0) + amount
+        return {"sd": by_sd, "code": by_code}
+
     return {
         # Реализации — только отгруженные, делятся по складу выбранной фирмы.
         "sales": collect(O, O.status.in_(sorted(salesdoc.SHIPPED_STATUSES)),
                          store_filter=True),
-        # Возвраты и оплаты — из журнала операций, по клиенту (склада там нет).
+        # Возвраты — из журнала операций, по клиенту (склада там нет).
         "returns": collect(P, P.txn == salesdoc.SHELF_RETURN_TXN),
-        "payments": collect(P, P.txn == salesdoc.PAYMENT_TXN),
+        "payments": collect_payments(salesdoc.PAYMENT_TXN),
     }
 
 
