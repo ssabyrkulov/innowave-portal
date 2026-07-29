@@ -1336,45 +1336,106 @@ function CashboxPanel() {
   function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
 
   const list = data?.cashboxes || []
-  const named = list.filter((c) => c.cashbox_id || c.name !== '(касса не указана)')
+  const sp = data?.split
+  const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0)
 
   return (
     <div className="chart-card store-map">
       <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
-        {open ? '▾' : '▸'} 💰 Кассы SalesDoc
+        {open ? '▾' : '▸'} 💰 Оплаты: чем делить по фирмам
       </button>
       {open && (
         <div className="store-map-body">
-          <p className="muted">Какие кассы встречаются в журнале оплат и сколько
-            операций на каждой. Если кассы разведены по фирмам, их можно
-            привязать так же, как склады, — и определять фирму точки, у которой
-            в SalesDoc только оплаты, без реализаций.</p>
+          <p className="muted">Склада у оплаты в SalesDoc нет. Признаков фирмы в
+            операции ровно три кандидата: касса, поле trade и связь с заказами
+            (orders). Здесь видно, сколько оплат каждый из них реально
+            покрывает — решение принимаем по фактам, а не по догадкам.</p>
           {error && <div className="error">{error}</div>}
           {loading && <div className="muted">Считаю…</div>}
-          {data && named.length === 0 && (
-            <div className="note-readonly sd-warn">
-              SalesDoc не отдаёт кассу в журнале оплат — привязку по кассам
-              сделать не из чего. Фирму придётся задавать точке вручную.
-            </div>
+          {sp && (
+            <>
+              <div className="sc-totals">
+                <div><span className="muted">Оплат всего</span><b>{sp.total}</b><span /></div>
+                <div><span className="muted">Привязаны к заказам</span>
+                  <b>{sp.linked}</b><span>{pct(sp.linked, sp.total)}%</span></div>
+                <div><span className="muted">Без привязки</span>
+                  <b>{sp.unlinked}</b><span>{pct(sp.unlinked, sp.total)}%</span></div>
+              </div>
+              {sp.linked === 0 && (
+                <div className="note-readonly sd-warn">
+                  Ни одна оплата не привязана к заказам. Значит поле orders в
+                  SalesDoc не заполняется, и делить оплаты по фирмам через него
+                  нельзя — нужен другой признак или ручное решение.
+                </div>
+              )}
+              <div className="rc-cols sc-stores">
+                <div className="rc-col">
+                  <div className="rc-col-title">Кассы</div>
+                  <ValueStats rows={sp.cashboxes} />
+                  <div className="rc-col-title">Поле trade</div>
+                  <ValueStats rows={sp.trades} />
+                </div>
+                <div className="rc-col">
+                  <div className="rc-col-title">Привязка по годам</div>
+                  <div className="table-wrap rc-table">
+                    <table>
+                      <thead><tr><th>Год</th><th className="num">Оплат</th><th className="num">С заказами</th></tr></thead>
+                      <tbody>
+                        {sp.by_year.map((y, i) => (
+                          <tr key={i}>
+                            <td>{y.year}</td>
+                            <td className="num">{y.total}</td>
+                            <td className="num">{y.linked} ({pct(y.linked, y.total)}%)</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="rc-col-title">Способы оплаты</div>
+                  <ValueStats rows={sp.types} />
+                </div>
+              </div>
+            </>
           )}
-          {named.length > 0 && (
-            <table className="table rc-table">
-              <thead>
-                <tr><th>Касса</th><th className="num">Операций</th><th className="num">Сумма</th></tr>
-              </thead>
-              <tbody>
-                {list.map((c, i) => (
-                  <tr key={i}>
-                    <td>{c.name}</td>
-                    <td className="num">{c.count}</td>
-                    <td className="num">{money(c.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {list.length > 0 && (
+            <>
+              <div className="rc-col-title">Кассы: обороты</div>
+              <div className="table-wrap rc-table">
+                <table>
+                  <thead>
+                    <tr><th>Касса</th><th className="num">Операций</th><th className="num">Сумма</th></tr>
+                  </thead>
+                  <tbody>
+                    {list.map((c, i) => (
+                      <tr key={i}>
+                        <td>{c.name}</td>
+                        <td className="num">{c.count}</td>
+                        <td className="num">{money(c.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function ValueStats({ rows }) {
+  if (!rows || rows.length === 0) return <div className="muted rc-empty">Нет данных</div>
+  return (
+    <div className="table-wrap rc-table">
+      <table>
+        <thead><tr><th>Значение</th><th className="num">Оплат</th></tr></thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}><td>{r.value}</td><td className="num">{r.count}</td></tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

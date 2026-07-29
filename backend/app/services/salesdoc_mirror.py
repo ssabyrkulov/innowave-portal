@@ -505,6 +505,53 @@ def order_changes(db: Session, limit: int = 200) -> list[dict]:
     ]
 
 
+def payment_split_stats(db: Session) -> dict:
+    """Чем вообще можно делить оплаты по фирмам — на живых цифрах.
+
+    У оплаты нет склада. Кандидатов в признак фирмы ровно три: касса, поле
+    trade и связь с заказами (orders). Гадать бесполезно — считаем, сколько
+    оплат каждый признак реально покрывает. Если признак пустой у большинства
+    записей, делить по нему нельзя, и это надо знать до того, как строить на
+    нём логику."""
+    from sqlalchemy import func
+
+    P = models.SalesDocPayment
+    q = db.query(P).filter(P.txn == salesdoc.PAYMENT_TXN)
+    total = q.count()
+    linked = q.filter(P.order_ids.isnot(None), P.order_ids != "").count()
+
+    def group(col):
+        rows = (
+            db.query(col, func.count(P.id))
+            .filter(P.txn == salesdoc.PAYMENT_TXN)
+            .group_by(col).all()
+        )
+        return sorted(
+            [{"value": v or "(пусто)", "count": int(c or 0)} for v, c in rows],
+            key=lambda x: -x["count"],
+        )
+
+    # По годам: связь могла появиться недавно (её проставляет обмен с 1С).
+    by_year: dict[str, dict] = {}
+    for d, oids in db.query(P.date, P.order_ids).filter(
+            P.txn == salesdoc.PAYMENT_TXN).all():
+        y = str(d.year) if d else "—"
+        e = by_year.setdefault(y, {"year": y, "total": 0, "linked": 0})
+        e["total"] += 1
+        if oids:
+            e["linked"] += 1
+
+    return {
+        "total": total,
+        "linked": linked,
+        "unlinked": total - linked,
+        "by_year": sorted(by_year.values(), key=lambda x: x["year"], reverse=True),
+        "cashboxes": group(P.cashbox_sd_id),
+        "trades": group(P.trade_sd_id),
+        "types": group(P.type_name),
+    }
+
+
 def cashboxes(db: Session) -> list[dict]:
     """Кассы из журнала оплат: сколько операций и на какую сумму на каждой.
 

@@ -1179,11 +1179,14 @@ def cashboxes(
     db: Session = Depends(get_db),
     _: models.User = Depends(can_view),
 ):
-    """Кассы из журнала оплат SalesDoc: сколько операций и на какую сумму.
+    """Чем можно делить оплаты SalesDoc по фирмам — на живых цифрах.
 
-    Если кассы разведены по фирмам, их можно будет привязать так же, как
-    склады, и определять фирму точки, у которой в SalesDoc одни оплаты."""
-    return {"cashboxes": salesdoc_mirror.cashboxes(db)}
+    Склада у оплаты нет; кандидаты — касса, поле trade и связь с заказами.
+    Отдаём покрытие каждого признака, чтобы решение принималось по фактам."""
+    return {
+        "cashboxes": salesdoc_mirror.cashboxes(db),
+        "split": salesdoc_mirror.payment_split_stats(db),
+    }
 
 
 @router.post("/mirror/sync")
