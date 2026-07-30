@@ -426,6 +426,23 @@ class SalesDocSyncState(Base):
     last_error: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+class SalesDocDiffSeen(Base):
+    """Когда расхождение по точке впервые появилось в списке сверки.
+
+    Ни 1С, ни SalesDoc момента «разъехалось» не знают — его видит только сам
+    список. Запоминаем первое появление, чтобы сортировать сверку по свежести:
+    новые проблемы сверху, застарелые внизу. Когда расхождение уходит, запись
+    удаляется — повторное появление считается новым событием.
+    """
+
+    __tablename__ = "salesdoc_diff_seen"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # «org:ключ точки» — по фирмам списки разные, событие тоже своё у каждой.
+    key: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    first_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class SalesDocClientLink(Base):
     """Ручная связка контрагента 1С с клиентом SalesDoc (по SD_id).
 

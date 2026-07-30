@@ -107,6 +107,9 @@ export default function SalesDocPage() {
   const [error, setError] = useState(null)
   const [detail, setDetail] = useState(null)
   const [reasonFilter, setReasonFilter] = useState('')
+  // 'diff' — по величине расхождения (как раньше), 'fresh' — по свежести:
+  // недавно возникшие расхождения сверху, застарелые внизу.
+  const [sortMode, setSortMode] = useState('diff')
 
   // Причина у строки может быть составной («оплата · возврат»), поэтому
   // разбираем её на отдельные ярлыки: так одну точку видно во всех своих
@@ -125,10 +128,21 @@ export default function SalesDocPage() {
   }, [debt])
 
   const visibleRows = useMemo(() => {
-    const rows = debt?.rows || []
-    if (!reasonFilter) return rows
-    return rows.filter((r) => reasonTokens(r).includes(reasonFilter))
-  }, [debt, reasonFilter])
+    let rows = debt?.rows || []
+    if (reasonFilter) {
+      rows = rows.filter((r) => reasonTokens(r).includes(reasonFilter))
+    }
+    if (sortMode === 'fresh') {
+      // Сервер отдаёт строки по величине расхождения — здесь пересортируем по
+      // моменту появления в списке. Строки без отметки (сошедшиеся) — вниз.
+      rows = [...rows].sort((a, b) => {
+        const ta = a.appeared_at ? Date.parse(a.appeared_at) : -1
+        const tb = b.appeared_at ? Date.parse(b.appeared_at) : -1
+        return tb - ta || Math.abs(b.diff) - Math.abs(a.diff)
+      })
+    }
+    return rows
+  }, [debt, reasonFilter, sortMode])
 
   // Сколько всего расходится по выбранной причине — сразу видно масштаб.
   const filteredDiff = useMemo(
@@ -336,6 +350,12 @@ export default function SalesDocPage() {
                 ))}
               </select>
             )}
+            <select className="filter-select" value={sortMode}
+              onChange={(e) => setSortMode(e.target.value)}
+              title="Свежесть — когда расхождение впервые появилось в этом списке">
+              <option value="diff">Сначала крупные</option>
+              <option value="fresh">Сначала новые</option>
+            </select>
             <span className="muted">
               {visibleRows.length} строк
               {reasonFilter && ` · на ${money(filteredDiff)}`}
@@ -369,6 +389,11 @@ export default function SalesDocPage() {
                       <button className="client-link" onClick={() => setDetail(r)}>
                         {r.name}
                       </button>
+                      {sortMode === 'fresh' && r.appeared_at && (
+                        <div className="rc-note">
+                          в списке с {fdateShort(r.appeared_at.slice(0, 10))}
+                        </div>
+                      )}
                       {r.org_note && (
                         <div className={`rc-org-note${r.org_note_warn ? ' rc-org-note-warn' : ''}`}>
                           {r.org_note}

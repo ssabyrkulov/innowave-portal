@@ -7,7 +7,7 @@
 
 import difflib
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -412,6 +412,41 @@ def reconcile_debt(
         })
 
     rows.sort(key=lambda x: -abs(x["diff"]))
+
+    # «Свежесть» расхождения: когда точка впервые попала в этот список. Момент
+    # «разъехалось» не знает ни одна из систем — его видит только сама сверка,
+    # поэтому отмечаем его здесь. Ключ включает фирму: списки по фирмам разные,
+    # и событие у каждой своё. Ушедшее расхождение забываем — вернётся, значит
+    # случилось заново.
+    now = datetime.utcnow()
+    prefix = (o if o in models.ORGS else "all") + ":"
+    seen = {
+        d.key: d for d in db.query(models.SalesDocDiffSeen)
+        .filter(models.SalesDocDiffSeen.key.startswith(prefix)).all()
+    }
+    active: dict[str, models.SalesDocDiffSeen | None] = {}
+    dirty = False
+    for r in rows:
+        if abs(r["diff"]) < 0.5:
+            r["appeared_at"] = None
+            continue
+        k = prefix + (r.get("sd_id") or r["name"])
+        row = active.get(k) or seen.get(k)
+        if row is None:
+            row = models.SalesDocDiffSeen(key=k, first_seen=now)
+            db.add(row)
+            dirty = True
+        active[k] = row
+        r["appeared_at"] = row.first_seen.isoformat()
+    stale = [d.id for k, d in seen.items() if k not in active]
+    if stale:
+        db.query(models.SalesDocDiffSeen).filter(
+            models.SalesDocDiffSeen.id.in_(stale)
+        ).delete(synchronize_session=False)
+        dirty = True
+    if dirty:
+        db.commit()
+
     if only_diff:
         rows = [r for r in rows if abs(r["diff"]) >= 0.5]
 
