@@ -1207,6 +1207,7 @@ def api_probe(
     db: Session = Depends(get_db),
     _: models.User = Depends(can_view),
     client: str = Query(default="", description="Часть имени или ИД точки"),
+    doc_number: str = Query(default="", description="Номер заявки из интерфейса SalesDoc"),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
 ):
@@ -1253,9 +1254,18 @@ def api_probe(
         big = salesdoc._pick(result, ("orders", "order"))
         out["big_page"] = {"received": len(big)}
         if len(big) != len(rows):
-            out["verdicts"].append(
-                f"Одной страницей приходит {len(big)} строк, пагинацией "
-                f"{len(rows)} — сервер отдаёт разные наборы")
+            if declared and len(rows) == declared:
+                # Постраничная выгрузка получила всё заявленное — значит сервер
+                # просто ограничивает размер одной страницы. Это не потеря
+                # данных, а свойство API, которое пагинация компенсирует.
+                out["big_page"]["note"] = (
+                    f"сервер ограничивает страницу {len(big)} строками — "
+                    "пагинация это компенсирует, потерь нет")
+            else:
+                out["verdicts"].append(
+                    f"Одной страницей приходит {len(big)} строк, пагинацией "
+                    f"{len(rows)} при заявленных {declared} — сервер отдаёт "
+                    "разные наборы")
 
         # --- 3. Скрытые статусы: вдруг у документа статус вне 1–5 ---
         pool = rows
@@ -1312,6 +1322,30 @@ def api_probe(
                 "all_keys": sorted(all_keys),
                 "orders": corders[:60],
             }
+
+        # --- 4б. Поиск заявки по номеру из интерфейса ---
+        # В полях документа есть invoiceNumber — судя по всему, это и есть
+        # номер, который виден в журнале SalesDoc («1961»). Ищем его по всему
+        # журналу, без фильтра по клиенту: если заявка привязана не к тому
+        # клиенту или с другой суммой — она всё равно найдётся.
+        dn = (doc_number or "").strip().lower()
+        if dn:
+            hits = [r for r in pool if dn in {
+                str(r.get(k) or "").strip().lower()
+                for k in ("invoiceNumber", "code_1C", "SD_id", "CS_id")
+            }]
+            out["by_number"] = {"query": doc_number, "count": len(hits),
+                                "orders": hits[:3]}
+            if hits:
+                out["verdicts"].append(
+                    f"Заявка №{doc_number} в выгрузке ЕСТЬ — сырые поля ниже: "
+                    "сверьте клиента, сумму и даты, что-то из них отличается "
+                    "от ожидаемого")
+            else:
+                out["verdicts"].append(
+                    f"Заявки №{doc_number} в выгрузке НЕТ — ни под одним "
+                    "клиентом, ни в одном статусе, ни с какой суммой. API её "
+                    "не отдаёт; это аргумент для поддержки SalesDoc")
 
         # --- 5. Какие ключи периода реально фильтруют ---
         if date_from and date_to:

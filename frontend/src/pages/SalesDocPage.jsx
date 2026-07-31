@@ -1371,9 +1371,11 @@ function ApiProbePanel() {
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
+  const [docNum, setDocNum] = useState('')
+
   function load() {
     setLoading(true); setError(null); setData(null)
-    const params = { client: q.trim() }
+    const params = { client: q.trim(), doc_number: docNum.trim() }
     if (dr.from && dr.to) { params.date_from = dr.from; params.date_to = dr.to }
     api.salesdocApiProbe(params)
       .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
@@ -1395,6 +1397,8 @@ function ApiProbePanel() {
           <div className="rc-period">
             <input className="filter-select" value={q} placeholder="точка (имя или ИД)"
               onChange={(e) => setQ(e.target.value)} />
+            <input className="filter-select" value={docNum} placeholder="№ заявки (1961)"
+              onChange={(e) => setDocNum(e.target.value)} />
             <input type="date" className="filter-select" value={dr.from}
               onChange={(e) => setDr((d) => ({ ...d, from: e.target.value }))} />
             <span className="muted">—</span>
@@ -1413,8 +1417,20 @@ function ApiProbePanel() {
               <div>
                 <b>Журнал getOrder:</b> заявлено {data.journal.declared_total} ·
                 получено {data.journal.received} · уникальных {data.journal.unique}
-                {data.big_page && <> · одной страницей {data.big_page.received}</>}
+                {data.big_page && <> · одной страницей {data.big_page.received}
+                  {data.big_page.note && <span className="muted"> ({data.big_page.note})</span>}</>}
               </div>
+              {data.by_number && (
+                <div>
+                  <b>Поиск по номеру «{data.by_number.query}»:</b>{' '}
+                  {data.by_number.count === 0 ? 'не найдено' : `найдено ${data.by_number.count}`}
+                  {data.by_number.orders.length > 0 && (
+                    <pre className="order-raw-json">
+                      {JSON.stringify(data.by_number.orders, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              )}
               <div>
                 <b>Статусы (1–5):</b>{' '}
                 {Object.entries(data.status_histogram)
