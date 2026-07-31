@@ -1202,6 +1202,148 @@ def why_here(
     return {"org": o, "query": query, "clients": out}
 
 
+@router.get("/api-probe")
+def api_probe(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    client: str = Query(default="", description="Часть имени или ИД точки"),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+):
+    """Глубокая проверка API SalesDoc — батарея замеров на живых данных.
+
+    Повод: интерфейс SalesDoc показывает заявку, а getOrder её не отдаёт.
+    Проверяем всё, из-за чего документ может теряться в самой выгрузке:
+    целостность пагинации (заявленный total против фактически отданного),
+    дубликаты ИД, скрытые статусы вне 1–5, поведение каждого ключа фильтра
+    периода, и полный сырой список заказов точки со всеми полями дат и сумм."""
+    _require_configured()
+    from collections import Counter
+
+    dfw, dtw = salesdoc.reason_window()
+    base_filter = {"include": "all", "status": [1, 2, 3, 4, 5],
+                   "period": {"date": {"from": dfw, "to": dtw}}}
+    out: dict = {"window": {"from": dfw, "to": dtw}, "verdicts": []}
+    try:
+        # --- 1. Целостность пагинации: заявлено против получено ---
+        _, pg = salesdoc.call("getOrder", {"limit": 1, "page": 1,
+                                           "filter": base_filter})
+        declared = int((pg or {}).get("total") or 0)
+        rows = salesdoc.call_all("getOrder", ("orders", "order"),
+                                 {"filter": base_filter})
+        ids = [str(r.get("SD_id") or r.get("CS_id") or "") for r in rows]
+        cnt = Counter(ids)
+        dups = sorted(i for i, c in cnt.items() if c > 1)
+        out["journal"] = {"declared_total": declared, "received": len(rows),
+                          "unique": len(cnt), "duplicates": dups[:5]}
+        if declared and declared != len(rows):
+            out["verdicts"].append(
+                f"Пагинация теряет строки: сервер заявляет {declared} записей, "
+                f"а отдаёт {len(rows)} — часть журнала недоступна через API")
+        if dups:
+            out["verdicts"].append(
+                "В журнале дубликаты ИД: " + ", ".join(dups[:5]))
+
+        hist = Counter(str(r.get("status")) for r in rows)
+        out["status_histogram"] = dict(hist)
+
+        # --- 2. Одна гигантская страница против пагинации ---
+        result, _pg2 = salesdoc.call("getOrder", {"limit": 5000, "page": 1,
+                                                  "filter": base_filter})
+        big = salesdoc._pick(result, ("orders", "order"))
+        out["big_page"] = {"received": len(big)}
+        if len(big) != len(rows):
+            out["verdicts"].append(
+                f"Одной страницей приходит {len(big)} строк, пагинацией "
+                f"{len(rows)} — сервер отдаёт разные наборы")
+
+        # --- 3. Скрытые статусы: вдруг у документа статус вне 1–5 ---
+        pool = rows
+        ext_filter = {**base_filter, "status": list(range(0, 11))}
+        try:
+            ext_rows = salesdoc.call_all("getOrder", ("orders", "order"),
+                                         {"filter": ext_filter})
+            out["extended_statuses"] = {
+                "received": len(ext_rows),
+                "histogram": dict(Counter(str(r.get("status")) for r in ext_rows)),
+            }
+            if len(ext_rows) > len(rows):
+                out["verdicts"].append(
+                    f"Со статусами 0–10 журнал больше на "
+                    f"{len(ext_rows) - len(rows)} строк — существуют статусы "
+                    "вне 1–5, такие документы наша выгрузка не видела")
+                pool = ext_rows
+        except salesdoc.SalesDocError as e:
+            out["extended_statuses"] = {"error": str(e)}
+
+        # --- 4. Все заказы точки: сырые даты, суммы, полный набор полей ---
+        cq = (client or "").strip().lower()
+        if cq:
+            names = {c.sd_id: c.name
+                     for c in db.query(models.SalesDocClient).all()}
+            target = {sid for sid, nm in names.items()
+                      if cq in sid or cq in (nm or "").lower()}
+            corders, all_keys = [], set()
+            for r in pool:
+                cli = r.get("client") or {}
+                csd = str(cli.get("SD_id") or "").lower()
+                ccs = str(cli.get("CS_id") or "").lower().split("-", 1)[-1]
+                if csd not in target and ccs not in target:
+                    continue
+                all_keys |= set(r.keys())
+                corders.append({
+                    "sd_id": r.get("SD_id") or r.get("CS_id"),
+                    "code_1C": r.get("code_1C"),
+                    "status": r.get("status"),
+                    "store": (r.get("store") or {}).get("SD_id"),
+                    "totalSumma": r.get("totalSumma"),
+                    "totalSummaAfterDiscount": r.get("totalSummaAfterDiscount"),
+                    "totalReturnsSumma": r.get("totalReturnsSumma"),
+                    # Все поля с датами как есть: если у «невидимой» заявки
+                    # дата лежит в другом поле или с опечаткой — тут видно.
+                    "dates": {k: v for k, v in r.items()
+                              if "date" in k.lower() and v},
+                })
+            corders.sort(key=lambda x: str(x["dates"]), reverse=True)
+            out["client_orders"] = {
+                "query": client,
+                "matched_clients": [names[i] for i in sorted(target)][:5],
+                "count": len(corders),
+                "all_keys": sorted(all_keys),
+                "orders": corders[:60],
+            }
+
+        # --- 5. Какие ключи периода реально фильтруют ---
+        if date_from and date_to:
+            probes = []
+            for key in ("date", "dateUpdate", "dateCreate", "dateDocument",
+                        "dateShipping"):
+                f = {"include": "all", "status": [1, 2, 3, 4, 5],
+                     "period": {key: {"from": date_from.isoformat(),
+                                      "to": date_to.isoformat()}}}
+                try:
+                    _, pgk = salesdoc.call("getOrder", {"limit": 1, "page": 1,
+                                                        "filter": f})
+                    tot = int((pgk or {}).get("total") or 0)
+                    note = ""
+                    if declared and tot == declared:
+                        note = "фильтр игнорируется — отдан весь журнал"
+                    probes.append({"key": key, "total": tot, "note": note})
+                except salesdoc.SalesDocError as e:
+                    probes.append({"key": key, "error": str(e)})
+            out["period_keys"] = probes
+
+        if not out["verdicts"]:
+            out["verdicts"].append(
+                "Механических дефектов не найдено: пагинация целая, дубликатов "
+                "нет, скрытых статусов нет. Если документ виден в интерфейсе, "
+                "но его нет в списке заказов точки ниже — API его действительно "
+                "не отдаёт, это вопрос к поддержке SalesDoc")
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return out
+
+
 @router.get("/find-doc")
 def find_doc(
     db: Session = Depends(get_db),

@@ -247,6 +247,8 @@ export default function SalesDocPage() {
 
       <FindDocPanel />
 
+      <ApiProbePanel />
+
       <OrderChangesPanel />
 
       <AnalyzePanel />
@@ -1354,6 +1356,115 @@ function StoreStats({ rows }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// Глубокая проверка API SalesDoc: целостность пагинации, скрытые статусы,
+// работоспособность фильтров периода и сырой разбор заказов точки. Нужна,
+// когда интерфейс SalesDoc показывает документ, а выгрузка — нет.
+function ApiProbePanel() {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const [dr, setDr] = useState({ from: '', to: '' })
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null); setData(null)
+    const params = { client: q.trim() }
+    if (dr.from && dr.to) { params.date_from = dr.from; params.date_to = dr.to }
+    api.salesdocApiProbe(params)
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+
+  const co = data?.client_orders
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={() => setOpen(!open)}>
+        {open ? '▾' : '▸'} 🔬 Глубокая проверка API SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Батарея замеров на живых данных: целая ли
+            пагинация (сколько сервер заявляет и сколько отдаёт), нет ли
+            дубликатов и статусов вне 1–5, какие ключи фильтра периода реально
+            работают, и полный сырой список заказов точки со всеми полями дат и
+            сумм. Занимает 10–20 секунд — журнал выгружается несколько раз.</p>
+          <div className="rc-period">
+            <input className="filter-select" value={q} placeholder="точка (имя или ИД)"
+              onChange={(e) => setQ(e.target.value)} />
+            <input type="date" className="filter-select" value={dr.from}
+              onChange={(e) => setDr((d) => ({ ...d, from: e.target.value }))} />
+            <span className="muted">—</span>
+            <input type="date" className="filter-select" value={dr.to}
+              onChange={(e) => setDr((d) => ({ ...d, to: e.target.value }))} />
+            <button className="btn btn-sm" onClick={load} disabled={loading}>
+              {loading ? 'Проверяю…' : 'Проверить'}
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+          {data && (
+            <div className="order-raw">
+              {data.verdicts.map((v, i) => (
+                <div key={i} className="why-verdict">{v}</div>
+              ))}
+              <div>
+                <b>Журнал getOrder:</b> заявлено {data.journal.declared_total} ·
+                получено {data.journal.received} · уникальных {data.journal.unique}
+                {data.big_page && <> · одной страницей {data.big_page.received}</>}
+              </div>
+              <div>
+                <b>Статусы (1–5):</b>{' '}
+                {Object.entries(data.status_histogram)
+                  .map(([s, n]) => `${s}: ${n}`).join(' · ')}
+              </div>
+              {data.extended_statuses && !data.extended_statuses.error && (
+                <div>
+                  <b>Статусы (0–10):</b>{' '}
+                  {Object.entries(data.extended_statuses.histogram)
+                    .map(([s, n]) => `${s}: ${n}`).join(' · ')}
+                </div>
+              )}
+              {data.period_keys && (
+                <div>
+                  <b>Ключи фильтра периода:</b>
+                  <ul className="order-raw-sib">
+                    {data.period_keys.map((p, i) => (
+                      <li key={i}>
+                        <code>{p.key}</code>:{' '}
+                        {p.error ? `ошибка — ${p.error}` : `${p.total} записей`}
+                        {p.note && <span className="why-similar"> · {p.note}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {co && (
+                <div>
+                  <b>Заказы точки ({co.matched_clients.join(', ') || co.query}):
+                    {' '}{co.count}</b>
+                  <div className="muted">Поля документа: <code>{co.all_keys.join(', ')}</code></div>
+                  <ul className="order-raw-sib">
+                    {co.orders.map((o, i) => (
+                      <li key={i}>
+                        {o.sd_id} · статус {o.status} · склад {o.store || '—'} ·{' '}
+                        {money(Number(o.totalSummaAfterDiscount ?? o.totalSumma ?? 0))}
+                        {o.totalSumma != null && o.totalSummaAfterDiscount != null
+                          && Number(o.totalSumma) !== Number(o.totalSummaAfterDiscount)
+                          && <> (до скидки {money(Number(o.totalSumma))})</>}
+                        {' · '}
+                        {Object.entries(o.dates).map(([k, v]) => `${k}=${v}`).join(' ')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
