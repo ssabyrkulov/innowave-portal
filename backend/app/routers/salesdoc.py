@@ -1300,10 +1300,54 @@ def find_doc(
     except salesdoc.SalesDocError as e:
         live_error = str(e)
 
+    # --- Рядом с датой 1С: все заказы точки из живого SalesDoc ---
+    # «По сумме не нашлось» — это ещё не «документа нет»: SalesDoc может
+    # отдавать его с другой суммой (скидка, правка, частичный возврат) или под
+    # другим клиентом. Показываем всё, что API отдаёт по точке возле даты
+    # документа 1С, с обеими суммами — до и после скидки.
+    nearby, nearby_client = [], None
+    if sales_hits and not live_hits and live_error is None:
+        h0 = sales_hits[0]
+        sid = _extract_sd_id(h0["client"])
+        if sid:
+            nearby_client = h0["client"]
+            d0 = date.fromisoformat(h0["date"])
+            try:
+                for o in salesdoc.raw_orders_of_day(
+                        (d0 - timedelta(days=45)).isoformat(),
+                        (d0 + timedelta(days=45)).isoformat(), sid, limit=50):
+                    nearby.append({
+                        "sd_id": str(o.get("SD_id") or o.get("CS_id") or ""),
+                        "number": o.get("number") or o.get("code_1C"),
+                        "date": (o.get("dateDocument") or o.get("dateCreate") or "")[:10],
+                        "store": (o.get("store") or {}).get("name")
+                                 or (o.get("store") or {}).get("SD_id"),
+                        "status_label": salesdoc.ORDER_STATUS.get(
+                            o.get("status"), str(o.get("status"))),
+                        "total": round(float(o.get("totalSumma") or 0), 2),
+                        "total_after": round(float(
+                            o.get("totalSummaAfterDiscount") or 0), 2),
+                        "returns": round(float(o.get("totalReturnsSumma") or 0), 2),
+                    })
+            except salesdoc.SalesDocError as e:
+                live_error = str(e)
+
     # --- Вердикт: на каком шаге документ теряется ---
     mirror_ids = {h["sd_id"] for h in mirror_hits}
     live_ids = {h["sd_id"] for h in live_hits}
     verdicts = []
+    if nearby_client is not None:
+        if not nearby:
+            verdicts.append(
+                f"API SalesDoc не отдаёт ни одного заказа «{nearby_client}» "
+                "рядом с датой 1С — хотя в интерфейсе SalesDoc они могут быть "
+                "видны. Похоже на другой филиал или заявку, не попадающую в "
+                "выгрузку getOrder")
+        else:
+            verdicts.append(
+                f"По сумме не нашлось, но рядом с датой 1С у «{nearby_client}» "
+                "есть заказы (список ниже) — сравните суммы: возможно, в "
+                "SalesDoc документ проведён с другой суммой")
     for h in live_hits:
         if h["sd_id"] not in mirror_ids:
             verdicts.append(f"«{h['client']}» {h['date']}: в SalesDoc есть, в "
@@ -1325,6 +1369,8 @@ def find_doc(
         "in_1c": sales_hits,
         "in_mirror": mirror_hits,
         "in_salesdoc": live_hits,
+        "nearby": nearby,
+        "nearby_client": nearby_client,
         "live_error": live_error,
         "verdicts": verdicts,
     }

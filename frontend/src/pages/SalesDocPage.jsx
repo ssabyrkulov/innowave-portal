@@ -1431,6 +1431,17 @@ function FindDocPanel() {
               <Section title="В SalesDoc (живой запрос)" rows={data.in_salesdoc}
                 render={(r) => <>{fdateShort(r.date)} · {r.client} · {r.store || '—'} ·{' '}
                   {r.status_label} · {money(r.amount)}</>} />
+              {data.nearby_client && (
+                <Section
+                  title={`Заказы «${data.nearby_client}» рядом с датой 1С`}
+                  rows={data.nearby}
+                  render={(r) => <>
+                    {fdateShort(r.date)} · №{r.number || r.sd_id} · {r.store || '—'} ·{' '}
+                    {r.status_label} · {money(r.total)}
+                    {r.total_after !== r.total && <> (после скидки {money(r.total_after)})</>}
+                    {r.returns > 0 && <> · возвраты {money(r.returns)}</>}
+                  </>} />
+              )}
             </div>
           )}
         </div>
