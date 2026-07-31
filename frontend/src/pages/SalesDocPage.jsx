@@ -245,6 +245,8 @@ export default function SalesDocPage() {
 
       <WhyPanel />
 
+      <FindDocPanel />
+
       <OrderChangesPanel />
 
       <AnalyzePanel />
@@ -1352,6 +1354,87 @@ function StoreStats({ rows }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// «Почему на портале не видно реализацию на N?» — поиск суммы сразу в трёх
+// местах: 1С, зеркало, живой SalesDoc. Вердикт говорит, где документ потерялся.
+function FindDocPanel() {
+  const [open, setOpen] = useState(false)
+  const [amount, setAmount] = useState('')
+  const [q, setQ] = useState('')
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    const a = parseFloat(String(amount).replace(',', '.').replace(/\s/g, ''))
+    if (!a) return
+    setLoading(true); setError(null); setData(null)
+    api.salesdocFindDoc(a, q.trim())
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+
+  const Section = ({ title, rows, render }) => (
+    <div>
+      <div className="rc-col-title">{title} · {rows.length}</div>
+      {rows.length === 0
+        ? <div className="muted rc-empty">Не найдено</div>
+        : <ul className="order-raw-sib">{rows.map((r, i) => <li key={i}>{render(r)}</li>)}</ul>}
+    </div>
+  )
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={() => setOpen(!open)}>
+        {open ? '▾' : '▸'} 🧭 Найти документ по сумме
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Введите сумму документа (и, по желанию, часть
+            имени точки) — портал поищет её в 1С, в своём зеркале и напрямую в
+            SalesDoc, и скажет, на каком шаге документ теряется: не проведён,
+            не доехал до зеркала, скрыт фильтром по складу или не в том статусе.
+            Прямой запрос в SalesDoc занимает несколько секунд.</p>
+          <div className="rc-period">
+            <input className="filter-select" value={amount} placeholder="3499,2"
+              onChange={(e) => setAmount(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && load()} />
+            <input className="filter-select" value={q} placeholder="точка (не обязательно)"
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && load()} />
+            <button className="btn btn-sm" onClick={load} disabled={loading}>
+              {loading ? 'Ищу…' : 'Найти'}
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+          {data && (
+            <div className="order-raw">
+              {data.verdicts.length > 0 && (
+                <div>
+                  {data.verdicts.map((v, i) => (
+                    <div key={i} className="why-verdict">{v}</div>
+                  ))}
+                </div>
+              )}
+              {data.live_error && (
+                <div className="error">SalesDoc не ответил: {data.live_error} —
+                  сравниваю только 1С и зеркало.</div>
+              )}
+              <Section title="В 1С" rows={data.in_1c}
+                render={(r) => <>{fdateShort(r.date)} · {r.client} ·{' '}
+                  {r.doc_number || 'без номера'} · {r.warehouse || '—'} · {money(r.amount)}</>} />
+              <Section title="В зеркале портала" rows={data.in_mirror}
+                render={(r) => <>{fdateShort(r.date)} · {r.client} · {r.store || '—'} ·{' '}
+                  {r.status_label} · {money(r.amount)}</>} />
+              <Section title="В SalesDoc (живой запрос)" rows={data.in_salesdoc}
+                render={(r) => <>{fdateShort(r.date)} · {r.client} · {r.store || '—'} ·{' '}
+                  {r.status_label} · {money(r.amount)}</>} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

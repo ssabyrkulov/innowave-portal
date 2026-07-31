@@ -1202,6 +1202,134 @@ def why_here(
     return {"org": o, "query": query, "clients": out}
 
 
+@router.get("/find-doc")
+def find_doc(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    amount: float = Query(..., description="Сумма документа"),
+    query: str = Query(default="", description="Часть имени точки (необязательно)"),
+):
+    """Где документ с такой суммой: в 1С, в зеркале, в живом SalesDoc.
+
+    Вопрос «почему на портале не видно реализацию на N» повторяется, а ответ
+    каждый раз разный: документ не доехал до зеркала, скрыт фильтром по складу,
+    не в том статусе или его просто нет. Ищем сумму во всех трёх местах и
+    говорим, на каком шаге она потерялась."""
+    tol = 0.01
+    qq = (query or "").strip().lower()
+    names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+    stores = {s.store_id.lower(): s
+              for s in db.query(models.SalesDocStore).all() if s.store_id}
+
+    def match_client(cli_sd, cli_code) -> bool:
+        if not qq:
+            return True
+        nm = (names.get(cli_sd or "") or "").lower()
+        return qq in nm or qq in (cli_sd or "") or qq in str(cli_code or "").lower()
+
+    # --- Зеркало ---
+    mirror_hits = []
+    for r in db.query(models.SalesDocOrder).filter(
+            models.SalesDocOrder.amount >= amount - tol,
+            models.SalesDocOrder.amount <= amount + tol).all():
+        if not match_client(r.client_sd_id, r.client_code_1c):
+            continue
+        st = stores.get(r.store_sd_id or "")
+        notes = []
+        if r.status == salesdoc.CANCELLED_STATUS:
+            notes.append("статус «Отменён» — в суммы не идёт")
+        elif r.status not in salesdoc.SHIPPED_STATUSES:
+            notes.append("статус «Новый» — в сумму отгрузок не идёт")
+        if st and st.organization:
+            notes.append(f"склад фирмы {st.organization}: при другой выбранной "
+                         "фирме строка скрыта")
+        mirror_hits.append({
+            "sd_id": r.sd_id,
+            "date": r.date and r.date.isoformat(),
+            "client": names.get(r.client_sd_id or "", r.client_sd_id or ""),
+            "store": (st.name if st else None) or r.store_sd_id,
+            "status_label": salesdoc.ORDER_STATUS.get(r.status, str(r.status)),
+            "amount": float(r.amount or 0),
+            "code_1C": r.code_1c,
+            "notes": notes,
+        })
+
+    # --- 1С: итог документа продаж ---
+    sales_hits, seen_docs = [], set()
+    for s in db.query(models.Sale).filter(
+            models.Sale.doc_total >= amount - tol,
+            models.Sale.doc_total <= amount + tol).all():
+        key = (s.doc_number, s.date, s.client)
+        if key in seen_docs:
+            continue
+        seen_docs.add(key)
+        if qq and qq not in s.client.lower():
+            continue
+        sales_hits.append({
+            "date": s.date.isoformat(),
+            "client": s.client,
+            "doc_number": s.doc_number,
+            "warehouse": s.warehouse,
+            "amount": float(s.doc_total),
+        })
+
+    # --- Живой SalesDoc: тем же методом, что и зеркало ---
+    live_hits, live_error = [], None
+    try:
+        df, dt = salesdoc.reason_window()
+        for o in salesdoc.call_all("getOrder", ("orders", "order"), {"filter": {
+                "include": "all", "status": [1, 2, 3, 4, 5],
+                "period": {"date": {"from": df, "to": dt}}}}):
+            amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
+            if abs(amt - amount) > tol:
+                continue
+            cli = o.get("client") or {}
+            cli_sd = str(cli.get("SD_id") or "").lower() or None
+            if not match_client(cli_sd, cli.get("code_1C")):
+                continue
+            live_hits.append({
+                "sd_id": str(o.get("SD_id") or o.get("CS_id") or "").strip(),
+                "date": (o.get("dateDocument") or o.get("dateCreate") or "")[:10],
+                "client": names.get(cli_sd or "", cli_sd or ""),
+                "store": (o.get("store") or {}).get("name")
+                         or (o.get("store") or {}).get("SD_id"),
+                "status_label": salesdoc.ORDER_STATUS.get(o.get("status"),
+                                                          str(o.get("status"))),
+                "amount": round(amt, 2),
+            })
+    except salesdoc.SalesDocError as e:
+        live_error = str(e)
+
+    # --- Вердикт: на каком шаге документ теряется ---
+    mirror_ids = {h["sd_id"] for h in mirror_hits}
+    live_ids = {h["sd_id"] for h in live_hits}
+    verdicts = []
+    for h in live_hits:
+        if h["sd_id"] not in mirror_ids:
+            verdicts.append(f"«{h['client']}» {h['date']}: в SalesDoc есть, в "
+                            "зеркале нет — зеркало пропустило документ, нажмите "
+                            "«↻ Обновить»")
+    for h in mirror_hits:
+        if live_error is None and h["sd_id"] not in live_ids:
+            verdicts.append(f"«{h['client']}» {h['date']}: в зеркале есть, в "
+                            "SalesDoc уже нет — документ удалён, при полной "
+                            "сверке зеркало его вычистит")
+        for n in h["notes"]:
+            verdicts.append(f"«{h['client']}» {h['date']}: {n}")
+    if not live_hits and not mirror_hits and live_error is None:
+        verdicts.append("В SalesDoc документа с такой суммой нет — если он есть "
+                        "в 1С, отгрузка в SalesDoc не проведена")
+
+    return {
+        "amount": amount,
+        "in_1c": sales_hits,
+        "in_mirror": mirror_hits,
+        "in_salesdoc": live_hits,
+        "live_error": live_error,
+        "verdicts": verdicts,
+    }
+
+
 @router.get("/payment-raw")
 def payment_raw(
     db: Session = Depends(get_db),
