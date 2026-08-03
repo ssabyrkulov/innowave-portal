@@ -9,15 +9,67 @@ const money = (v) => `${formatMoney(v)} KGS`
 // вручную и живут в отдельной таблице: с управленческими цифрами портала они
 // не пересекаются нигде. Когда Эрмек доведёт выгрузку (метка НАЛ, банк,
 // остатки), загрузка станет автоматической через те же папки Drive.
+function CompareTable({ title, data, note }) {
+  const [open, setOpen] = useState(true)
+  const t = data.totals
+  const cls = (v) => (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '')
+  return (
+    <div className="chart-card">
+      <button className="btn btn-ghost store-map-toggle" onClick={() => setOpen(!open)}>
+        {open ? '▾' : '▸'} {title}
+      </button>
+      {open && (
+        <div className="table-wrap rc-table sc-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Месяц</th>
+                <th className="num">Управленка</th>
+                <th className="num">Налоговая</th>
+                <th className="num">SalesDoc</th>
+                <th className="num" title="Доля официально проведённого от управленческого оборота">НАЛ/УПР</th>
+                <th className="num" title="SalesDoc минус управленка">Δ SD</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="sc-total-row">
+                <td><b>Итого</b></td>
+                <td className="num"><b>{money(t.upr)}</b></td>
+                <td className="num"><b>{money(t.nal)}</b></td>
+                <td className="num"><b>{money(t.sd)}</b></td>
+                <td className="num"><b>{t.nal_share == null ? '—' : `${t.nal_share}%`}</b></td>
+                <td className={`num ${cls(t.sd_diff)}`}><b>{money(t.sd_diff)}</b></td>
+              </tr>
+              {data.rows.map((r) => (
+                <tr key={r.month}>
+                  <td>{r.month.split('-').reverse().join('.')}</td>
+                  <td className="num">{money(r.upr)}</td>
+                  <td className="num">{money(r.nal)}</td>
+                  <td className="num">{money(r.sd)}</td>
+                  <td className="num">{r.nal_share == null ? '—' : `${r.nal_share}%`}</td>
+                  <td className={`num ${cls(r.sd_diff)}`}>{money(r.sd_diff)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {note && <p className="muted">{note}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function TaxPage() {
   const { can } = useAuth()
   const [data, setData] = useState(null)
+  const [cmp, setCmp] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [log, setLog] = useState([])
 
   function load() {
     api.taxSummary().then(setData).catch((e) => setError(e.message))
+    api.taxCompare().then(setCmp).catch(() => {})
   }
   useEffect(load, [])
 
@@ -70,6 +122,20 @@ export default function TaxPage() {
       {error && <div className="error">{error}</div>}
       {data && kinds.length === 0 && (
         <div className="chart-card muted">Данных пока нет — загрузите файлы.</div>
+      )}
+
+      {/* Трёхсторонняя сверка: поклиентно контуры не сопоставить (в налоговой
+          продажи проведены на юрлица), поэтому сверяем помесячные агрегаты.
+          НАЛ/УПР — доля официально проведённого оборота, Δ SD — расхождение
+          SalesDoc с управленкой. */}
+      {cmp && cmp.sales.rows.length > 0 && (
+        <>
+          <CompareTable title="Выручка по месяцам: Управленка · Налоговая · SalesDoc"
+            data={cmp.sales} />
+          <CompareTable title="Поступления от покупателей по месяцам"
+            data={cmp.money}
+            note="Оплаты SalesDoc показаны все: аванс без привязки к заказам по фирмам не делится." />
+        </>
       )}
 
       {kinds.length > 0 && (

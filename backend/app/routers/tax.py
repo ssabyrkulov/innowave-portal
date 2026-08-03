@@ -185,6 +185,115 @@ KIND_LABEL = {"sale": "Реализации", "return": "Возвраты",
               "cash_in": "Касса · приход", "cash_out": "Касса · расход"}
 
 
+@router.get("/compare")
+def tax_compare(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "all",
+):
+    """Сверка трёх контуров по месяцам: управленка ↔ налоговая ↔ SalesDoc.
+
+    Поклиентно контуры не сопоставить — в налоговой базе продажи проведены на
+    юрлица, а в управленке и SalesDoc клиенты — розничные точки. Поэтому
+    сверяем агрегатами: выручка и поступления денег по месяцам. Это отвечает
+    на два вопроса сразу: какая доля оборота проведена официально (НАЛ/УПР) и
+    насколько SalesDoc совпадает с управленкой (Δ SD)."""
+    from .receipts import CUSTOMER_PAYMENT_PREFIX
+    from ..services import salesdoc as sd
+
+    o = models.normalize_org(org) if (org or "").lower() in models.ORGS else None
+
+    sales: dict[str, dict] = defaultdict(lambda: {"upr": 0.0, "nal": 0.0, "sd": 0.0})
+    money: dict[str, dict] = defaultdict(lambda: {"upr": 0.0, "nal": 0.0, "sd": 0.0})
+
+    def mk(d) -> str:
+        return f"{d.year:04d}-{d.month:02d}"
+
+    # --- Управленка: продажи документами (итог дока — один раз) ---
+    q = db.query(models.Sale)
+    if o:
+        q = q.filter(models.Sale.organization == o)
+    seen_docs: set = set()
+    for s in q.all():
+        if s.doc_number and s.doc_total is not None:
+            key = (s.doc_number, s.date, s.client)
+            if key in seen_docs:
+                continue
+            seen_docs.add(key)
+            sales[mk(s.date)]["upr"] += float(s.doc_total)
+        else:
+            sales[mk(s.date)]["upr"] += float(s.amount) * (
+                1 - float(s.discount_pct or 0) / 100)
+
+    # --- Управленка: поступления от покупателей ---
+    rq = db.query(models.Receipt)
+    if o:
+        rq = rq.filter(models.Receipt.organization == o)
+    for r in rq.all():
+        if r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
+            money[mk(r.date)]["upr"] += float(r.amount_kgs)
+
+    # --- Налоговая ---
+    tq = db.query(models.TaxOperation)
+    if o:
+        tq = tq.filter(models.TaxOperation.organization == o)
+    for t in tq.all():
+        if t.kind == "sale":
+            sales[mk(t.date)]["nal"] += float(t.amount)
+        elif t.kind == "cash_in" and "покупател" in (t.operation or "").lower():
+            money[mk(t.date)]["nal"] += float(t.amount)
+
+    # --- SalesDoc (зеркало): отгрузки по складам фирмы + оплаты ---
+    store_ids = None
+    if o:
+        rows = [s for s in db.query(models.SalesDocStore).all() if s.store_id]
+        mine = {s.store_id.lower() for s in rows if s.organization == o}
+        unmapped = {s.store_id.lower() for s in rows if not s.organization}
+        store_ids = (mine | unmapped) if mine else None
+    oq = db.query(models.SalesDocOrder).filter(
+        models.SalesDocOrder.status.in_(sorted(sd.SHIPPED_STATUSES)))
+    if store_ids:
+        oq = oq.filter(models.SalesDocOrder.store_sd_id.in_(store_ids))
+    for r in oq.all():
+        if r.date:
+            sales[mk(r.date)]["sd"] += float(r.amount or 0)
+    for p in db.query(models.SalesDocPayment).filter(
+            models.SalesDocPayment.txn == sd.PAYMENT_TXN).all():
+        if p.date:
+            money[mk(p.date)]["sd"] += float(p.amount or 0)
+
+    def table(agg: dict) -> list[dict]:
+        out = []
+        for m in sorted(agg, reverse=True):
+            v = agg[m]
+            out.append({
+                "month": m,
+                "upr": round(v["upr"], 2),
+                "nal": round(v["nal"], 2),
+                "sd": round(v["sd"], 2),
+                # Доля официально проведённого от управленческого оборота.
+                "nal_share": round(v["nal"] / v["upr"] * 100, 1) if v["upr"] else None,
+                "sd_diff": round(v["sd"] - v["upr"], 2),
+            })
+        return out
+
+    def totals(agg: dict) -> dict:
+        u = sum(v["upr"] for v in agg.values())
+        n = sum(v["nal"] for v in agg.values())
+        s_ = sum(v["sd"] for v in agg.values())
+        return {"upr": round(u, 2), "nal": round(n, 2), "sd": round(s_, 2),
+                "nal_share": round(n / u * 100, 1) if u else None,
+                "sd_diff": round(s_ - u, 2)}
+
+    return {
+        "org": o or "all",
+        # Оплаты SalesDoc по фирмам не делятся идеально (аванс без заказов
+        # виден в обеих) — честно предупреждаем в интерфейсе.
+        "sales": {"rows": table(sales), "totals": totals(sales)},
+        "money": {"rows": table(money), "totals": totals(money)},
+    }
+
+
 @router.get("/summary")
 def tax_summary(
     db: Session = Depends(get_db),

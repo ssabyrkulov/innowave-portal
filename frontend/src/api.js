@@ -174,6 +174,7 @@ export const api = {
     return request(`/salesdoc/client-debug${qs ? `?${qs}` : ''}`)
   },
   taxSummary: () => request('/tax/summary'),
+  taxCompare: () => request('/tax/compare'),
   taxImport: (file, org) => {
     const fd = new FormData()
     fd.append('file', file, file.name)

@@ -2764,6 +2764,7 @@ button.summary-card {
 .sc-bad { color: var(--out); font-weight: 600; }
 /* Таблица широкая — пусть скроллится внутри себя, а не тянет страницу. */
 .sc-table table { min-width: 900px; }
+.sc-total-row td { border-bottom: 2px solid var(--border-strong); }
 
 .store-name { font-size: 14px; }
 /* Статистика склада — второй строкой, чтобы длина не ломала ряд. */
