@@ -107,6 +107,13 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     if name.startswith("~$"):
         return "ignore"  # временный файл Excel
 
+    # Налоговый контур портал пока не ведёт. Файлы по схеме
+    # «Фирма_Налоговая_Тип» нельзя смешивать с управленческими: имя
+    # «…Налоговая_Реал2» иначе распозналось бы как обычная реализация и
+    # задвоило бы данные. Пропускаем осознанно, с внятной причиной в ответе.
+    if "налог" in name:
+        return "tax_skip"
+
     # --- Продажи ---
     if "реал" in name:
         if org == "innowave":
@@ -207,6 +214,13 @@ async def inbox(
     kind = classify_by_name(filename, org) or sniff_kind(content)
     if kind == "ignore":
         return {"type": "ignore", "status": "skipped", "detail": "Временный файл"}
+    if kind == "tax_skip":
+        return {
+            "type": kind,
+            "status": "skipped",
+            "detail": "Налоговая выгрузка: портал ведёт только управленческий "
+                      "контур — файл пропущен осознанно, данные не задвоены",
+        }
     if kind in ("dup_sales", "dup_returns"):
         # Дубль-вариант выгрузки (напр. старый Реал при наличии Реал2) —
         # не грузим, чтобы не задваивать данные.
