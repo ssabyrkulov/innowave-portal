@@ -246,11 +246,86 @@ def tax_docs(
         ]
 
     items.sort(key=lambda x: (x["date"], x.get("doc_number") or ""), reverse=True)
+
+    # --- Пара в управленке для каждой операции ---
+    # Контрагенты в контурах разные (в налоговой — юрлица, в управленке —
+    # точки), поэтому имя ключом быть не может. Пара ищется по сумме (до
+    # копеек) и близкой дате: сначала день в день, потом в пределах недели —
+    # проводки в налоговую базу часто заносятся с отставанием.
+    def upr_candidates() -> list[dict]:
+        uq_org = o or "hygiene"  # налоговый контур пока только по Hygiene
+        if kind == "sale":
+            docs: dict = {}
+            for s in db.query(models.Sale).filter(
+                    models.Sale.organization == uq_org).all():
+                key = (s.doc_number or f"~{s.client}", s.date, s.client)
+                d = docs.setdefault(key, {"date": s.date, "who": s.client,
+                                          "amount": 0.0, "doc_total": None,
+                                          "currency": "KGS"})
+                d["amount"] += float(s.amount) * (1 - float(s.discount_pct or 0) / 100)
+                if s.doc_total is not None:
+                    d["doc_total"] = float(s.doc_total)
+            out = []
+            for d in docs.values():
+                out.append({"date": d["date"], "who": d["who"], "currency": "KGS",
+                            "amount": round(float(d["doc_total"] or d["amount"]), 2)})
+            return out
+        if kind == "return":
+            return [{"date": r.date, "who": r.client, "currency": r.currency,
+                     "amount": round(float(r.amount), 2)}
+                    for r in db.query(models.ReturnDoc).filter(
+                        models.ReturnDoc.organization == uq_org).all()]
+        if kind == "cash_in":
+            return [{"date": r.date, "who": r.payer, "currency": r.currency,
+                     "amount": round(float(r.amount), 2)}
+                    for r in db.query(models.Receipt).filter(
+                        models.Receipt.organization == uq_org).all()]
+        return [{"date": e.date, "who": e.counterparty, "currency": e.currency,
+                 "amount": round(float(e.amount), 2)}
+                for e in db.query(models.Expense).filter(
+                    models.Expense.organization == uq_org).all()]
+
+    cands = upr_candidates()
+    used: set = set()
+
+    def find_pair(item: dict):
+        d0 = date.fromisoformat(item["date"])
+        cur = item.get("currency") or "KGS"
+        best, best_days = None, None
+        for j, c in enumerate(cands):
+            if j in used or (c["currency"] or "KGS") != cur:
+                continue
+            if abs(c["amount"] - item["amount"]) >= 0.5:
+                continue
+            days = abs((c["date"] - d0).days)
+            if days > 7:
+                continue
+            if best is None or days < best_days:
+                best, best_days = j, days
+                if days == 0:
+                    break
+        if best is None:
+            return None
+        used.add(best)
+        c = cands[best]
+        return {"date": c["date"].isoformat(), "who": c["who"], "days": best_days}
+
+    matched = 0
+    for item in items:
+        pair = find_pair(item)
+        item["upr"] = pair
+        if pair:
+            matched += 1
+
+    unmatched_amount = round(sum(i["amount"] for i in items if not i["upr"]), 2)
     return {
         "kind": kind,
         "label": KIND_LABEL[kind],
         "count": len(items),
         "amount": round(sum(i["amount"] for i in items), 2),
+        "matched": matched,
+        "unmatched": len(items) - matched,
+        "unmatched_amount": unmatched_amount,
         "items": items[:DOCS_CAP],
         "cap": DOCS_CAP,
     }

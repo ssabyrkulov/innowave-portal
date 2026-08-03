@@ -47,6 +47,10 @@ function DocsRegistry() {
         <>
           <p className="muted">
             {data.label}: <b>{data.count}</b> операций на <b>{money(data.amount)}</b>
+            {' '}· пара в управленке у <b>{data.matched}</b>
+            {data.unmatched > 0 && (
+              <> · <span className="sc-bad">без пары {data.unmatched} на {money(data.unmatched_amount)}</span></>
+            )}
           </p>
           {data.items.length === 0 ? (
             <div className="muted">Операций нет.</div>
@@ -60,6 +64,7 @@ function DocsRegistry() {
                       ? <><th>Склад</th><th className="num">Позиций</th></>
                       : <th>Вид операции</th>}
                     <th className="num">Сумма</th>
+                    <th>Управленка</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -74,6 +79,21 @@ function DocsRegistry() {
                         : <td>{r.operation || '—'}</td>}
                       <td className="num">
                         {formatMoney(r.amount)} {r.currency || 'KGS'}
+                      </td>
+                      {/* Пара найдена по сумме и близкой дате: имя контрагента
+                          в контурах разное, показываем его как подсказку. */}
+                      <td>
+                        {r.upr ? (
+                          <span className="sc-ok" title={r.upr.who || ''}>
+                            ✓ {r.upr.date.split('-').reverse().join('.')}
+                            {r.upr.days > 0 && ` (±${r.upr.days} дн.)`}
+                            {r.upr.who && (
+                              <span className="rc-note">{r.upr.who}</span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="sc-bad">нет пары</span>
+                        )}
                       </td>
                     </tr>
                   ))}
