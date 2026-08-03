@@ -12,24 +12,27 @@
 регистр не важен). Фирму определяет **папка Drive**, слово в имени — для
 людей. Тип распознаётся по ключевому слову — оно должно остаться в имени.
 
-Тип выгрузки называется как документ в 1С. Для папки Innowave — те же имена
-с префиксом `Innowave_`.
+Формат: `[Фирма][UPR|NAL][Тип как в 1С].xlsx`. UPR — управленка (грузится),
+NAL — налоговая (пока осознанно пропускается). Для папки Innowave — те же
+имена с `[Innowave]`.
 
-| Имя файла (папка Hygiene) | Что это |
+| Имя файла (папка Hygiene, управленка) | Что это |
 |---|---|
-| `Hygiene_Upravlenka_Realizaciya_Tovarov_i_Uslug` | Реализации |
-| `Hygiene_Upravlenka_Vozvrat_Tovarov_Ot_Pokupatelya` | Возвраты покупателей |
-| `Hygiene_Upravlenka_Platejnoe_Poruchenie_Vhodyashee` | Поступления, банк |
-| `Hygiene_Upravlenka_Prihodniy_Kassoviy_Order` | Поступления, касса (ПКО) |
-| `Hygiene_Upravlenka_Platejnoe_Poruchenie_Ishodyashee` | Расходы, банк |
-| `Hygiene_Upravlenka_Rashodniy_Kassoviy_Order` | Расходы, касса (РКО) |
-| `Hygiene_Upravlenka_Ostatki_Denejnyh_Sredstv` | Остатки денег (банк+касса) |
-| `Hygiene_Upravlenka_Ostatki_Tovarov_Na_Skladah` | Остатки товаров |
+| `[Hygiene][UPR][Realizaciya tovarov i uslug]` | Реализации |
+| `[Hygiene][UPR][Vozvrat tovarov ot pokupatelya]` | Возвраты покупателей |
+| `[Hygiene][UPR][Platejnoe poruchenie vhodyashee]` | Поступления, банк |
+| `[Hygiene][UPR][Prihodniy kassoviy order]` | Поступления, касса (ПКО) |
+| `[Hygiene][UPR][Platejnoe poruchenie ishodyashee]` | Расходы, банк |
+| `[Hygiene][UPR][Rashodniy kassoviy order]` | Расходы, касса (РКО) |
+| `[Hygiene][UPR][Ostatki denejnyh sredstv]` | Остатки денег (банк+касса) |
+| `[Hygiene][UPR][Ostatki tovarov na skladah]` | Остатки товаров |
+
+Налоговый комплект — те же имена с `[NAL]` вместо `[UPR]`.
 
 Направление денег решают слова «входящее/исходящее» и «приходный/расходный»,
-вид (банк/касса) — слово «кассовый». Старые короткие имена (Реал2, ТовВозв,
-БанкВх, ПКО, ППИсход, РКО, БанкКасса, Ост) продолжают работать — переходить
-можно постепенно.
+вид (банк/касса) — слово «кассовый». Кириллица работает так же, как транслит.
+Старые короткие имена (Реал2, ТовВозв, БанкВх, ПКО, ППИсход, РКО, БанкКасса,
+Ост) продолжают работать — переходить можно постепенно.
 
 «Поступление товаров» и «Возврат товаров поставщику» (закупочный контур)
 портал пока не ведёт: такие файлы пропускаются осознанно, с понятной причиной
