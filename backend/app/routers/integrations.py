@@ -153,6 +153,8 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
            "инвентариз", "inventariz",
            "корректировк", "korrektirovk",
            "взаимозач", "vzaimozach",
+           "авансов", "avansov",  # авансовый отчёт подотчётника
+           "подотчет", "подотчёт", "podotchet",
            "счет на оплату", "счёт на оплату", "schet na oplatu",
            "контрагент", "kontragent",
            "номенклатур", "nomenklatur",
