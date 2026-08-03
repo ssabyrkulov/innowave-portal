@@ -107,12 +107,37 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     if name.startswith("~$"):
         return "ignore"  # временный файл Excel
 
+    def has(*tokens: str) -> bool:
+        return any(t in name for t in tokens)
+
     # Налоговый контур портал пока не ведёт. Файлы по схеме
     # «Фирма_Налоговая_Тип» нельзя смешивать с управленческими: имя
-    # «…Налоговая_Реал2» иначе распозналось бы как обычная реализация и
+    # «…Налоговая_Реализация» иначе распозналось бы как обычная реализация и
     # задвоило бы данные. Пропускаем осознанно, с внятной причиной в ответе.
-    if "налог" in name:
+    if has("налог", "nalog"):
         return "tax_skip"
+
+    # --- Новая схема имён: «Фирма_Управленка_ТипВыгрузки» полными словами ---
+    # Понимаем кириллицу и транслит. Эти правила стоят РАНЬШЕ старых коротких
+    # токенов, и это важно: «Реализация» иначе попала бы в правило «реал»,
+    # которое для Hygiene считает файл без «2» дублем и молча пропускает.
+    if has("реализац", "realizac"):
+        # Формат (построчный/документный) импортёр продаж определяет сам
+        # по содержимому — одно имя работает для обеих фирм.
+        return "sales"
+    if has("возврат", "vozvrat"):
+        # У Hygiene возвраты выгружаются построчно, у Innowave — документами.
+        return "return_docs" if org == "innowave" else "return_lines"
+    if has("остатк", "ostatk"):
+        # «Остатки …»: деньги, если названы деньги/банк/касса, иначе товары.
+        if has("денег", "денежн", "deneg", "denejn", "банк", "bank", "касс", "kass"):
+            return "cash_balances"
+        return "stock_balances"
+    if has("поступлен", "postuplen", "приход", "prihod"):
+        return "receipts"  # банк или касса — решается ниже по слову в имени
+    if has("платеж", "платёж", "platej", "poruchenie", "исходящ", "ishodyash",
+           "расход", "rashod"):
+        return "expense"  # банк или касса — решается ниже по слову в имени
 
     # --- Продажи ---
     if "реал" in name:
@@ -272,8 +297,10 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         else:
             result = import_sales_docs_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "receipts":
-        # ПКО = касса, БанкВх = банк
-        rcpt_kind = "cash" if "пко" in filename.lower() else "bank"
+        # Касса: старое «ПКО» или слово «касса» в новой схеме имён; иначе банк.
+        low = filename.lower()
+        rcpt_kind = "cash" if any(
+            t in low for t in ("пко", "pko", "касс", "kass")) else "bank"
         result = import_receipts_workbook(
             db, content, auto_name, robot.id, kind=rcpt_kind, org=org
         )
@@ -284,8 +311,10 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
     elif kind == "stock_balances":
         result = import_stock_balances_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "expense":
-        # РКО = касса, ППИсход = банк
-        exp_kind = "cash" if "рко" in filename.lower() else "bank"
+        # Касса: старое «РКО» или слово «касса» в новой схеме имён; иначе банк.
+        low = filename.lower()
+        exp_kind = "cash" if any(
+            t in low for t in ("рко", "rko", "касс", "kass")) else "bank"
         result = import_expenses_workbook(db, content, auto_name, robot.id, exp_kind, org=org)
     elif kind == "return_lines":
         # ТовВозв: очистка продаж + запись сумм возвратов по клиентам.

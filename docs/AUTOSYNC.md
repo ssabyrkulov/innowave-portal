@@ -6,6 +6,32 @@
 
 Настройка занимает ~5 минут и делается один раз.
 
+## Имена файлов выгрузки
+
+Схема: `Фирма_Управленка_ТипВыгрузки.xlsx` (кириллицей или транслитом,
+регистр не важен). Фирму определяет **папка Drive**, слово в имени — для
+людей. Тип распознаётся по ключевому слову — оно должно остаться в имени.
+
+| Папка Hygiene | Папка Innowave | Что это |
+|---|---|---|
+| `Hygiene_Upravlenka_Realizaciya` | `Innowave_Upravlenka_Realizaciya` | Реализации |
+| `Hygiene_Upravlenka_Vozvrat_Tovarov` | `Innowave_Upravlenka_Vozvrat_Tovarov` | Возвраты |
+| `Hygiene_Upravlenka_Postuplenie_Bank` | `Innowave_Upravlenka_Postuplenie_Bank` | Поступления, банк |
+| `Hygiene_Upravlenka_Postuplenie_Kassa` | `Innowave_Upravlenka_Postuplenie_Kassa` | Поступления, касса |
+| `Hygiene_Upravlenka_Platejnoe_Poruchenie_Ishodyashee` | `Innowave_Upravlenka_Platejnoe_Poruchenie_Ishodyashee` | Расходы, банк |
+| `Hygiene_Upravlenka_Rashod_Kassa` | `Innowave_Upravlenka_Rashod_Kassa` | Расходы, касса (РКО) |
+| `Hygiene_Upravlenka_Ostatki_Deneg` | `Innowave_Upravlenka_Ostatki_Deneg` | Остатки денег (банк+касса) |
+| `Hygiene_Upravlenka_Ostatki_Tovarov` | `Innowave_Upravlenka_Ostatki_Tovarov` | Остатки товаров |
+
+Ключевые слова типов: «реализация», «возврат», «поступление» (+«банк»/«касса»),
+«платёжное поручение»/«расход» (+«касса» → касса), «остатки» (+«денег» или
+«товаров»). Старые короткие имена (Реал2, ТовВозв, БанкВх, ПКО, ППИсход, РКО,
+БанкКасса, Ост) продолжают работать — переходить можно постепенно.
+
+Файлы со словом «Налоговая» портал осознанно пропускает: налоговый контур пока
+не ведётся, и такие выгрузки не должны смешиваться с управленческими. Класть
+их в те же папки можно — они журналируются, но в цифры не попадают.
+
 ## Шаг 1. Взять токен автоприёма
 
 Render → сервис **innowave-portal** → **Environment** → значение
