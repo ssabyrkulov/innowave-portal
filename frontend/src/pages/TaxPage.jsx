@@ -25,11 +25,17 @@ function TaxLinksPanel({ onChanged }) {
   }
   function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
 
-  async function save(taxName, uprName) {
+  async function save(taxName, uprNames) {
     try {
-      await api.taxLinkSave(taxName, uprName)
+      await api.taxLinkSave(taxName, uprNames)
       setSavedAt(taxName)
       setTimeout(() => setSavedAt(null), 1500)
+      // Обновляем свой список (иначе defaultValue разъедется) и сводки.
+      setData((d) => d && {
+        ...d,
+        clients: d.clients.map((c) =>
+          c.tax_name === taxName ? { ...c, upr_names: uprNames } : c),
+      })
       onChanged?.()
     } catch (e) {
       setError(e.message)
@@ -43,34 +49,50 @@ function TaxLinksPanel({ onChanged }) {
       </button>
       {open && (
         <div className="store-map-body">
-          <p className="muted">В налоговой базе один партнёр часто проведён
-            несколькими юрлицами и ИП. Выберите, кто это в управленке — обороты
-            объединятся под одним именем, а сверка операций будет искать пару
-            именно у связанного контрагента. Несколько налоговых имён можно
-            связать с одним управленческим.</p>
+          <p className="muted">Дробление бывает в обе стороны: несколько
+            налоговых юрлиц могут быть одним партнёром управленки (шесть ИП →
+            Байго Трейд), а одно налоговое юрлицо — покрывать несколько точек
+            управленки (Императив → все Алдеи). Поэтому у каждого налогового
+            контрагента можно указать несколько имён управленки: добавьте имя
+            и нажмите Enter, лишнее снимается крестиком.</p>
           {error && <div className="error">{error}</div>}
           {data === null && !error && <div className="muted">Загрузка…</div>}
           {data && data.clients.length === 0 && (
             <div className="muted">Контрагентов пока нет — загрузите файлы.</div>
           )}
           {data && data.clients.map((c) => (
-            <div key={c.tax_name} className="store-row">
+            <div key={c.tax_name} className="store-row tax-link-row">
               <span className="store-name">
                 {c.tax_name}
                 <span className="store-stat">
                   {c.count} опер. · {money(c.amount)}
                 </span>
               </span>
-              <input className="filter-select" list="tax-upr-options"
-                defaultValue={c.upr_name || ''}
-                placeholder="— контрагент управленки —"
-                disabled={!can.editPayments}
-                onBlur={(e) => {
-                  const v = e.target.value.trim()
-                  if (v !== (c.upr_name || '')) save(c.tax_name, v)
-                }}
-                onKeyDown={(e) => e.key === 'Enter' && e.target.blur()} />
-              {savedAt === c.tax_name && <span className="sc-ok">✓</span>}
+              <span className="tax-link-edit">
+                {(c.upr_names || []).map((n) => (
+                  <span key={n} className="tax-chip">
+                    {n}
+                    {can.editPayments && (
+                      <button className="tax-chip-x" title="Убрать связку"
+                        onClick={() => save(c.tax_name,
+                          c.upr_names.filter((x) => x !== n))}>×</button>
+                    )}
+                  </span>
+                ))}
+                {can.editPayments && (
+                  <input className="filter-select" list="tax-upr-options"
+                    placeholder="+ контрагент управленки"
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter') return
+                      const v = e.target.value.trim()
+                      if (v && !(c.upr_names || []).includes(v)) {
+                        save(c.tax_name, [...(c.upr_names || []), v])
+                      }
+                      e.target.value = ''
+                    }} />
+                )}
+                {savedAt === c.tax_name && <span className="sc-ok">✓</span>}
+              </span>
             </div>
           ))}
           {data && (

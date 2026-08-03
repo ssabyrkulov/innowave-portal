@@ -190,7 +190,15 @@ from pydantic import BaseModel
 
 class TaxLinkItem(BaseModel):
     tax_name: str
-    upr_name: str | None = None  # None/пусто — удалить связку
+    upr_names: list[str] | None = None  # пустой список/None — удалить связки
+
+
+def _links_map(db: Session) -> dict[str, list[str]]:
+    """Карта «налоговое имя → имена управленки» (их может быть несколько)."""
+    out: dict[str, list[str]] = {}
+    for l in db.query(models.TaxClientLink).all():
+        out.setdefault(l.tax_name, []).append(l.upr_name)
+    return out
 
 
 @router.get("/links")
@@ -199,7 +207,7 @@ def tax_links(
     _: models.User = Depends(get_current_user),
 ):
     """Контрагенты налоговой базы с оборотами + текущие связки с управленкой."""
-    links = {l.tax_name: l.upr_name for l in db.query(models.TaxClientLink).all()}
+    links = _links_map(db)
     agg: dict[str, dict] = {}
     for op in db.query(models.TaxOperation).all():
         if not op.counterparty:
@@ -219,7 +227,7 @@ def tax_links(
     return {
         "clients": sorted(
             ({"tax_name": name, "amount": round(v["amount"], 2),
-              "count": v["count"], "upr_name": links.get(name)}
+              "count": v["count"], "upr_names": links.get(name, [])}
              for name, v in agg.items()),
             key=lambda x: -x["amount"],
         ),
@@ -233,23 +241,18 @@ def tax_link_save(
     db: Session = Depends(get_db),
     _: models.User = Depends(can_edit),
 ):
+    """Сохранить связки контрагента: список имён управленки заменяется целиком
+    (пустой список — удалить все)."""
     tax_name = payload.tax_name.strip()
     if not tax_name:
         raise HTTPException(status_code=400, detail="Пустое имя контрагента")
-    row = db.query(models.TaxClientLink).filter_by(tax_name=tax_name).first()
-    upr = (payload.upr_name or "").strip()
-    if not upr:
-        if row is not None:
-            db.delete(row)
-            db.commit()
-        return {"status": "deleted"}
-    if row is None:
-        row = models.TaxClientLink(tax_name=tax_name, upr_name=upr)
-        db.add(row)
-    else:
-        row.upr_name = upr
+    db.query(models.TaxClientLink).filter_by(tax_name=tax_name).delete(
+        synchronize_session=False)
+    names = [n.strip() for n in (payload.upr_names or []) if n and n.strip()]
+    for n in dict.fromkeys(names):  # без дублей, порядок сохранён
+        db.add(models.TaxClientLink(tax_name=tax_name, upr_name=n))
     db.commit()
-    return {"status": "ok"}
+    return {"status": "ok", "count": len(set(names))}
 
 
 DOCS_CAP = 500
@@ -354,18 +357,18 @@ def tax_docs(
 
     cands = upr_candidates()
     used: set = set()
-    # Связки контрагентов НАЛ → УПР: для связанных имя становится ключом
-    # сверки — сначала ищем пару только среди операций связанного контрагента
+    # Связки контрагентов НАЛ ↔ УПР: для связанных имя становится ключом
+    # сверки — сначала ищем пару только среди операций связанных контрагентов
     # (окно шире, две недели), и лишь потом среди всех по сумме и дате.
-    name_links = {l.tax_name: l.upr_name
-                  for l in db.query(models.TaxClientLink).all()}
+    # Связанных имён может быть несколько (Императив → все точки Алдей).
+    name_links = _links_map(db)
 
-    def scan(item: dict, d0, cur, who: str | None, window: int):
+    def scan(item: dict, d0, cur, who: set | None, window: int):
         best, best_days = None, None
         for j, c in enumerate(cands):
             if j in used or (c["currency"] or "KGS") != cur:
                 continue
-            if who is not None and (c["who"] or "") != who:
+            if who is not None and (c["who"] or "") not in who:
                 continue
             if abs(c["amount"] - item["amount"]) >= 0.5:
                 continue
@@ -381,7 +384,7 @@ def tax_docs(
     def find_pair(item: dict):
         d0 = date.fromisoformat(item["date"])
         cur = item.get("currency") or "KGS"
-        linked = name_links.get(item.get("counterparty") or "")
+        linked = set(name_links.get(item.get("counterparty") or "", []))
         best, best_days = (None, None)
         if linked:
             best, best_days = scan(item, d0, cur, linked, 14)
@@ -392,7 +395,7 @@ def tax_docs(
         used.add(best)
         c = cands[best]
         return {"date": c["date"].isoformat(), "who": c["who"], "days": best_days,
-                "by_link": bool(linked and c["who"] == linked)}
+                "by_link": bool(linked and (c["who"] or "") in linked)}
 
     matched = 0
     for item in items:
@@ -538,9 +541,11 @@ def tax_summary(
         q = q.filter(models.TaxOperation.organization == o)
     ops = q.all()
     # Связки: обороты раздробленных юрлиц собираются под общим именем
-    # управленки («Байго Трейд» вместо шести отдельных ИП).
-    name_links = {l.tax_name: l.upr_name
-                  for l in db.query(models.TaxClientLink).all()}
+    # управленки («Байго Трейд» вместо шести отдельных ИП). Склеиваем только
+    # однозначные связки: если у налогового имени несколько управленческих
+    # (Императив → точки Алдей), оборот остаётся под налоговым именем —
+    # разделить его по точкам не по чему.
+    name_links = _links_map(db)
 
     kinds: dict[str, dict] = {}
     sales_by_year: dict[int, float] = defaultdict(float)
@@ -559,7 +564,9 @@ def tax_summary(
         if op.kind == "sale":
             sales_by_year[op.date.year] += amt
             if op.counterparty:
-                clients[name_links.get(op.counterparty, op.counterparty)] += amt
+                targets = name_links.get(op.counterparty) or []
+                name = targets[0] if len(targets) == 1 else op.counterparty
+                clients[name] += amt
         elif op.kind in ("cash_in", "cash_out"):
             cash_by_op[(op.kind, op.operation or "(без вида)")] += amt
             oper = (op.operation or "").lower()

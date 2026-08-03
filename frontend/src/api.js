@@ -177,8 +177,8 @@ export const api = {
   taxCompare: () => request('/tax/compare'),
   taxDocs: (kind) => request(`/tax/docs?kind=${encodeURIComponent(kind)}`),
   taxLinks: () => request('/tax/links'),
-  taxLinkSave: (taxName, uprName) =>
-    request('/tax/links', { method: 'POST', body: { tax_name: taxName, upr_name: uprName || null } }),
+  taxLinkSave: (taxName, uprNames) =>
+    request('/tax/links', { method: 'POST', body: { tax_name: taxName, upr_names: uprNames || [] } }),
   taxImport: (file, org) => {
     const fd = new FormData()
     fd.append('file', file, file.name)

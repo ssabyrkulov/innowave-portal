@@ -488,19 +488,21 @@ class TaxOperation(Base):
 
 
 class TaxClientLink(Base):
-    """Связка контрагента налоговой базы с контрагентом управленки.
+    """Связка контрагентов налоговой базы и управленки — парами, без
+    ограничения направления.
 
-    Один реальный партнёр в налоговой базе раздроблен на несколько юрлиц и ИП
-    (Байго Трейд проведён шестью контрагентами). Связка склеивает их в одно
-    имя управленки: сводки считаются по реальным партнёрам, а построчная
-    сверка НАЛ ↔ УПР получает надёжный ключ вместо догадки по сумме и дате.
+    Дробление бывает в обе стороны: Байго Трейд в налоговой проведён шестью
+    юрлицами (много НАЛ → один УПР), а Императив — одно налоговое юрлицо, за
+    которым в управленке несколько точек Алдей (один НАЛ → много УПР). Поэтому
+    храним пары: у налогового имени может быть несколько управленческих и
+    наоборот. Сводки склеивают обороты, сверка ищет пару среди связанных.
     """
 
-    __tablename__ = "tax_client_links"
+    __tablename__ = "tax_client_pairs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    tax_name: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
-    upr_name: Mapped[str] = mapped_column(String, nullable=False)
+    tax_name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    upr_name: Mapped[str] = mapped_column(String, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
