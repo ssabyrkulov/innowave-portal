@@ -458,6 +458,35 @@ class SalesDocClientLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class TaxOperation(Base):
+    """Операция налогового контура (черновик, отдельно от управленки).
+
+    Налоговая база (1С ред. 1.7) выгружается Эрмеком отдельными файлами.
+    Смешивать их с управленческими таблицами нельзя — задвоятся деньги и
+    продажи, поэтому весь налоговый контур живёт в одной своей таблице.
+    kind: sale (строка реализации) | return (возврат) | cash_in (ПКО) |
+    cash_out (РКО)."""
+
+    __tablename__ = "tax_operations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    counterparty: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_total: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    # Вид операции кассы («Выдача подотчётнику», «Оплата от покупателя»…) —
+    # по нему деньги раскладываются на подотчёт/зарплату/инкассацию/клиентов.
+    operation: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ImportLog(Base):
     """Журнал загрузок Excel — кто, когда и что импортировал."""
 

@@ -16,6 +16,7 @@ import StockPage from './pages/StockPage'
 import WorkPage from './pages/WorkPage'
 import OperationsPage from './pages/OperationsPage'
 import SalesDocPage from './pages/SalesDocPage'
+import TaxPage from './pages/TaxPage'
 
 function Protected({ children, adminOnly = false }) {
   const { user, loading } = useAuth()
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="stock" element={<StockPage />} />
         <Route path="operations" element={<OperationsPage />} />
         <Route path="salesdoc" element={<SalesDocPage />} />
+        <Route path="tax" element={<TaxPage />} />
         <Route path="work" element={<WorkPage />} />
         <Route
           path="tools/unit-economics"

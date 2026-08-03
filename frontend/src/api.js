@@ -173,6 +173,13 @@ export const api = {
     ).toString()
     return request(`/salesdoc/client-debug${qs ? `?${qs}` : ''}`)
   },
+  taxSummary: () => request('/tax/summary'),
+  taxImport: (file, org) => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    fd.append('org', org || 'hygiene')
+    return request('/tax/import', { method: 'POST', formData: fd })
+  },
   salesdocCashboxes: () => request('/salesdoc/cashboxes'),
   salesdocOrderChanges: () => request('/salesdoc/order-changes'),
   salesdocWhy: (query) => request(`/salesdoc/why?query=${encodeURIComponent(query)}`),
