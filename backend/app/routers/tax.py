@@ -185,6 +185,73 @@ KIND_LABEL = {"sale": "Реализации", "return": "Возвраты",
               "cash_in": "Касса · приход", "cash_out": "Касса · расход"}
 
 
+from pydantic import BaseModel
+
+
+class TaxLinkItem(BaseModel):
+    tax_name: str
+    upr_name: str | None = None  # None/пусто — удалить связку
+
+
+@router.get("/links")
+def tax_links(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Контрагенты налоговой базы с оборотами + текущие связки с управленкой."""
+    links = {l.tax_name: l.upr_name for l in db.query(models.TaxClientLink).all()}
+    agg: dict[str, dict] = {}
+    for op in db.query(models.TaxOperation).all():
+        if not op.counterparty:
+            continue
+        a = agg.setdefault(op.counterparty, {"amount": 0.0, "count": 0})
+        a["amount"] += float(op.amount)
+        a["count"] += 1
+    # Кандидаты со стороны управленки: клиенты продаж, плательщики, контрагенты
+    # расходов — всё, с чем налоговую операцию можно связать.
+    upr: set[str] = set()
+    for (c,) in db.query(models.Sale.client).distinct():
+        upr.add(c)
+    for (c,) in db.query(models.Receipt.payer).distinct():
+        upr.add(c)
+    for (c,) in db.query(models.Expense.counterparty).distinct():
+        upr.add(c)
+    return {
+        "clients": sorted(
+            ({"tax_name": name, "amount": round(v["amount"], 2),
+              "count": v["count"], "upr_name": links.get(name)}
+             for name, v in agg.items()),
+            key=lambda x: -x["amount"],
+        ),
+        "upr_options": sorted(n for n in upr if n),
+    }
+
+
+@router.post("/links")
+def tax_link_save(
+    payload: TaxLinkItem,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_edit),
+):
+    tax_name = payload.tax_name.strip()
+    if not tax_name:
+        raise HTTPException(status_code=400, detail="Пустое имя контрагента")
+    row = db.query(models.TaxClientLink).filter_by(tax_name=tax_name).first()
+    upr = (payload.upr_name or "").strip()
+    if not upr:
+        if row is not None:
+            db.delete(row)
+            db.commit()
+        return {"status": "deleted"}
+    if row is None:
+        row = models.TaxClientLink(tax_name=tax_name, upr_name=upr)
+        db.add(row)
+    else:
+        row.upr_name = upr
+    db.commit()
+    return {"status": "ok"}
+
+
 DOCS_CAP = 500
 
 
@@ -287,28 +354,45 @@ def tax_docs(
 
     cands = upr_candidates()
     used: set = set()
+    # Связки контрагентов НАЛ → УПР: для связанных имя становится ключом
+    # сверки — сначала ищем пару только среди операций связанного контрагента
+    # (окно шире, две недели), и лишь потом среди всех по сумме и дате.
+    name_links = {l.tax_name: l.upr_name
+                  for l in db.query(models.TaxClientLink).all()}
 
-    def find_pair(item: dict):
-        d0 = date.fromisoformat(item["date"])
-        cur = item.get("currency") or "KGS"
+    def scan(item: dict, d0, cur, who: str | None, window: int):
         best, best_days = None, None
         for j, c in enumerate(cands):
             if j in used or (c["currency"] or "KGS") != cur:
                 continue
+            if who is not None and (c["who"] or "") != who:
+                continue
             if abs(c["amount"] - item["amount"]) >= 0.5:
                 continue
             days = abs((c["date"] - d0).days)
-            if days > 7:
+            if days > window:
                 continue
             if best is None or days < best_days:
                 best, best_days = j, days
                 if days == 0:
                     break
+        return best, best_days
+
+    def find_pair(item: dict):
+        d0 = date.fromisoformat(item["date"])
+        cur = item.get("currency") or "KGS"
+        linked = name_links.get(item.get("counterparty") or "")
+        best, best_days = (None, None)
+        if linked:
+            best, best_days = scan(item, d0, cur, linked, 14)
+        if best is None:
+            best, best_days = scan(item, d0, cur, None, 7)
         if best is None:
             return None
         used.add(best)
         c = cands[best]
-        return {"date": c["date"].isoformat(), "who": c["who"], "days": best_days}
+        return {"date": c["date"].isoformat(), "who": c["who"], "days": best_days,
+                "by_link": bool(linked and c["who"] == linked)}
 
     matched = 0
     for item in items:
@@ -453,6 +537,10 @@ def tax_summary(
     if o:
         q = q.filter(models.TaxOperation.organization == o)
     ops = q.all()
+    # Связки: обороты раздробленных юрлиц собираются под общим именем
+    # управленки («Байго Трейд» вместо шести отдельных ИП).
+    name_links = {l.tax_name: l.upr_name
+                  for l in db.query(models.TaxClientLink).all()}
 
     kinds: dict[str, dict] = {}
     sales_by_year: dict[int, float] = defaultdict(float)
@@ -471,7 +559,7 @@ def tax_summary(
         if op.kind == "sale":
             sales_by_year[op.date.year] += amt
             if op.counterparty:
-                clients[op.counterparty] += amt
+                clients[name_links.get(op.counterparty, op.counterparty)] += amt
         elif op.kind in ("cash_in", "cash_out"):
             cash_by_op[(op.kind, op.operation or "(без вида)")] += amt
             oper = (op.operation or "").lower()

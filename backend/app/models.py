@@ -487,6 +487,23 @@ class TaxOperation(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class TaxClientLink(Base):
+    """Связка контрагента налоговой базы с контрагентом управленки.
+
+    Один реальный партнёр в налоговой базе раздроблен на несколько юрлиц и ИП
+    (Байго Трейд проведён шестью контрагентами). Связка склеивает их в одно
+    имя управленки: сводки считаются по реальным партнёрам, а построчная
+    сверка НАЛ ↔ УПР получает надёжный ключ вместо догадки по сумме и дате.
+    """
+
+    __tablename__ = "tax_client_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tax_name: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    upr_name: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ImportLog(Base):
     """Журнал загрузок Excel — кто, когда и что импортировал."""
 

@@ -9,6 +9,81 @@ const money = (v) => `${formatMoney(v)} KGS`
 // вручную и живут в отдельной таблице: с управленческими цифрами портала они
 // не пересекаются нигде. Когда Эрмек доведёт выгрузку (метка НАЛ, банк,
 // остатки), загрузка станет автоматической через те же папки Drive.
+// Связка контрагентов НАЛ ↔ УПР. В налоговой базе один реальный партнёр
+// раздроблен на несколько юрлиц/ИП — связка склеивает их с одним контрагентом
+// управленки: сводки объединяются, а построчная сверка получает надёжный ключ.
+function TaxLinksPanel({ onChanged }) {
+  const { can } = useAuth()
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [savedAt, setSavedAt] = useState(null)
+
+  function load() {
+    setError(null)
+    api.taxLinks().then(setData).catch((e) => setError(e.message))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  async function save(taxName, uprName) {
+    try {
+      await api.taxLinkSave(taxName, uprName)
+      setSavedAt(taxName)
+      setTimeout(() => setSavedAt(null), 1500)
+      onChanged?.()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🔗 Связка контрагентов: налоговая ↔ управленка
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">В налоговой базе один партнёр часто проведён
+            несколькими юрлицами и ИП. Выберите, кто это в управленке — обороты
+            объединятся под одним именем, а сверка операций будет искать пару
+            именно у связанного контрагента. Несколько налоговых имён можно
+            связать с одним управленческим.</p>
+          {error && <div className="error">{error}</div>}
+          {data === null && !error && <div className="muted">Загрузка…</div>}
+          {data && data.clients.length === 0 && (
+            <div className="muted">Контрагентов пока нет — загрузите файлы.</div>
+          )}
+          {data && data.clients.map((c) => (
+            <div key={c.tax_name} className="store-row">
+              <span className="store-name">
+                {c.tax_name}
+                <span className="store-stat">
+                  {c.count} опер. · {money(c.amount)}
+                </span>
+              </span>
+              <input className="filter-select" list="tax-upr-options"
+                defaultValue={c.upr_name || ''}
+                placeholder="— контрагент управленки —"
+                disabled={!can.editPayments}
+                onBlur={(e) => {
+                  const v = e.target.value.trim()
+                  if (v !== (c.upr_name || '')) save(c.tax_name, v)
+                }}
+                onKeyDown={(e) => e.key === 'Enter' && e.target.blur()} />
+              {savedAt === c.tax_name && <span className="sc-ok">✓</span>}
+            </div>
+          ))}
+          {data && (
+            <datalist id="tax-upr-options">
+              {data.upr_options.map((n) => <option key={n} value={n} />)}
+            </datalist>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Реестр операций: каждый документ строкой. Для реализаций позиции файла
 // собраны в документы (номер + дата + контрагент), остальные виды — одна
 // строка = одна операция.
@@ -85,7 +160,7 @@ function DocsRegistry() {
                       <td>
                         {r.upr ? (
                           <span className="sc-ok" title={r.upr.who || ''}>
-                            ✓ {r.upr.date.split('-').reverse().join('.')}
+                            {r.upr.by_link ? '🔗' : '✓'} {r.upr.date.split('-').reverse().join('.')}
                             {r.upr.days > 0 && ` (±${r.upr.days} дн.)`}
                             {r.upr.who && (
                               <span className="rc-note">{r.upr.who}</span>
@@ -229,6 +304,8 @@ export default function TaxPage() {
           продажи проведены на юрлица), поэтому сверяем помесячные агрегаты.
           НАЛ/УПР — доля официально проведённого оборота, Δ SD — расхождение
           SalesDoc с управленкой. */}
+      {data && kinds.length > 0 && <TaxLinksPanel onChanged={load} />}
+
       {data && kinds.length > 0 && <DocsRegistry />}
 
       {cmp && cmp.sales.rows.length > 0 && (
