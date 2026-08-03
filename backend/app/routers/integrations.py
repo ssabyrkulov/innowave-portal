@@ -257,6 +257,7 @@ async def inbox(
     authorization: str | None = Header(default=None),
     fname: str | None = Form(default=None),
     org: str = Form(default=models.DEFAULT_ORG),
+    ledger: str = Form(default="upr"),
 ):
     _require_token(authorization)
 
@@ -270,13 +271,22 @@ async def inbox(
     kind = classify_by_name(filename, org) or sniff_kind(content)
     if kind == "ignore":
         return {"type": "ignore", "status": "skipped", "detail": "Временный файл"}
-    if kind == "tax_skip":
-        return {
-            "type": kind,
-            "status": "skipped",
-            "detail": "Налоговая выгрузка: портал ведёт только управленческий "
-                      "контур — файл пропущен осознанно, данные не задвоены",
-        }
+    # Налоговый контур: файлы из налоговой папки Drive (ledger=nal) или с
+    # меткой НАЛ в имени грузятся своими импортёрами в отдельную таблицу —
+    # автоматом, как и управленка. Тип определяется по колонкам, поэтому
+    # работает даже с черновыми именами без метки.
+    if (ledger or "").strip().lower().startswith("nal") or kind == "tax_skip":
+        from .tax import import_tax_workbook
+        robot = _robot_user(db)
+        try:
+            result = import_tax_workbook(db, content, filename, robot.id, org)
+            return {"type": f"tax_{result['kind']}", "status": "imported", **result}
+        except HTTPException as e:
+            # Вид, который налоговый импортёр пока не понимает (банк, остатки…)
+            # — пропускаем с причиной, не роняя автосинк.
+            db.rollback()
+            return {"type": "tax_skip", "status": "skipped",
+                    "detail": f"Налоговый файл не загружен: {e.detail}"}
     if kind == "unsupported":
         return {
             "type": kind,

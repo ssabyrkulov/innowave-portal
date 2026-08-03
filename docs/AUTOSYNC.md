@@ -68,10 +68,12 @@ Key `INBOX_TOKEN`, Value — любая длинная случайная стр
 
 ```javascript
 // ===== Настройки =====
-// По одной строке на организацию: id папки Drive + код фирмы (org).
+// По одной строке на папку: id папки Drive + код фирмы (org) + контур
+// (ledger: 'upr' — управленка, 'nal' — налоговая база).
 const FOLDERS = [
-  { id: '1HBmmRwmxPnxkbtr_x4bkKnQdc1F9wNhD', org: 'hygiene'  }, // Innowave Hygiene (единый)
-  { id: '1L9LuCJ0lOPit7ABkV_zLxPY8Jtp3uPLi', org: 'innowave' }, // Innowave (общий)
+  { id: '1HBmmRwmxPnxkbtr_x4bkKnQdc1F9wNhD', org: 'hygiene'  },                 // Innowave Hygiene (единый)
+  { id: '1L9LuCJ0lOPit7ABkV_zLxPY8Jtp3uPLi', org: 'innowave' },                 // Innowave (общий)
+  { id: '1Xtjseug4Pp863O1b307W4DbB_8QmCX6x', org: 'hygiene', ledger: 'nal' },   // Налоговая база (ред. 1.7)
 ];
 const ENDPOINT = 'https://innowave-group.com/integrations/inbox';
 const TOKEN    = 'ВСТАВЬТЕ_INBOX_TOKEN_СЮДА';
@@ -115,8 +117,8 @@ function syncNewFiles() {
       const f = files.next();
       if (!isExcel(f)) continue;
 
-      // Ключ памяти включает org — файлы из разных папок не путаются.
-      const key = 'sent_' + folder.org + '_' + f.getId();
+      // Ключ памяти включает org и контур — файлы из разных папок не путаются.
+      const key = 'sent_' + folder.org + '_' + (folder.ledger || 'upr') + '_' + f.getId();
       const mod = String(f.getLastUpdated().getTime());
       if (props.getProperty(key) === mod) continue; // не менялся — пропускаем
 
@@ -125,8 +127,9 @@ function syncNewFiles() {
           method: 'post',
           headers: { Authorization: 'Bearer ' + TOKEN },
           // fname — имя файла отдельным полем (кириллица в заголовке multipart
-          // портится); org — какой фирме принадлежит файл.
-          payload: { file: f.getBlob(), fname: f.getName(), org: folder.org },
+          // портится); org — фирма; ledger — контур (управленка/налоговая).
+          payload: { file: f.getBlob(), fname: f.getName(), org: folder.org,
+                     ledger: folder.ledger || 'upr' },
           muteHttpExceptions: true,
         });
         const code = res.getResponseCode();

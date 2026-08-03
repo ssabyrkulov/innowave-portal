@@ -145,18 +145,13 @@ def _parse(content: bytes, filename: str) -> tuple[str, list[dict]]:
     return kind, out
 
 
-@router.post("/import")
-async def tax_import(
-    db: Session = Depends(get_db),
-    user: models.User = Depends(can_edit),
-    file: UploadFile = File(...),
-    org: str = Form(default="hygiene"),
-):
-    """Загрузка файла налоговой базы. Каждая загрузка заменяет данные своего
-    вида целиком: выгрузки идут за всю историю, дедупликация не нужна."""
+def import_tax_workbook(db: Session, content: bytes, filename: str,
+                        user_id: int, org: str = "hygiene") -> dict:
+    """Импорт файла налоговой базы. Каждая загрузка заменяет данные своего
+    вида целиком: выгрузки идут за всю историю, дедупликация не нужна.
+    Используется и ручной кнопкой, и автоприёмом из папки Drive."""
     org = models.normalize_org(org)
-    content = await file.read()
-    kind, parsed = _parse(content, file.filename or "")
+    kind, parsed = _parse(content, filename or "")
     if not parsed:
         raise HTTPException(status_code=400, detail="В файле не нашлось ни одной строки с датой и суммой")
     # Снапшот-замена: сначала парсим (выше), только потом удаляем старое —
@@ -168,11 +163,22 @@ async def tax_import(
     for p in parsed:
         db.add(models.TaxOperation(organization=org, **p))
     db.add(models.ImportLog(
-        filename=f"[налоговая:{org}:{kind}] {file.filename}",
-        user_id=user.id, added=len(parsed), skipped=0, errors_count=0,
+        filename=f"[налоговая:{org}:{kind}] {filename}",
+        user_id=user_id, added=len(parsed), skipped=0, errors_count=0,
     ))
     db.commit()
     return {"kind": kind, "added": len(parsed)}
+
+
+@router.post("/import")
+async def tax_import(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(can_edit),
+    file: UploadFile = File(...),
+    org: str = Form(default="hygiene"),
+):
+    content = await file.read()
+    return import_tax_workbook(db, content, file.filename or "", user.id, org)
 
 
 KIND_LABEL = {"sale": "Реализации", "return": "Возвраты",
