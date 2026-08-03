@@ -126,6 +126,10 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
         # по содержимому — одно имя работает для обеих фирм.
         return "sales"
     if has("возврат", "vozvrat"):
+        # «Возврат товаров ПОСТАВЩИКУ» — это закупки, портал их не ведёт;
+        # клиентский возврат в 1С называется «…от покупателя».
+        if has("поставщик", "postavshik", "postavshchik"):
+            return "unsupported"
         # У Hygiene возвраты выгружаются построчно, у Innowave — документами.
         return "return_docs" if org == "innowave" else "return_lines"
     if has("остатк", "ostatk"):
@@ -133,10 +137,18 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
         if has("денег", "денежн", "deneg", "denejn", "банк", "bank", "касс", "kass"):
             return "cash_balances"
         return "stock_balances"
-    if has("поступлен", "postuplen", "приход", "prihod"):
+    # «Поступление ТОВАРОВ» — закупка у поставщика, а не деньги. Правило стоит
+    # раньше денежного «поступления», иначе закупки грузились бы как оплаты.
+    if has("поступлен", "postuplen") and has("товар", "tovar"):
+        return "unsupported"
+    # Поступления денег: «Платёжное поручение ВХОДЯЩЕЕ» (банк) и «ПРИХОДНЫЙ
+    # кассовый ордер» (касса). Проверяется раньше расходов: слово «платёжное»
+    # есть в обоих поручениях, направление решают «входящее»/«исходящее».
+    if has("входящ", "vhodyash", "vkhodyash", "приход", "prihod",
+           "поступлен", "postuplen"):
         return "receipts"  # банк или касса — решается ниже по слову в имени
-    if has("платеж", "платёж", "platej", "poruchenie", "исходящ", "ishodyash",
-           "расход", "rashod"):
+    if has("исходящ", "ishodyash", "расход", "rashod",
+           "платеж", "платёж", "platej", "poruchenie"):
         return "expense"  # банк или касса — решается ниже по слову в имени
 
     # --- Продажи ---
@@ -245,6 +257,13 @@ async def inbox(
             "status": "skipped",
             "detail": "Налоговая выгрузка: портал ведёт только управленческий "
                       "контур — файл пропущен осознанно, данные не задвоены",
+        }
+    if kind == "unsupported":
+        return {
+            "type": kind,
+            "status": "skipped",
+            "detail": "Этот вид выгрузки портал пока не ведёт (закупки / "
+                      "возвраты поставщику) — файл пропущен осознанно",
         }
     if kind in ("dup_sales", "dup_returns"):
         # Дубль-вариант выгрузки (напр. старый Реал при наличии Реал2) —
