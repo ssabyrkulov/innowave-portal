@@ -9,6 +9,87 @@ const money = (v) => `${formatMoney(v)} KGS`
 // вручную и живут в отдельной таблице: с управленческими цифрами портала они
 // не пересекаются нигде. Когда Эрмек доведёт выгрузку (метка НАЛ, банк,
 // остатки), загрузка станет автоматической через те же папки Drive.
+// Реестр операций: каждый документ строкой. Для реализаций позиции файла
+// собраны в документы (номер + дата + контрагент), остальные виды — одна
+// строка = одна операция.
+function DocsRegistry() {
+  const [kind, setKind] = useState('sale')
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    setData(null); setError(null)
+    api.taxDocs(kind)
+      .then((d) => alive && setData(d)).catch((e) => alive && setError(e.message))
+    return () => { alive = false }
+  }, [kind])
+
+  const TABS = [
+    ['sale', 'Реализации'], ['return', 'Возвраты'],
+    ['cash_in', 'Касса · приход'], ['cash_out', 'Касса · расход'],
+  ]
+  return (
+    <div className="chart-card">
+      <div className="rc-col-title">Реестр операций</div>
+      <div className="sc-tabs">
+        {TABS.map(([k, label]) => (
+          <button key={k}
+            className={`btn btn-sm ${kind === k ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setKind(k)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {error && <div className="error">{error}</div>}
+      {!data && !error && <div className="muted">Загрузка…</div>}
+      {data && (
+        <>
+          <p className="muted">
+            {data.label}: <b>{data.count}</b> операций на <b>{money(data.amount)}</b>
+          </p>
+          {data.items.length === 0 ? (
+            <div className="muted">Операций нет.</div>
+          ) : (
+            <div className="table-wrap rc-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Дата</th><th>№</th><th>Контрагент</th>
+                    {kind === 'sale'
+                      ? <><th>Склад</th><th className="num">Позиций</th></>
+                      : <th>Вид операции</th>}
+                    <th className="num">Сумма</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.items.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.date.split('-').reverse().join('.')}</td>
+                      <td>{r.doc_number || <span className="muted">—</span>}</td>
+                      <td>{r.counterparty || <span className="muted">—</span>}</td>
+                      {kind === 'sale'
+                        ? <><td>{r.warehouse || '—'}</td>
+                            <td className="num">{r.positions}</td></>
+                        : <td>{r.operation || '—'}</td>}
+                      <td className="num">
+                        {formatMoney(r.amount)} {r.currency || 'KGS'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {data.count > data.cap && (
+            <p className="muted">Показаны первые {data.cap} из {data.count}.</p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function CompareTable({ title, data, note }) {
   const [open, setOpen] = useState(true)
   const t = data.totals
@@ -128,6 +209,8 @@ export default function TaxPage() {
           продажи проведены на юрлица), поэтому сверяем помесячные агрегаты.
           НАЛ/УПР — доля официально проведённого оборота, Δ SD — расхождение
           SalesDoc с управленкой. */}
+      {data && kinds.length > 0 && <DocsRegistry />}
+
       {cmp && cmp.sales.rows.length > 0 && (
         <>
           <CompareTable title="Выручка по месяцам: Управленка · Налоговая · SalesDoc"

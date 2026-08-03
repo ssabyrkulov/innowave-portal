@@ -185,6 +185,77 @@ KIND_LABEL = {"sale": "Реализации", "return": "Возвраты",
               "cash_in": "Касса · приход", "cash_out": "Касса · расход"}
 
 
+DOCS_CAP = 500
+
+
+@router.get("/docs")
+def tax_docs(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    kind: str = "sale",
+    org: str = "all",
+):
+    """Реестр операций налогового контура — каждый документ строкой.
+
+    Для реализаций строки файла собираются в документы (номер + дата +
+    контрагент): итоговая сумма и число позиций. Остальные виды — одна строка
+    файла и есть одна операция."""
+    if kind not in KIND_LABEL:
+        raise HTTPException(status_code=400, detail="Неизвестный вид операций")
+    q = db.query(models.TaxOperation).filter(models.TaxOperation.kind == kind)
+    o = models.normalize_org(org) if (org or "").lower() in models.ORGS else None
+    if o:
+        q = q.filter(models.TaxOperation.organization == o)
+    rows = q.all()
+
+    if kind == "sale":
+        docs: dict = {}
+        for r in rows:
+            key = (r.doc_number, r.date, r.counterparty)
+            d = docs.get(key)
+            if d is None:
+                d = docs[key] = {
+                    "date": r.date.isoformat(),
+                    "doc_number": r.doc_number,
+                    "counterparty": r.counterparty,
+                    "warehouse": r.warehouse,
+                    "amount": 0.0,
+                    "doc_total": None,
+                    "positions": 0,
+                    "currency": r.currency,
+                }
+            d["positions"] += 1
+            d["amount"] += float(r.amount)
+            if r.doc_total is not None:
+                d["doc_total"] = float(r.doc_total)
+        items = []
+        for d in docs.values():
+            amt = d.pop("doc_total") or d["amount"]
+            items.append({**d, "amount": round(float(amt), 2)})
+    else:
+        items = [
+            {
+                "date": r.date.isoformat(),
+                "doc_number": r.doc_number,
+                "counterparty": r.counterparty,
+                "operation": r.operation,
+                "amount": round(float(r.amount), 2),
+                "currency": r.currency,
+            }
+            for r in rows
+        ]
+
+    items.sort(key=lambda x: (x["date"], x.get("doc_number") or ""), reverse=True)
+    return {
+        "kind": kind,
+        "label": KIND_LABEL[kind],
+        "count": len(items),
+        "amount": round(sum(i["amount"] for i in items), 2),
+        "items": items[:DOCS_CAP],
+        "cap": DOCS_CAP,
+    }
+
+
 @router.get("/compare")
 def tax_compare(
     db: Session = Depends(get_db),
