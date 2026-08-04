@@ -117,6 +117,68 @@ function TaxLinksPanel({ onChanged }) {
   )
 }
 
+// Сверка по группам связок: итоги налогового контрагента против СОВОКУПНОСТИ
+// его контрагентов управленки. Построчно сходиться не обязано (Императив
+// платит одной суммой за несколько точек) — сходиться должны итоги группы.
+function TaxGroupsPanel({ refreshKey }) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    api.taxGroups().then(setData).catch((e) => setError(e.message))
+  }, [refreshKey])
+
+  const cls = (v) => (Math.abs(v) < 0.5 ? 'sc-ok' : 'sc-diff')
+  if (error) return <div className="error">{error}</div>
+  if (!data || data.groups.length === 0) return null
+  return (
+    <div className="chart-card">
+      <div className="rc-col-title">Сверка групп: налоговая ↔ управленка (совокупно)</div>
+      <p className="muted">Итоги по каждой связке: контрагент налоговой базы
+        против суммы всех его контрагентов управленки, с первой налоговой
+        операции. Расхождение оплат при сходящихся реализациях — разный график
+        платежей; расхождение реализаций — продажи, проведённые только в одном
+        контуре.</p>
+      <div className="table-wrap rc-table sc-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Группа</th><th>С даты</th>
+              <th className="num">Реализации НАЛ</th>
+              <th className="num">Реализации УПР</th>
+              <th className="num">Δ</th>
+              <th className="num">Оплаты НАЛ</th>
+              <th className="num">Оплаты УПР</th>
+              <th className="num">Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.groups.map((g) => (
+              <tr key={g.tax_name}>
+                <td>
+                  {g.tax_name}
+                  <div className="rc-note" title={g.upr_names.join(', ')}>
+                    ↔ {g.upr_names.length === 1
+                      ? g.upr_names[0]
+                      : `${g.upr_names.length} контрагентов упр.`}
+                  </div>
+                </td>
+                <td>{g.since.split('-').reverse().join('.')}</td>
+                <td className="num">{money(g.sales.nal)}</td>
+                <td className="num">{money(g.sales.upr)}</td>
+                <td className={`num ${cls(g.sales.diff)}`}>{money(g.sales.diff)}</td>
+                <td className="num">{money(g.pay.nal)}</td>
+                <td className="num">{money(g.pay.upr)}</td>
+                <td className={`num ${cls(g.pay.diff)}`}>{money(g.pay.diff)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // Реестр операций: каждый документ строкой. Для реализаций позиции файла
 // собраны в документы (номер + дата + контрагент), остальные виды — одна
 // строка = одна операция.
@@ -275,6 +337,7 @@ export default function TaxPage() {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [log, setLog] = useState([])
+  const [linksVer, setLinksVer] = useState(0)
 
   function load() {
     api.taxSummary().then(setData).catch((e) => setError(e.message))
@@ -337,7 +400,9 @@ export default function TaxPage() {
           продажи проведены на юрлица), поэтому сверяем помесячные агрегаты.
           НАЛ/УПР — доля официально проведённого оборота, Δ SD — расхождение
           SalesDoc с управленкой. */}
-      {data && kinds.length > 0 && <TaxLinksPanel onChanged={load} />}
+      {data && kinds.length > 0 && <TaxLinksPanel onChanged={() => { load(); setLinksVer((v) => v + 1) }} />}
+
+      {data && kinds.length > 0 && <TaxGroupsPanel refreshKey={linksVer} />}
 
       {data && kinds.length > 0 && <DocsRegistry />}
 

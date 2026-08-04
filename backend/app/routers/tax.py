@@ -255,6 +255,89 @@ def tax_link_save(
     return {"status": "ok", "count": len(set(names))}
 
 
+@router.get("/groups")
+def tax_groups(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "all",
+):
+    """Сверка по группам связок: суммарные обороты налогового контрагента
+    против СОВОКУПНОСТИ связанных контрагентов управленки.
+
+    Построчная сверка операций тут и не должна сходиться: Императив платит
+    одной суммой за несколько точек Алдей, дробление разное. Сходиться должны
+    итоги группы — реализации и оплаты за сопоставимый период. Период считаем
+    с первой налоговой операции контрагента: налоговый контур начался позже
+    управленческого, и сравнивать более раннюю историю не с чем."""
+    from .receipts import CUSTOMER_PAYMENT_PREFIX
+
+    links = _links_map(db)
+    if not links:
+        return {"groups": []}
+    o = models.normalize_org(org) if (org or "").lower() in models.ORGS else None
+    uq_org = o or "hygiene"  # налоговый контур пока только по Hygiene
+    aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
+
+    groups = []
+    for tax_name, upr_names in sorted(links.items()):
+        ops = db.query(models.TaxOperation).filter(
+            models.TaxOperation.counterparty == tax_name).all()
+        if not ops:
+            continue
+        start = min(op.date for op in ops)
+        nal_sales = sum(float(op.amount) for op in ops if op.kind == "sale")
+        nal_pay = sum(float(op.amount) for op in ops if op.kind == "cash_in")
+        nal_ret = sum(float(op.amount) for op in ops if op.kind == "return")
+
+        names = set(upr_names)
+
+        # Продажи управленки по связанным точкам: итог документа — один раз.
+        upr_sales, seen_docs = 0.0, set()
+        for s in db.query(models.Sale).filter(
+                models.Sale.organization == uq_org,
+                models.Sale.date >= start,
+                models.Sale.client.in_(sorted(names))).all():
+            if s.doc_number and s.doc_total is not None:
+                key = (s.doc_number, s.date, s.client)
+                if key in seen_docs:
+                    continue
+                seen_docs.add(key)
+                upr_sales += float(s.doc_total)
+            else:
+                upr_sales += float(s.amount) * (1 - float(s.discount_pct or 0) / 100)
+
+        # Оплаты: плательщик приводится к клиенту через алиасы, как в дебиторке.
+        upr_pay = 0.0
+        for r in db.query(models.Receipt).filter(
+                models.Receipt.organization == uq_org,
+                models.Receipt.date >= start).all():
+            if not r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
+                continue
+            client = aliases.get(r.payer, r.payer)
+            if client in names or r.payer in names:
+                upr_pay += float(r.amount_kgs)
+
+        upr_ret = sum(
+            float(rd.amount) for rd in db.query(models.ReturnDoc).filter(
+                models.ReturnDoc.organization == uq_org,
+                models.ReturnDoc.date >= start).all()
+            if aliases.get(rd.client, rd.client) in names or rd.client in names
+        )
+
+        groups.append({
+            "tax_name": tax_name,
+            "upr_names": sorted(names),
+            "since": start.isoformat(),
+            "sales": {"nal": round(nal_sales, 2), "upr": round(upr_sales, 2),
+                      "diff": round(nal_sales - upr_sales, 2)},
+            "pay": {"nal": round(nal_pay, 2), "upr": round(upr_pay, 2),
+                    "diff": round(nal_pay - upr_pay, 2)},
+            "returns": {"nal": round(nal_ret, 2), "upr": round(upr_ret, 2),
+                        "diff": round(nal_ret - upr_ret, 2)},
+        })
+    return {"groups": groups}
+
+
 DOCS_CAP = 500
 
 
