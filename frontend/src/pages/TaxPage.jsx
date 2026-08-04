@@ -134,16 +134,15 @@ function TaxGroupsPanel({ refreshKey }) {
   return (
     <div className="chart-card">
       <div className="rc-col-title">Сверка групп: налоговая ↔ управленка (совокупно)</div>
-      <p className="muted">Итоги по каждой связке: контрагент налоговой базы
-        против суммы всех его контрагентов управленки, с первой налоговой
-        операции. Расхождение оплат при сходящихся реализациях — разный график
-        платежей; расхождение реализаций — продажи, проведённые только в одном
-        контуре.</p>
+      <p className="muted">Итоги по каждой связке за всю историю: контрагент
+        налоговой базы против суммы всех его контрагентов управленки.
+        Расхождение оплат при сходящихся реализациях — разный график платежей;
+        расхождение реализаций — продажи, проведённые только в одном контуре.</p>
       <div className="table-wrap rc-table sc-table">
         <table>
           <thead>
             <tr>
-              <th>Группа</th><th>С даты</th>
+              <th>Группа</th>
               <th className="num">Реализации НАЛ</th>
               <th className="num">Реализации УПР</th>
               <th className="num">Δ</th>
@@ -163,7 +162,6 @@ function TaxGroupsPanel({ refreshKey }) {
                       : `${g.upr_names.length} контрагентов упр.`}
                   </div>
                 </td>
-                <td>{g.since.split('-').reverse().join('.')}</td>
                 <td className="num">{money(g.sales.nal)}</td>
                 <td className="num">{money(g.sales.upr)}</td>
                 <td className={`num ${cls(g.sales.diff)}`}>{money(g.sales.diff)}</td>

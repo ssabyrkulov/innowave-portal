@@ -266,9 +266,10 @@ def tax_groups(
 
     Построчная сверка операций тут и не должна сходиться: Императив платит
     одной суммой за несколько точек Алдей, дробление разное. Сходиться должны
-    итоги группы — реализации и оплаты за сопоставимый период. Период считаем
-    с первой налоговой операции контрагента: налоговый контур начался позже
-    управленческого, и сравнивать более раннюю историю не с чем."""
+    итоги группы. Сравниваем всю историю обеих сторон без выравнивания
+    периодов: если в управленке есть операции старше налоговой базы, разница
+    покажет реальный объём непроведённого — прятать его отсечкой по дате было
+    бы искажением."""
     from .receipts import CUSTOMER_PAYMENT_PREFIX
 
     links = _links_map(db)
@@ -284,7 +285,6 @@ def tax_groups(
             models.TaxOperation.counterparty == tax_name).all()
         if not ops:
             continue
-        start = min(op.date for op in ops)
         nal_sales = sum(float(op.amount) for op in ops if op.kind == "sale")
         nal_pay = sum(float(op.amount) for op in ops if op.kind == "cash_in")
         nal_ret = sum(float(op.amount) for op in ops if op.kind == "return")
@@ -295,7 +295,6 @@ def tax_groups(
         upr_sales, seen_docs = 0.0, set()
         for s in db.query(models.Sale).filter(
                 models.Sale.organization == uq_org,
-                models.Sale.date >= start,
                 models.Sale.client.in_(sorted(names))).all():
             if s.doc_number and s.doc_total is not None:
                 key = (s.doc_number, s.date, s.client)
@@ -309,8 +308,7 @@ def tax_groups(
         # Оплаты: плательщик приводится к клиенту через алиасы, как в дебиторке.
         upr_pay = 0.0
         for r in db.query(models.Receipt).filter(
-                models.Receipt.organization == uq_org,
-                models.Receipt.date >= start).all():
+                models.Receipt.organization == uq_org).all():
             if not r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
                 continue
             client = aliases.get(r.payer, r.payer)
@@ -319,15 +317,13 @@ def tax_groups(
 
         upr_ret = sum(
             float(rd.amount) for rd in db.query(models.ReturnDoc).filter(
-                models.ReturnDoc.organization == uq_org,
-                models.ReturnDoc.date >= start).all()
+                models.ReturnDoc.organization == uq_org).all()
             if aliases.get(rd.client, rd.client) in names or rd.client in names
         )
 
         groups.append({
             "tax_name": tax_name,
             "upr_names": sorted(names),
-            "since": start.isoformat(),
             "sales": {"nal": round(nal_sales, 2), "upr": round(upr_sales, 2),
                       "diff": round(nal_sales - upr_sales, 2)},
             "pay": {"nal": round(nal_pay, 2), "upr": round(upr_pay, 2),
