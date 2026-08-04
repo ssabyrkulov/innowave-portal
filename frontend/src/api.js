@@ -189,6 +189,7 @@ export const api = {
   salesdocCashboxes: () => request('/salesdoc/cashboxes'),
   salesdocOrderChanges: () => request('/salesdoc/order-changes'),
   salesdocWhy: (query) => request(`/salesdoc/why?query=${encodeURIComponent(query)}`),
+  salesdocMethodProbe: () => request('/salesdoc/method-probe'),
   salesdocApiProbe: (params) =>
     request('/salesdoc/api-probe?' + new URLSearchParams(params).toString()),
   salesdocFindDoc: (amount, query) =>

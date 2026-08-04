@@ -249,6 +249,8 @@ export default function SalesDocPage() {
 
       <ApiProbePanel />
 
+      <MethodProbePanel />
+
       <OrderChangesPanel />
 
       <AnalyzePanel />
@@ -1356,6 +1358,60 @@ function StoreStats({ rows }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// Опрос API SalesDoc по списку имён методов: что вообще существует, кроме
+// задокументированного. Прежде всего интересуют визиты/маршруты/задачи
+// агентов — на них можно построить работу с дебиторкой.
+function MethodProbePanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocMethodProbe()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🧪 Какие методы есть в API SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Зонд дёргает каждого кандидата (визиты, маршруты,
+            задачи, агенты, долги…) и по ответу решает, знает ли сервер такой
+            метод. Занимает ~полминуты.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Опрашиваю…</div>}
+          {data && (
+            <>
+              <p>
+                Найдено методов: <b>{data.found.length}</b>
+                {data.found.length > 0 && <> — <code>{data.found.join(', ')}</code></>}
+              </p>
+              <ul className="order-raw-sib">
+                {data.results.map((r, i) => (
+                  <li key={i}>
+                    {r.exists ? '✅' : '❌'} <code>{r.method}</code>
+                    {r.exists && r.keys.length > 0 && (
+                      <> · ключи: <code>{r.keys.join(', ')}</code>
+                        {r.total != null && <> · записей {r.total}</>}</>
+                    )}
+                    {!r.exists && <span className="muted"> · {r.error}</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

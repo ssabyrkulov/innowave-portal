@@ -1378,6 +1378,45 @@ def api_probe(
     return out
 
 
+@router.get("/method-probe")
+def method_probe(
+    _: models.User = Depends(can_view),
+):
+    """Какие методы существуют в API SalesDoc — прямой опрос по списку имён.
+
+    Документация покрывает не всё (invoiceNumber в ней тоже не было). Зонд
+    дёргает каждого кандидата с limit=1 и по ответу решает: метод есть (пришли
+    данные), есть но пустой, или сервер его не знает. Интересуют прежде всего
+    визиты, маршруты и задачи агентов — для работы с дебиторкой."""
+    _require_configured()
+    candidates = [
+        # Визиты и маршруты агентов
+        "getVisit", "getVisits", "getAgentVisit", "getCheckin", "getCheckIn",
+        "getRoute", "getRoutes", "getRouteSheet", "getPlan", "getPlanVisit",
+        # Задачи и планы
+        "getTask", "getTasks", "getTodo", "getEvent", "getNote",
+        # Агенты и команда
+        "getAgent", "getAgents", "getUser", "getUsers", "getEmployee",
+        # Долги и прочее полезное
+        "getDebt", "getClientDebt", "getSupervisor", "getTerritory",
+        "getCategory", "getProduct", "getPriceType",
+    ]
+    out = []
+    for m in candidates:
+        try:
+            result, pagination = salesdoc.call(m, {"limit": 1, "page": 1})
+            keys = sorted(result.keys()) if isinstance(result, dict) else []
+            total = (pagination or {}).get("total")
+            out.append({"method": m, "exists": True, "keys": keys,
+                        "total": total})
+        except salesdoc.SalesDocError as e:
+            msg = str(e)
+            out.append({"method": m, "exists": False,
+                        "error": msg[:160]})
+    found = [r["method"] for r in out if r["exists"]]
+    return {"found": found, "results": out}
+
+
 @router.get("/find-doc")
 def find_doc(
     db: Session = Depends(get_db),
