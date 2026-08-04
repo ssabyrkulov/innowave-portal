@@ -25,6 +25,14 @@ function TaxLinksPanel({ onChanged }) {
   }
   function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
 
+  function addName(c, input) {
+    const v = input.value.trim()
+    if (v && !(c.upr_names || []).includes(v)) {
+      save(c.tax_name, [...(c.upr_names || []), v])
+    }
+    input.value = ''
+  }
+
   async function save(taxName, uprNames) {
     try {
       await api.taxLinkSave(taxName, uprNames)
@@ -82,14 +90,17 @@ function TaxLinksPanel({ onChanged }) {
                 {can.editPayments && (
                   <input className="filter-select" list="tax-upr-options"
                     placeholder="+ контрагент управленки"
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter') return
+                    // Имя добавляется тремя путями: Enter, уход из поля и клик
+                    // по подсказке (он приходит событием input с полным именем).
+                    // Раньше работал только Enter — выбор мышкой молча терялся.
+                    onInput={(e) => {
                       const v = e.target.value.trim()
-                      if (v && !(c.upr_names || []).includes(v)) {
-                        save(c.tax_name, [...(c.upr_names || []), v])
+                      if (v && data.upr_options.includes(v)) {
+                        addName(c, e.target)
                       }
-                      e.target.value = ''
-                    }} />
+                    }}
+                    onBlur={(e) => addName(c, e.target)}
+                    onKeyDown={(e) => e.key === 'Enter' && addName(c, e.target)} />
                 )}
                 {savedAt === c.tax_name && <span className="sc-ok">✓</span>}
               </span>
