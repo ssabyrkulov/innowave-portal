@@ -243,6 +243,8 @@ export default function SalesDocPage() {
 
       <ShipmentsComparePanel />
 
+      <VisitDebtPanel />
+
       <WhyPanel />
 
       <FindDocPanel />
@@ -1418,6 +1420,113 @@ function MethodProbePanel() {
                   </li>
                 ))}
               </ul>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Дебиторка × визиты: у каждого должника — когда были, когда придут, когда
+// платил; у агентов — долг портфеля и отдача визитов. Ответ на вопрос
+// «куда ехать за деньгами».
+function VisitDebtPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocVisitDebt()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  const warn = (r) =>
+    (r.days_since_visit == null || r.days_since_visit > 14) && !r.next_planned
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 👣 Дебиторка × визиты
+      </button>
+      {open && (
+        <div className="store-map-body">
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Загрузка…</div>}
+          {data && !data.visits_ready && (
+            <div className="note-readonly sd-warn">
+              Визиты ещё не доехали в зеркало — они подтягиваются при полной
+              синхронизации (раз в час) или по кнопке «↻ Обновить».
+            </div>
+          )}
+          {data && data.visits_ready && (
+            <>
+              <p className="muted">
+                Должников: <b>{data.debtors_total}</b> на <b>{money(data.debt_sum)}</b>.
+                Жёлтым — точки без визита больше двух недель и без плана:
+                туда стоит ехать за деньгами в первую очередь.
+              </p>
+              <div className="table-wrap rc-table sc-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Точка</th><th className="num">Долг</th><th>Агент</th>
+                      <th>Был визит</th><th>План визита</th><th>Платил</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.debtors.map((r, i) => (
+                      <tr key={i} className={warn(r) ? 'rc-row-warn' : ''}>
+                        <td>{r.name}</td>
+                        <td className="num">{money(r.debt)}</td>
+                        <td>{r.agent || <span className="muted">—</span>}</td>
+                        <td>
+                          {r.last_visit
+                            ? <>{fdateShort(r.last_visit)} <span className="muted">({r.days_since_visit} дн.)</span></>
+                            : <span className="sc-bad">не были</span>}
+                        </td>
+                        <td>
+                          {r.next_planned
+                            ? fdateShort(r.next_planned)
+                            : <span className="sc-diff">нет плана</span>}
+                        </td>
+                        <td>
+                          {r.last_payment
+                            ? <>{fdateShort(r.last_payment)} <span className="muted">({r.days_since_payment} дн.)</span></>
+                            : <span className="sc-bad">нет оплат</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="rc-col-title">Агенты за 30 дней</div>
+              <div className="table-wrap rc-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Агент</th><th className="num">Долг портфеля</th>
+                      <th className="num">Визитов</th><th className="num">С заказом</th>
+                      <th className="num">Сумма заказов</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.agents.map((a, i) => (
+                      <tr key={i}>
+                        <td>{a.agent}</td>
+                        <td className="num">{money(a.portfolio_debt)}</td>
+                        <td className="num">{a.visits_30d}</td>
+                        <td className="num">{a.with_order}</td>
+                        <td className="num">{money(a.order_summa)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
         </div>

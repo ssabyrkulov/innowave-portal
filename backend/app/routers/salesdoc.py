@@ -1425,6 +1425,94 @@ def method_probe(
     return {"found": found, "results": out}
 
 
+@router.get("/visit-debt")
+def visit_debt(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+):
+    """Дебиторка × визиты: у каждого должника — когда были, когда придут,
+    когда платил; у каждого агента — долг его точек и отдача визитов.
+
+    Отвечает на главный вопрос работы с долгами: «куда ехать за деньгами».
+    Всё из зеркала — мгновенно."""
+    from sqlalchemy import func
+
+    V = models.SalesDocVisit
+    P = models.SalesDocPayment
+    now = datetime.utcnow()
+
+    debtors = (db.query(models.SalesDocClient)
+               .filter(models.SalesDocClient.debt >= 0.5).all())
+
+    last_visit = dict(
+        db.query(V.client_sd_id, func.max(V.at))
+        .filter(V.visited.is_(True)).group_by(V.client_sd_id).all())
+    next_plan = dict(
+        db.query(V.client_sd_id, func.min(V.at))
+        .filter(V.planned.is_(True), V.visited.is_(False), V.at >= now)
+        .group_by(V.client_sd_id).all())
+    last_pay = dict(
+        db.query(P.client_sd_id, func.max(P.date))
+        .filter(P.txn == salesdoc.PAYMENT_TXN).group_by(P.client_sd_id).all())
+
+    # Агент точки — по её последнему визиту за 90 дней.
+    agent_of: dict[str, str] = {}
+    recent = (db.query(V).filter(V.at >= now - timedelta(days=90))
+              .order_by(V.at.asc()).all())
+    for v in recent:
+        if v.client_sd_id and v.agent_name:
+            agent_of[v.client_sd_id] = v.agent_name
+
+    rows = []
+    for c in debtors:
+        sid = c.sd_id
+        lv = last_visit.get(sid)
+        rows.append({
+            "sd_id": sid,
+            "name": c.name,
+            "debt": round(float(c.debt), 2),
+            "agent": agent_of.get(sid),
+            "last_visit": lv and lv.date().isoformat(),
+            "days_since_visit": (now - lv).days if lv else None,
+            "next_planned": (np := next_plan.get(sid)) and np.date().isoformat(),
+            "last_payment": (lp := last_pay.get(sid)) and lp.isoformat(),
+            "days_since_payment": (now.date() - lp).days if (lp := last_pay.get(sid)) else None,
+        })
+    rows.sort(key=lambda x: -x["debt"])
+
+    # Отдача агентов за 30 дней + долг их портфеля.
+    ag: dict[str, dict] = {}
+    for v in recent:
+        if v.at < now - timedelta(days=30) or not v.agent_name:
+            continue
+        a = ag.setdefault(v.agent_name, {"visits": 0, "with_order": 0, "summa": 0.0})
+        if v.visited:
+            a["visits"] += 1
+            if v.has_order:
+                a["with_order"] += 1
+            a["summa"] += float(v.order_summa or 0)
+    debt_by_agent: dict[str, float] = {}
+    for r in rows:
+        if r["agent"]:
+            debt_by_agent[r["agent"]] = debt_by_agent.get(r["agent"], 0.0) + r["debt"]
+    agents = sorted(
+        ({"agent": name,
+          "visits_30d": v["visits"],
+          "with_order": v["with_order"],
+          "order_summa": round(v["summa"], 2),
+          "portfolio_debt": round(debt_by_agent.get(name, 0.0), 2)}
+         for name, v in ag.items()),
+        key=lambda x: -x["portfolio_debt"])
+
+    return {
+        "debtors": rows[:300],
+        "debtors_total": len(rows),
+        "debt_sum": round(sum(r["debt"] for r in rows), 2),
+        "agents": agents,
+        "visits_ready": bool(last_visit or recent),
+    }
+
+
 @router.get("/visits-sample")
 def visits_sample(
     _: models.User = Depends(can_view),

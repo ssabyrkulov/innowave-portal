@@ -191,6 +191,7 @@ export const api = {
   salesdocWhy: (query) => request(`/salesdoc/why?query=${encodeURIComponent(query)}`),
   salesdocMethodProbe: () => request('/salesdoc/method-probe'),
   salesdocVisitsSample: () => request('/salesdoc/visits-sample'),
+  salesdocVisitDebt: () => request('/salesdoc/visit-debt'),
   salesdocApiProbe: (params) =>
     request('/salesdoc/api-probe?' + new URLSearchParams(params).toString()),
   salesdocFindDoc: (amount, query) =>

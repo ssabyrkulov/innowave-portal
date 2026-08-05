@@ -601,6 +601,81 @@ def cashboxes(db: Session) -> list[dict]:
     return out
 
 
+VISITS_BACK_DAYS = 400   # сколько истории визитов держим
+VISITS_FWD_DAYS = 60     # план: будущие визиты (planned=1) тоже нужны
+
+
+def sync_visits(db: Session, updated_since: str | None = None) -> int:
+    """Зеркало визитов агентов (getVisit).
+
+    Записей ~100 тысяч, поэтому визиты обновляются только при полной
+    синхронизации (раз в час), а не минутной дельтой. Работает ли у getVisit
+    фильтр периода — неизвестно заранее: проверяем сравнением счётчиков и,
+    если сервер фильтр игнорирует, честно выкачиваем всё."""
+    import hashlib as _h
+
+    today = date.today()
+    df = (today - timedelta(days=VISITS_BACK_DAYS)).isoformat()
+    dt = (today + timedelta(days=VISITS_FWD_DAYS)).isoformat()
+    params = {"filter": {"period": {"date": {"from": df, "to": dt}}}}
+    try:
+        _, pg_all = salesdoc.call("getVisit", {"limit": 1, "page": 1})
+        _, pg_win = salesdoc.call("getVisit", {"limit": 1, "page": 1, **params})
+        t_all = int((pg_all or {}).get("total") or 0)
+        t_win = int((pg_win or {}).get("total") or 0)
+        filter_works = bool(t_all and t_win and t_win < t_all)
+    except salesdoc.SalesDocError:
+        filter_works = False
+
+    rows = salesdoc.call_all("getVisit", ("visit", "visits"),
+                             params if filter_works else None)
+    parsed, seen = [], set()
+    for v in rows:
+        at = None
+        for k in ("date", "start_date"):
+            s = str(v.get(k) or "").strip()
+            if not s:
+                continue
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    at = datetime.strptime(s[:19 if " " in s else 10], fmt)
+                    break
+                except ValueError:
+                    continue
+            if at:
+                break
+        if at is None:
+            continue
+        key = _h.sha1(
+            f"{v.get('agent_id')}|{v.get('client_id')}|{v.get('date')}".encode()
+        ).hexdigest()
+        if key in seen:
+            continue
+        seen.add(key)
+        parsed.append(models.SalesDocVisit(
+            key=key,
+            agent_sd_id=str(v.get("agent_id") or "").lower() or None,
+            agent_name=v.get("agent_name") or None,
+            client_sd_id=str(v.get("client_id") or "").lower() or None,
+            client_name=v.get("client_name") or None,
+            at=at,
+            planned=bool(v.get("planned")),
+            visited=bool(v.get("visited")),
+            reject=str(v.get("reject")) if v.get("reject") not in (None, "", 0) else None,
+            has_order=bool(v.get("has_order")),
+            order_summa=float(v.get("order_summa") or 0),
+        ))
+
+    # Снапшот-замена: сначала выгрузили (выше), потом чистим и вставляем.
+    q = db.query(models.SalesDocVisit)
+    if filter_works:
+        q = q.filter(models.SalesDocVisit.at
+                     >= datetime.fromisoformat(df + "T00:00:00"))
+    q.delete(synchronize_session=False)
+    db.bulk_save_objects(parsed)
+    return len(parsed)
+
+
 def sync_warehouses(db: Session, updated_since: str | None = None) -> int:
     """Названия складов из SalesDoc — в справочник привязки.
 
@@ -725,8 +800,14 @@ def sync(full: bool = False) -> dict:
                     ("payments", sync_payments, "getPayment", models.SalesDocPayment),
                     ("clients", sync_clients, None, models.SalesDocClient),
                     ("warehouses", sync_warehouses, None, models.SalesDocStore),
-                    ("stock", sync_stock, None, models.SalesDocStock)):
+                    ("stock", sync_stock, None, models.SalesDocStock),
+                    ("visits", sync_visits, None, models.SalesDocVisit)):
                 st = _state(db, kind)
+                # Визиты (~100 тыс. строк) — только при полной синхронизации:
+                # для минутной дельты набор слишком тяжёлый.
+                if kind == "visits" and not full and st.last_full_at is not None:
+                    result[kind] = {"skipped": "обновляется при полной синхронизации"}
+                    continue
                 since = None
                 if method is not None and not full and st.last_full_at:
                     base = st.last_delta_at or st.last_full_at
@@ -788,7 +869,7 @@ def status(db: Session) -> dict:
     """Свежесть зеркала — для показа «данные на …» и кнопки обновления."""
     out: dict = {"configured": salesdoc.is_configured(), "kinds": {}}
     newest: datetime | None = None
-    for kind in ("orders", "payments", "clients", "stock"):
+    for kind in ("orders", "payments", "clients", "stock", "visits"):
         st = db.query(models.SalesDocSyncState).filter_by(kind=kind).first()
         if st is None:
             out["kinds"][kind] = None

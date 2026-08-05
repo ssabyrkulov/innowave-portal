@@ -409,6 +409,31 @@ class SalesDocStock(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocVisit(Base):
+    """Зеркало визита агента SalesDoc (getVisit).
+
+    Визит — ядро работы с дебиторкой: по нему видно, когда точку последний раз
+    посещали, когда запланирован следующий визит (planned=1, visited=0 с
+    будущей датой) и чем визит закончился (has_order). Собственного ИД у
+    визита в API нет — ключ синтетический: агент + точка + время."""
+
+    __tablename__ = "salesdoc_visits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    key: Mapped[str] = mapped_column(String(40), unique=True, nullable=False, index=True)
+    agent_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    agent_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    client_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    client_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    planned: Mapped[bool] = mapped_column(Boolean, default=False)
+    visited: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    reject: Mapped[str | None] = mapped_column(String, nullable=True)
+    has_order: Mapped[bool] = mapped_column(Boolean, default=False)
+    order_summa: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class SalesDocSyncState(Base):
     """Состояние синхронизации зеркала: когда последний раз обновляли и как.
 
