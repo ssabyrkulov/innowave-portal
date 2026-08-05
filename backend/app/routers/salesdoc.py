@@ -1529,6 +1529,78 @@ def api_probe(
     return out
 
 
+@router.get("/journal-anatomy")
+def journal_anatomy(
+    _: models.User = Depends(can_view),
+):
+    """Анатомия журнала getOrder: по каким срезам он полон, а где дыры.
+
+    Когда документ виден в интерфейсе, но не приходит в выгрузке, причина
+    почти всегда в каком-то одном измерении: агент, склад, направление
+    торговли, период. Считаем распределение выдачи по каждому и сверяем со
+    справочниками — измерение, у которого в журнале ноль записей при живом
+    справочнике, и есть виновник."""
+    _require_configured()
+    from collections import Counter
+
+    rows = salesdoc.call_all("getOrder", ("orders", "order"), {"filter": {
+        "include": "all", "status": [1, 2, 3, 4, 5]}})
+
+    def ref(v):
+        return str((v or {}).get("SD_id") or "").lower() or None
+
+    months = Counter()
+    by_agent = Counter()
+    by_store = Counter()
+    by_trade = Counter()
+    by_price = Counter()
+    no_invoice = 0
+    for r in rows:
+        d = str(r.get("dateDocument") or r.get("dateCreate") or "")[:7]
+        if d:
+            months[d] += 1
+        by_agent[ref(r.get("agent")) or "(без агента)"] += 1
+        by_store[ref(r.get("store")) or "(без склада)"] += 1
+        by_trade[ref(r.get("trade")) or "(без направления)"] += 1
+        by_price[ref(r.get("priceType")) or "(без типа цены)"] += 1
+        if not r.get("invoiceNumber"):
+            no_invoice += 1
+
+    # Справочники: агент/склад, который есть в системе, но по которому в
+    # журнале ни одного заказа, — главный подозреваемый.
+    def catalog(method: str, key):
+        try:
+            return salesdoc.call_all(method, key)
+        except salesdoc.SalesDocError:
+            return []
+
+    agents = [
+        {"sd_id": str(a.get("SD_id") or "").lower(),
+         "name": a.get("name"), "active": a.get("active"),
+         "orders": by_agent.get(str(a.get("SD_id") or "").lower(), 0)}
+        for a in catalog("getAgent", "agent")
+    ]
+    agents.sort(key=lambda x: (x["orders"], x["name"] or ""))
+    stores = [
+        {"sd_id": str(w.get("SD_id") or "").lower(),
+         "name": w.get("name"), "active": w.get("active"),
+         "orders": by_store.get(str(w.get("SD_id") or "").lower(), 0)}
+        for w in catalog("getWarehouse", ("store", "warehouse", "stores"))
+    ]
+    stores.sort(key=lambda x: (x["orders"], x["name"] or ""))
+
+    return {
+        "total": len(rows),
+        "months": [{"month": m, "count": c} for m, c in sorted(months.items())],
+        "no_invoice_number": no_invoice,
+        "agents": agents,
+        "agents_without_orders": [a for a in agents if a["orders"] == 0],
+        "stores": stores,
+        "by_trade": [{"value": k, "count": v} for k, v in by_trade.most_common()],
+        "by_price_type": [{"value": k, "count": v} for k, v in by_price.most_common()],
+    }
+
+
 @router.get("/method-probe")
 def method_probe(
     _: models.User = Depends(can_view),

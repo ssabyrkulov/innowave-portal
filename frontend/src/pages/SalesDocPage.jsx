@@ -253,6 +253,8 @@ export default function SalesDocPage() {
 
       <MethodProbePanel />
 
+      <JournalAnatomyPanel />
+
       <VisitsSamplePanel />
 
       <OrderChangesPanel />
@@ -1408,6 +1410,97 @@ function StoreStats({ rows }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// Анатомия журнала getOrder: по каким срезам выдача полна, а где дыры.
+// Агент или склад, у которого в журнале ноль заказов при живом справочнике, —
+// главный подозреваемый в пропаже документов.
+function JournalAnatomyPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocJournalAnatomy()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🧬 Анатомия журнала SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Распределение выдачи getOrder по месяцам,
+            агентам, складам, направлениям торговли и типам цен, сверенное со
+            справочниками. Если у агента или склада ноль заказов в журнале, а в
+            справочнике он есть — скорее всего именно его документы и не
+            приходят.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Разбираю журнал…</div>}
+          {data && (
+            <>
+              <p>Всего в выдаче: <b>{data.total}</b> заказов ·
+                {' '}без номера накладной: {data.no_invoice_number}</p>
+
+              {data.agents_without_orders.length > 0 && (
+                <div className="note-readonly sd-warn">
+                  Агенты без единого заказа в журнале:{' '}
+                  <b>{data.agents_without_orders
+                    .map((a) => `${a.name}${a.active === 'N' ? ' (неактивен)' : ''}`)
+                    .join(', ')}</b>. Если у них есть заказы в интерфейсе
+                  SalesDoc — причина пропажи найдена.
+                </div>
+              )}
+
+              <div className="rc-cols">
+                <div className="rc-col">
+                  <div className="rc-col-title">Заказы по месяцам</div>
+                  <div className="table-wrap rc-table">
+                    <table>
+                      <tbody>
+                        {data.months.map((m, i) => (
+                          <tr key={i}>
+                            <td>{m.month.split('-').reverse().join('.')}</td>
+                            <td className="num">{m.count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div className="rc-col">
+                  <div className="rc-col-title">Агенты</div>
+                  <div className="table-wrap rc-table">
+                    <table>
+                      <thead>
+                        <tr><th>Агент</th><th>Акт.</th><th className="num">Заказов</th></tr>
+                      </thead>
+                      <tbody>
+                        {data.agents.map((a, i) => (
+                          <tr key={i} className={a.orders === 0 ? 'rc-row-warn' : ''}>
+                            <td>{a.name}</td>
+                            <td>{a.active === 'N' ? 'нет' : 'да'}</td>
+                            <td className="num">{a.orders}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="rc-col-title">Направления торговли</div>
+                  <ValueStats rows={data.by_trade.map((t) => ({ value: t.value, count: t.count }))} />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

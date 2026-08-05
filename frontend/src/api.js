@@ -193,6 +193,7 @@ export const api = {
   salesdocOrderChanges: () => request('/salesdoc/order-changes'),
   salesdocWhy: (query) => request(`/salesdoc/why?query=${encodeURIComponent(query)}`),
   salesdocMethodProbe: () => request('/salesdoc/method-probe'),
+  salesdocJournalAnatomy: () => request('/salesdoc/journal-anatomy'),
   salesdocVisitsSample: () => request('/salesdoc/visits-sample'),
   salesdocVisitDebt: () => request('/salesdoc/visit-debt'),
   salesdocApiProbe: (params) =>
