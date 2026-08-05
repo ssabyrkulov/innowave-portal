@@ -1407,8 +1407,16 @@ def method_probe(
             result, pagination = salesdoc.call(m, {"limit": 1, "page": 1})
             keys = sorted(result.keys()) if isinstance(result, dict) else []
             total = (pagination or {}).get("total")
+            # Пример первой записи: по нему видно, какие поля есть у визита
+            # (точка, агент, время, результат) — без этого метод бесполезен.
+            sample = None
+            if isinstance(result, dict):
+                for v in result.values():
+                    if isinstance(v, list) and v:
+                        sample = v[0]
+                        break
             out.append({"method": m, "exists": True, "keys": keys,
-                        "total": total})
+                        "total": total, "sample": sample})
         except salesdoc.SalesDocError as e:
             msg = str(e)
             out.append({"method": m, "exists": False,

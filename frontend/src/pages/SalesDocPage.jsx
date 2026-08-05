@@ -1404,6 +1404,14 @@ function MethodProbePanel() {
                       <> · ключи: <code>{r.keys.join(', ')}</code>
                         {r.total != null && <> · записей {r.total}</>}</>
                     )}
+                    {r.exists && r.sample && (
+                      <details>
+                        <summary className="muted">пример записи</summary>
+                        <pre className="order-raw-json">
+                          {JSON.stringify(r.sample, null, 2)}
+                        </pre>
+                      </details>
+                    )}
                     {!r.exists && <span className="muted"> · {r.error}</span>}
                   </li>
                 ))}
