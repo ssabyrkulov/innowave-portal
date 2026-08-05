@@ -1125,6 +1125,9 @@ def reconcile_components(db: Session, date_from: date, date_to: date,
         # Реализации — только отгруженные, делятся по складу выбранной фирмы.
         "sales": collect(O, O.status.in_(sorted(salesdoc.SHIPPED_STATUSES)),
                          store_filter=True),
+        # Отгружено, но ещё не доставлено: баланс SalesDoc такие заказы
+        # долгом не считает, и разница на эту сумму — норма, а не ошибка.
+        "in_transit": collect(O, O.status == 2, store_filter=True),
         # Возвраты — из журнала операций, по клиенту (склада там нет).
         "returns": collect(P, P.txn == salesdoc.SHELF_RETURN_TXN),
         "payments": collect_payments(salesdoc.PAYMENT_TXN),

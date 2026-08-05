@@ -213,6 +213,13 @@ def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
     delta = round(row["sd_debt"] - row["our_debt"], 2)
     if abs(delta) < 1:
         return "ok", "сходится"
+    # Баланс SalesDoc считает долгом только доставленное: пока заказ в статусе
+    # «Отправлен», он в баланс не входит. Если разница ровно на эту сумму —
+    # расхождения нет, товар просто в пути.
+    transit = _sd_component(comp.get("in_transit", {"sd": {}, "code": {}}),
+                            row["sd_id"], row["code_1C"])
+    if transit and abs(round(delta + transit, 2)) < 1:
+        return "ok", "в пути"
     sd_sales = _sd_component(comp["sales"], row["sd_id"], row["code_1C"])
     sd_ret = _sd_component(comp["returns"], row["sd_id"], row["code_1C"])
     sd_pay = _sd_component(comp["payments"], row["sd_id"], row["code_1C"])
