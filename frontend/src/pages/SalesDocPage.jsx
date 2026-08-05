@@ -520,6 +520,9 @@ function ReconcileDetailModal({ row, onClose }) {
   // Построчные пары: какие именно документы остались без пары. Итог «не
   // проведены оплаты на 186 575» без этого не отвечал на вопрос «какие».
   const sdShip = (sd?.orders?.items || []).filter((o) => o.status !== 5)
+  // Отменённые не участвуют в сравнении, но прятать их молча нельзя: человек
+  // видит документ в журнале SalesDoc и спрашивает, куда он делся у нас.
+  const sdCancelled = (sd?.orders?.items || []).filter((o) => o.status === 5)
   const sdPay = sd?.payments?.items || []
   const shipPairs = useMemo(
     () => pairLists(cShip, sdShip, (x) => Number(x.amount || 0)),
@@ -623,6 +626,13 @@ function ReconcileDetailModal({ row, onClose }) {
                   muted: !o.counted,
                 }))}
               head={['Дата', 'Статус', 'Сумма']} />
+            {sdCancelled.length > 0 && (
+              <div className="muted sd-pay-diag">
+                Ещё {sdCancelled.length} отменённых реализаций (в суммы не идут):{' '}
+                {sdCancelled.map((o) =>
+                  `${fdateShort(o.date)} · ${money(o.amount)}`).join(', ')}.
+              </div>
+            )}
             {sd?.orders?.hidden_by_store > 0 && (
               <div className="muted sd-pay-diag">
                 Ещё {sd.orders.hidden_by_store} реализаций скрыто отбором по
