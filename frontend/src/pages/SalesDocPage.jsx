@@ -866,12 +866,14 @@ function ClientDebug({ row }) {
         <div className="an-grid">
           <AnRow label="В зеркале по этому клиенту"
             value={`реализаций ${data.mirror.orders} · оплат ${data.mirror.payments}`} />
+          {/* matched — записи, совпавшие хоть по одному ключу. Раньше здесь
+              складывались совпадения по SD_id и CS_id, а SalesDoc пишет туда
+              одно и то же значение — цифра выходила вдвое больше реальной. */}
           <AnRow label="SalesDoc отдаёт по этому клиенту"
-            value={`реализаций ${data.live.orders.by_sd_id + data.live.orders.by_cs_id}`
-              + ` · оплат ${data.live.payments.by_sd_id + data.live.payments.by_cs_id}`
-              + ` · возвратов ${data.live.defects.by_sd_id + data.live.defects.by_cs_id}`}
-            warn={data.live.payments.by_sd_id + data.live.payments.by_cs_id
-                  > data.mirror.payments} />
+            value={`реализаций ${data.live.orders.matched}`
+              + ` · оплат ${data.live.payments.matched}`
+              + ` · возвратов ${data.live.defects.matched}`}
+            warn={data.live.payments.matched > data.mirror.payments} />
           <AnRow label="Найдено по коду 1С"
             value={`реализаций ${data.live.orders.by_code_1c}`
               + ` · оплат ${data.live.payments.by_code_1c}`} />

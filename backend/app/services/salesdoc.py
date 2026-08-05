@@ -1032,6 +1032,9 @@ def client_debug(sd_id: str | None, code_1c: str | None,
 
     def hits(rows, getter, txn_of=None):
         by_sd = by_cs = by_code = 0
+        matched = 0  # записей, совпавших хоть по одному ключу — БЕЗ двойного
+        # счёта: SalesDoc пишет один и тот же идентификатор и в SD_id, и в
+        # CS_id, поэтому сумма по ключам вдвое больше реального числа записей.
         samples: list = []
         # Разбивка по видам операций: баланс SalesDoc двигают не только оплаты,
         # но и списание долга, начальный остаток, конверсия. Когда операции
@@ -1053,6 +1056,7 @@ def client_debug(sd_id: str | None, code_1c: str | None,
                 by_code += 1
                 match = True
             if match:
+                matched += 1
                 if len(samples) < 5:
                     samples.append(cli)
                 if txn_of is not None:
@@ -1061,7 +1065,8 @@ def client_debug(sd_id: str | None, code_1c: str | None,
                     d = by_txn.setdefault(name, {"count": 0, "sum": 0.0})
                     d["count"] += 1
                     d["sum"] += float(r.get("amount") or 0)
-        out = {"by_sd_id": by_sd, "by_cs_id": by_cs, "by_code_1c": by_code,
+        out = {"matched": matched,
+               "by_sd_id": by_sd, "by_cs_id": by_cs, "by_code_1c": by_code,
                "scanned": len(rows), "client_refs": samples}
         if txn_of is not None:
             out["by_txn"] = [{"txn": k, **v} for k, v in
