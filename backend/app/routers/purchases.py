@@ -99,6 +99,48 @@ def import_purchases_workbook(db: Session, content: bytes, filename: str,
     return {"added": len(parsed)}
 
 
+LINES_CAP = 3000
+
+
+@router.get("/lines")
+def purchases_lines(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "all",
+):
+    """Построчная детализация закупок — как в файле, без группировок.
+
+    Фильтр и сортировка делаются на клиенте: строк немного (сотни), а живой
+    поиск без походов на сервер удобнее."""
+    q = db.query(models.Purchase)
+    o = models.normalize_org(org) if (org or "").lower() in models.ORGS else None
+    if o:
+        q = q.filter(models.Purchase.organization == o)
+    rows = q.order_by(models.Purchase.date.desc(),
+                      models.Purchase.doc_number.desc()).limit(LINES_CAP).all()
+    return {
+        "total": q.count(),
+        "cap": LINES_CAP,
+        "items": [
+            {
+                "date": p.date.isoformat(),
+                "doc_number": p.doc_number,
+                "supplier": p.supplier,
+                "warehouse": p.warehouse,
+                "product": p.product,
+                "qty": float(p.qty) if p.qty is not None else None,
+                "unit": p.unit,
+                "price": float(p.price) if p.price is not None else None,
+                "amount_kgs": float(p.amount_kgs),
+                "currency": p.currency,
+                "doc_total": float(p.doc_total) if p.doc_total is not None else None,
+                "account": p.account,
+            }
+            for p in rows
+        ],
+    }
+
+
 @router.get("/summary")
 def purchases_summary(
     db: Session = Depends(get_db),

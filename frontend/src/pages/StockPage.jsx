@@ -149,15 +149,47 @@ export default function StockPage() {
 // Закупки (поступления товаров, ВыгрузкаПост): по поставщикам и годам.
 // Первый шаг товарного контура — дальше на этих данных строятся кредиторка
 // и товарный баланс «приход − расход = остаток».
+const SORTS = {
+  date_desc: { label: 'Дата ↓ (новые)', fn: (a, b) => b.date.localeCompare(a.date) },
+  date_asc: { label: 'Дата ↑ (старые)', fn: (a, b) => a.date.localeCompare(b.date) },
+  amount_desc: { label: 'Сумма ↓', fn: (a, b) => b.amount_kgs - a.amount_kgs },
+  qty_desc: { label: 'Количество ↓', fn: (a, b) => (b.qty || 0) - (a.qty || 0) },
+  price_desc: { label: 'Цена ↓', fn: (a, b) => (b.price || 0) - (a.price || 0) },
+  supplier: { label: 'Поставщик А-Я', fn: (a, b) => (a.supplier || '').localeCompare(b.supplier || '') },
+  product: { label: 'Номенклатура А-Я', fn: (a, b) => (a.product || '').localeCompare(b.product || '') },
+}
+
 function PurchasesPanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)
+  const [lines, setLines] = useState(null)
   const [error, setError] = useState(null)
+  const [q, setQ] = useState('')
+  const [sort, setSort] = useState('date_desc')
 
   function load() {
     api.purchasesSummary().then(setData).catch((e) => setError(e.message))
+    api.purchasesLines().then(setLines).catch((e) => setError(e.message))
   }
   function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  // Фильтр ищет по номенклатуре, поставщику, складу и номеру одновременно.
+  const visible = useMemo(() => {
+    let items = lines?.items || []
+    const s = q.trim().toLowerCase()
+    if (s) {
+      items = items.filter((r) =>
+        [r.product, r.supplier, r.warehouse, r.doc_number]
+          .some((v) => (v || '').toLowerCase().includes(s)))
+    }
+    return [...items].sort(SORTS[sort].fn)
+  }, [lines, q, sort])
+
+  const visTotal = useMemo(
+    () => visible.reduce((a, r) => ({ amount: a.amount + r.amount_kgs, qty: a.qty + (r.qty || 0) }),
+      { amount: 0, qty: 0 }),
+    [visible]
+  )
 
   return (
     <div className="chart-card store-map">
@@ -202,6 +234,66 @@ function PurchasesPanel() {
                   </tbody>
                 </table>
               </div>
+
+              {/* --- Построчная детализация: как в файле, без группировок --- */}
+              {lines && (
+                <>
+                  <div className="rc-col-title" style={{ marginTop: 14 }}>
+                    Детализация по строкам
+                  </div>
+                  <div className="rc-period">
+                    <input className="filter-select" value={q}
+                      placeholder="поиск: товар / поставщик / склад / №"
+                      onChange={(e) => setQ(e.target.value)} />
+                    <select className="filter-select" value={sort}
+                      onChange={(e) => setSort(e.target.value)}>
+                      {Object.entries(SORTS).map(([k, v]) => (
+                        <option key={k} value={k}>{v.label}</option>
+                      ))}
+                    </select>
+                    <span className="muted">
+                      {visible.length} строк · {fmtQty(visTotal.qty)} шт ·{' '}
+                      {formatMoney(visTotal.amount)} KGS
+                    </span>
+                  </div>
+                  <div className="table-wrap rc-table sc-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Дата</th><th>№</th><th>Поставщик</th><th>Склад</th>
+                          <th>Номенклатура</th>
+                          <th className="num">Кол-во</th><th>Ед.</th>
+                          <th className="num">Цена</th><th>Вал.</th>
+                          <th className="num">Сумма, KGS</th>
+                          <th className="num">Итог дока</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visible.map((r, i) => (
+                          <tr key={i}>
+                            <td>{r.date.split('-').reverse().join('.')}</td>
+                            <td>{r.doc_number || '—'}</td>
+                            <td>{r.supplier}</td>
+                            <td>{r.warehouse || '—'}</td>
+                            <td>{r.product || '—'}</td>
+                            <td className="num">{r.qty == null ? '—' : fmtQty(r.qty)}</td>
+                            <td>{r.unit || '—'}</td>
+                            <td className="num">{r.price == null ? '—' : r.price}</td>
+                            <td>{r.currency}</td>
+                            <td className="num">{formatMoney(r.amount_kgs)}</td>
+                            <td className="num">
+                              {r.doc_total == null ? '—' : `${formatMoney(r.doc_total)} ${r.currency}`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {lines.total > lines.cap && (
+                    <p className="muted">Показаны первые {lines.cap} из {lines.total} строк.</p>
+                  )}
+                </>
+              )}
             </>
           )}
         </div>
