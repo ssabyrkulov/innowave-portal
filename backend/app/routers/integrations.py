@@ -142,7 +142,7 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # «Поступление ТОВАРОВ» — закупка у поставщика, а не деньги. Правило стоит
     # раньше денежного «поступления», иначе закупки грузились бы как оплаты.
     if has("поступлен", "postuplen") and has("товар", "tovar"):
-        return "unsupported"
+        return "purchases"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
@@ -169,6 +169,12 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     if has("исходящ", "ishodyash", "расход", "rashod",
            "платеж", "платёж", "platej", "poruchenie"):
         return "expense"  # банк или касса — решается ниже по слову в имени
+    # Короткое «Пост» (ВыгрузкаПост) — тоже закупки. Правило обязано стоять
+    # РАНЬШЕ старого токена «ост»: иначе «…Пост» распознавался как остатки
+    # товаров, и закупки летели в чужой импортёр (он, к счастью, отбивался
+    # по колонкам, но файл вечно висел в ошибках автосинка).
+    if has("пост", "post") and not has("поставщик", "postavshik"):
+        return "purchases"
 
     # --- Продажи ---
     if "реал" in name:
@@ -353,6 +359,9 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         result = import_receipts_workbook(
             db, content, auto_name, robot.id, kind=rcpt_kind, org=org
         )
+    elif kind == "purchases":
+        from .purchases import import_purchases_workbook
+        result = import_purchases_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "return_docs":
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":

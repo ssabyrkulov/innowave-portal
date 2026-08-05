@@ -173,6 +173,7 @@ export const api = {
     ).toString()
     return request(`/salesdoc/client-debug${qs ? `?${qs}` : ''}`)
   },
+  purchasesSummary: () => request('/purchases/summary'),
   taxSummary: () => request('/tax/summary'),
   taxCompare: () => request('/tax/compare'),
   taxDocs: (kind) => request(`/tax/docs?kind=${encodeURIComponent(kind)}`),

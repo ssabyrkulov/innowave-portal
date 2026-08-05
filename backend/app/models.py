@@ -106,6 +106,31 @@ class Sale(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class Purchase(Base):
+    """Строка поступления товаров из 1С (закупка у поставщика, ВыгрузкаПост).
+
+    Цена и итог документа — в валюте закупки (у импортных поставок USD),
+    сумма строки 1С отдаёт уже пересчитанной в сомы."""
+
+    __tablename__ = "purchases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    supplier: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    price: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    amount_kgs: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    doc_total: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    account: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Receipt(Base):
     """Поступление денежных средств из 1С (оплаты клиентов и прочее)."""
 

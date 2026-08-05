@@ -140,6 +140,72 @@ export default function StockPage() {
           </div>
         </>
       )}
+
+      <PurchasesPanel />
+    </div>
+  )
+}
+
+// Закупки (поступления товаров, ВыгрузкаПост): по поставщикам и годам.
+// Первый шаг товарного контура — дальше на этих данных строятся кредиторка
+// и товарный баланс «приход − расход = остаток».
+function PurchasesPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+
+  function load() {
+    api.purchasesSummary().then(setData).catch((e) => setError(e.message))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 📥 Закупки (поступления товаров)
+      </button>
+      {open && (
+        <div className="store-map-body">
+          {error && <div className="error">{error}</div>}
+          {data === null && !error && <div className="muted">Загрузка…</div>}
+          {data && data.rows_total === 0 && (
+            <div className="muted">Закупок пока нет — файл ВыгрузкаПост
+              подтянется автосинком.</div>
+          )}
+          {data && data.rows_total > 0 && (
+            <>
+              <p>
+                Документов: <b>{data.docs_total}</b> · строк {data.rows_total} ·
+                на <b>{formatMoney(data.amount_kgs)} KGS</b>
+                {' '}· по годам:{' '}
+                {data.by_year.map((y) => `${y.year}: ${formatMoney(y.amount_kgs)}`).join(' · ')}
+              </p>
+              <div className="table-wrap rc-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Поставщик</th><th className="num">Док.</th>
+                      <th>Валюта</th><th>Последняя</th>
+                      <th className="num">Сумма, KGS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.suppliers.map((s, i) => (
+                      <tr key={i}>
+                        <td>{s.supplier}</td>
+                        <td className="num">{s.docs}</td>
+                        <td>{s.currencies.join(', ')}</td>
+                        <td>{(s.last_date || '').split('-').reverse().join('.')}</td>
+                        <td className="num">{formatMoney(s.amount_kgs)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
