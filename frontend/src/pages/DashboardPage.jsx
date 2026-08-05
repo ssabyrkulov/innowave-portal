@@ -145,7 +145,10 @@ function CalcStockCard() {
 
   if (error || !data) return null
   const rows = data.rows.filter((r) => !r.unmatched)
-  const shown = showAll ? rows : rows.slice(0, 8)
+  // Порядок задан по группам товаров, поэтому первые строки — это только
+  // подгузники ONE: обрезать список на восьми значит спрятать все остальные
+  // группы. Показываем целиком, сворачивание оставляем на крайний случай.
+  const shown = showAll || rows.length <= 25 ? rows : rows.slice(0, 25)
   const fmt = (v) => Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })
   if (rows.length === 0) return null
   return (
@@ -189,7 +192,7 @@ function CalcStockCard() {
           </tfoot>
         </table>
       </div>
-      {rows.length > 8 && (
+      {rows.length > 25 && (
         <button className="btn btn-ghost btn-sm" onClick={() => setShowAll(!showAll)}>
           {showAll ? 'Свернуть' : `Показать все ${rows.length}`}
         </button>

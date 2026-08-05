@@ -714,7 +714,16 @@ function ReconcileDetailModal({ row, onClose }) {
                 не отдаёт в выгрузках, — и показывает их сумму. */}
             {sd?.balance?.sd != null && Math.abs(sd.balance.diff) >= 0.5 && (
               <div className="note-readonly sd-warn">
-                {sd.balance.in_balance ? (
+                {sd.balance.explained_by_transit ? (
+                  <>
+                    Баланс SalesDoc <b>{money(sd.balance.sd)}</b>, а по операциям
+                    выходит <b>{money(sd.balance.by_ops)}</b>. Разница ровно
+                    равна сумме заказов в статусе «Отправлен» —{' '}
+                    <b>{money(sd.balance.in_transit)}</b>: SalesDoc считает
+                    долгом только доставленное. Документы на месте, дело в
+                    статусе.
+                  </>
+                ) : sd.balance.in_balance ? (
                   <>
                     Баланс SalesDoc <b>{money(sd.balance.sd)}</b>, а по его
                     операциям выходит <b>{money(sd.balance.by_ops)}</b> — разница{' '}

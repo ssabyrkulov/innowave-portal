@@ -165,7 +165,25 @@ def stock_calc(
             # что имена не склеились; честно помечаем вместо тихого минуса.
             "unmatched": not e["has_purchase"] and e["sold"] > 0,
         })
-    rows.sort(key=lambda x: -x["calc_qty"])
+    # Порядок как в голове у владельца, а не по алфавиту или объёму:
+    # подгузники ONE (обычные, затем mini), StarKid, туалетная бумага,
+    # салфетки, Splash, остальное. Внутри группы — по размеру-названию.
+    def group_of(name: str) -> int:
+        s = (name or "").lower()
+        one = "one" in s
+        if "подгуз" in s and one:
+            return 1 if "mini" not in s and "мини" not in s else 2
+        if "подгуз" in s and "starkid" in s:
+            return 3
+        if "бумаг" in s and one:
+            return 4
+        if "салфет" in s and one:
+            return 5
+        if "splash" in s or "сплэш" in s or "сплеш" in s:
+            return 6
+        return 7
+
+    rows.sort(key=lambda x: (group_of(x["product"]), x["product"] or ""))
     return {
         "org": (org or "all"),
         "rows": rows,

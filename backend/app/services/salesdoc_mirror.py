@@ -1025,12 +1025,24 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
             code_1c=str(code_1c)).first()
     by_ops = round(o_total - p_total - r_total, 2)
     sd_balance = round(float(cli_row.debt), 2) if cli_row else None
+    # Сумма отгруженного, но ещё не доставленного. Похоже, SalesDoc считает
+    # долгом только доставленные заказы: если разница баланса ровно на эту
+    # сумму, расхождение объясняется статусом, а не потерянными документами.
+    in_transit = round(sum(
+        o["amount"] for o in orders if o["status"] == 2), 2)
 
     return {
         "balance": {
             "sd": sd_balance,
             "in_balance": bool(cli_row.in_balance) if cli_row else False,
             "by_ops": by_ops,
+            "in_transit": in_transit,
+            # Разница объясняется статусом «Отправлен», а не пропажей
+            # документов: баланс SalesDoc просто ещё не считает их долгом.
+            "explained_by_transit": (
+                sd_balance is not None and in_transit > 0
+                and abs((sd_balance - by_ops) + in_transit) < 0.5
+            ),
             # Разница = сумма документов, известных балансу SalesDoc, но
             # отсутствующих в его журналах.
             "diff": None if sd_balance is None else round(sd_balance - by_ops, 2),
