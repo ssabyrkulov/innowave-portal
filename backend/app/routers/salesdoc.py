@@ -1003,6 +1003,7 @@ def shipments_compare(
         by_key: dict = {}      # по номеру накладной
         by_tail: dict = {}     # по числовому хвосту номера
         by_client: dict = {}   # по (клиент, дата) — когда номера нет
+        by_client_any: dict = {}  # по клиенту без даты — последняя надежда
         for r in rows_in:
             k = _doc_key(r["doc_number"])
             if k:
@@ -1013,10 +1014,11 @@ def shipments_compare(
             for ck in {r["client_sd_id"], r["_ckey"]}:
                 if ck:
                     by_client.setdefault((ck, r["date"]), []).append(r)
-        return by_key, by_tail, by_client
+                    by_client_any.setdefault(ck, []).append(r)
+        return by_key, by_tail, by_client, by_client_any
 
-    sd_by_key, sd_by_tail, sd_by_client = build_indexes(sd_list)
-    new_by_key, new_by_tail, new_by_client = build_indexes(new_list)
+    sd_by_key, sd_by_tail, sd_by_client, sd_by_client_any = build_indexes(sd_list)
+    new_by_key, new_by_tail, new_by_client, new_by_client_any = build_indexes(new_list)
 
     used: set = set()
     rows: list[dict] = []
@@ -1050,6 +1052,19 @@ def shipments_compare(
                     break
             pair = pick(pool, d["amount"])
             how = "клиент + дата" if pair else None
+        if pair is None:
+            # Дату документа в SalesDoc могли поменять при правке (у заказов
+            # встречается «изменил Admin» через недели после отгрузки) — тогда
+            # окно в несколько дней не помогает. Последняя попытка: тот же
+            # клиент и ровно та же сумма, дата любая. Совпадение суммы до
+            # копеек делает такую пару достаточно надёжной.
+            for ck in {_extract_sd_id(d["client"]), _match_key(d["client"])}:
+                if not ck:
+                    continue
+                cand = pick(sd_by_client_any.get(ck, []), d["amount"])
+                if cand is not None and abs(cand["amount"] - d["amount"]) < 0.5:
+                    pair, how = cand, "клиент + сумма"
+                    break
         # Среди отгруженных пары нет — ищем в «Новых»: заявка может просто
         # висеть не проведённой.
         stuck = None
@@ -1069,6 +1084,14 @@ def shipments_compare(
                            and id(r) not in used for r in pool2):
                         break
                 stuck = pick(pool2, d["amount"])
+                if stuck is None:  # та же поблажка по дате, что и выше
+                    for ck in {_extract_sd_id(d["client"]), _match_key(d["client"])}:
+                        if not ck:
+                            continue
+                        cand = pick(new_by_client_any.get(ck, []), d["amount"])
+                        if cand is not None and abs(cand["amount"] - d["amount"]) < 0.5:
+                            stuck = cand
+                            break
         if pair is not None:
             used.add(id(pair))
             if how == "номер":
@@ -1084,6 +1107,8 @@ def shipments_compare(
             "doc_number": d["doc_number"],
             "our_warehouse": d["warehouse"],
             "our_amount": d["amount"],
+            # Дата пары в SalesDoc: если она разъехалась с 1С, это видно сразу.
+            "sd_date": pair and pair["date"],
             "sd_doc": pair and (pair["doc_number"] or pair["sd_id"]),
             "sd_store": pair and pair["store"],
             "sd_status": pair and pair["status_label"],
@@ -1453,10 +1478,13 @@ def api_probe(
         # клиенту или с другой суммой — она всё равно найдётся.
         dn = (doc_number or "").strip().lower()
         if dn:
-            hits = [r for r in pool if dn in {
-                str(r.get(k) or "").strip().lower()
+            # Ищем вхождением, а не точным равенством: в шапке SalesDoc номер
+            # «1131», а идентификатор — «d0_1131». Требуя точного совпадения,
+            # поиск не находил документ ни по одному из двух написаний.
+            hits = [r for r in pool if any(
+                dn in str(r.get(k) or "").strip().lower()
                 for k in ("invoiceNumber", "code_1C", "SD_id", "CS_id")
-            }]
+            )]
             out["by_number"] = {"query": doc_number, "count": len(hits),
                                 "orders": hits[:3]}
             if hits:

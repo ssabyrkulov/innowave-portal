@@ -1345,7 +1345,16 @@ function ShipmentsComparePanel() {
                         const [label, cls2] = VERDICT[r.verdict]
                         return (
                           <tr key={i}>
-                            <td>{fdateShort(r.date)}</td>
+                            <td>
+                              {fdateShort(r.date)}
+                              {/* Дата в SalesDoc разъехалась с 1С — обычное
+                                  дело после правки документа админом. */}
+                              {r.sd_date && r.sd_date !== r.date && (
+                                <div className="rc-note rc-note-warn">
+                                  в SD: {fdateShort(r.sd_date)}
+                                </div>
+                              )}
+                            </td>
                             <td>{r.client}
                               {/* Номера документов с обеих сторон — мелко под
                                   клиентом, чтобы не раздувать таблицу. */}
