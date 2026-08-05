@@ -473,9 +473,6 @@ def reconcile_debt(
     if dirty:
         db.commit()
 
-    if only_diff:
-        rows = [r for r in rows if abs(r["diff"]) >= 0.5]
-
     # «Причина расхождения» по всем строкам сразу — одна массовая выгрузка из
     # SalesDoc (заказы/возвраты/оплаты), группируем по клиенту. Считаем только
     # по запросу: обычная загрузка дебиторки остаётся быстрой.
@@ -483,6 +480,12 @@ def reconcile_debt(
     # базе, поэтому идёт всегда, без отдельной кнопки. Пока зеркало не
     # наполнено (первые секунды после старта), колонка просто пустая — список
     # из-за неё не тормозит.
+    #
+    # ВАЖНО: считаем ДО отбора «только расхождения». Документы, скрытые от
+    # выгрузки, баланс SalesDoc учитывает — поэтому долги сходятся, и такие
+    # точки в отфильтрованный список не попадают. Их масштаб виден только по
+    # полному списку.
+    hidden_rows: list[dict] = []
     if with_reason and salesdoc_mirror.status(db)["ready"]:
         df, dt = salesdoc.reason_window()
         comp = salesdoc_mirror.reconcile_components(
@@ -493,6 +496,17 @@ def reconcile_debt(
             lvl, txt = _diagnose_reason(r, comp)
             r["reason_level"] = lvl
             r["reason"] = txt
+            if r["in_sd"] and r["in_1c"] and r.get("sd_hidden", 0) >= 500:
+                hidden_rows.append({
+                    "name": r["name"],
+                    "sd_id": r["sd_id"],
+                    "amount": r["sd_hidden"],
+                    "reason": txt,
+                })
+        hidden_rows.sort(key=lambda x: -x["amount"])
+
+    if only_diff:
+        rows = [r for r in rows if abs(r["diff"]) >= 0.5]
 
     our_total = round(sum(r["our_debt"] for r in rows), 2)
     sd_total = round(sum(r["sd_debt"] for r in rows), 2)
@@ -511,6 +525,13 @@ def reconcile_debt(
         # Склады без привязки к фирме: их реализации попадают в обе фирмы,
         # поэтому о них честно предупреждаем.
         "unmapped_stores": _unmapped_stores(db),
+        # Документы, которые SalesDoc учитывает в балансе, но не отдаёт в
+        # выгрузке. Считается по всем точкам, а не только по видимым в списке.
+        "hidden": {
+            "clients": len(hidden_rows),
+            "amount": round(sum(h["amount"] for h in hidden_rows), 2),
+            "top": hidden_rows[:20],
+        },
         "rows": rows,
     }
 

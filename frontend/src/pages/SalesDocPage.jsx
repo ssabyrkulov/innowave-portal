@@ -275,6 +275,12 @@ export default function SalesDocPage() {
 
       <MatchingPanel onLinked={() => loadAll(range, onlyDiff)} />
 
+      {/* Документы, которые SalesDoc держит в балансе, но не отдаёт в
+          выгрузке. Считаются по всем точкам: у таких клиентов долги сходятся,
+          поэтому в отфильтрованный список расхождений они не попадают, и без
+          этой сводки масштаб проблемы не виден вовсе. */}
+      {debt?.hidden?.clients > 0 && <HiddenDocsBanner hidden={debt.hidden} />}
+
       {debt?.unmapped_stores?.length > 0 && (
         <p className="note-readonly sd-warn">
           Складам не задана фирма: <b>{debt.unmapped_stores.join(', ')}</b>. Их
@@ -451,6 +457,44 @@ export default function SalesDocPage() {
 
       {detail && (
         <ReconcileDetailModal row={detail} onClose={() => setDetail(null)} />
+      )}
+    </div>
+  )
+}
+
+// Сводка по документам, которые SalesDoc учитывает в балансе, но не отдаёт в
+// выгрузке — типичный след деактивированного агента.
+function HiddenDocsBanner({ hidden }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="note-readonly sd-warn">
+      <b>Скрыто от выгрузки: {hidden.clients} точек на {money(hidden.amount)}.</b>{' '}
+      Эти документы SalesDoc учитывает в балансе, но не отдаёт по API — так
+      ведут себя документы деактивированных агентов. Долги при этом сходятся,
+      поэтому в списке расхождений таких точек не видно.{' '}
+      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
+        {open ? 'Свернуть' : 'Показать точки'}
+      </button>
+      {open && (
+        <div className="table-wrap rc-table">
+          <table>
+            <thead>
+              <tr><th>Точка</th><th>Причина</th><th className="num">Скрыто</th></tr>
+            </thead>
+            <tbody>
+              {hidden.top.map((h, i) => (
+                <tr key={i}>
+                  <td>{h.name}</td>
+                  <td>{h.reason}</td>
+                  <td className="num">{money(h.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {hidden.clients > hidden.top.length && (
+            <p className="muted">Показаны первые {hidden.top.length} из {hidden.clients}.</p>
+          )}
+        </div>
       )}
     </div>
   )
