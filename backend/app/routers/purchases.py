@@ -99,6 +99,86 @@ def import_purchases_workbook(db: Session, content: bytes, filename: str,
     return {"added": len(parsed)}
 
 
+import re
+
+
+def _norm_product(s: str | None) -> str:
+    """Ключ сопоставления номенклатуры между закупками и продажами.
+
+    Названия пишутся по-разному: закупка «Подгузники StarKid размер L*4»,
+    продажа «Детские подгузники StarKid размер L». Убираем фасовку «*N»,
+    слово «детские», пунктуацию и регистр — остальное должно совпасть."""
+    s = (s or "").lower().replace("ё", "е")
+    s = re.sub(r"\*\s*\d+", " ", s)
+    s = re.sub(r"\bдетские\b", " ", s)
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+@router.get("/stock-calc")
+def stock_calc(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "all",
+):
+    """Расчётные остатки: поступило − продано + возвраты, по номенклатуре.
+
+    Списания и инвентаризации пока не выгружаются, поэтому это верхняя оценка
+    остатка; когда появится фактическая выгрузка остатков, разница между
+    расчётом и фактом покажет объём списаний и недостач. Продажи Innowave
+    выгружаются документами без товарных строк — расчёт работает там, где
+    продажи построчные."""
+    def scope(q, model):
+        return models.org_scope(q, model, org)
+
+    agg: dict[str, dict] = {}
+
+    def entry(product):
+        key = _norm_product(product)
+        e = agg.get(key)
+        if e is None:
+            e = agg[key] = {"name": product or "(без названия)",
+                            "purchased": 0.0, "sold": 0.0, "returned": 0.0,
+                            "has_purchase": False}
+        return e
+
+    for p in scope(db.query(models.Purchase), models.Purchase).all():
+        e = entry(p.product)
+        e["purchased"] += float(p.qty or 0)
+        e["has_purchase"] = True
+        e["name"] = p.product or e["name"]  # имя из закупки — каноничное
+    for s in scope(db.query(models.Sale), models.Sale).all():
+        entry(s.product)["sold"] += float(s.qty or 0)
+    for r in scope(db.query(models.ReturnLine), models.ReturnLine).all():
+        entry(r.product)["returned"] += float(r.qty or 0)
+
+    rows = []
+    for e in agg.values():
+        calc = e["purchased"] - e["sold"] + e["returned"]
+        rows.append({
+            "product": e["name"],
+            "purchased": round(e["purchased"], 1),
+            "sold": round(e["sold"], 1),
+            "returned": round(e["returned"], 1),
+            "calc_qty": round(calc, 1),
+            # Продано то, чего не закупали (по имени) — почти всегда значит,
+            # что имена не склеились; честно помечаем вместо тихого минуса.
+            "unmatched": not e["has_purchase"] and e["sold"] > 0,
+        })
+    rows.sort(key=lambda x: -x["calc_qty"])
+    return {
+        "org": (org or "all"),
+        "rows": rows,
+        "totals": {
+            "purchased": round(sum(r["purchased"] for r in rows), 1),
+            "sold": round(sum(r["sold"] for r in rows), 1),
+            "returned": round(sum(r["returned"] for r in rows), 1),
+            "calc_qty": round(sum(r["calc_qty"] for r in rows), 1),
+        },
+        "unmatched_count": sum(1 for r in rows if r["unmatched"]),
+    }
+
+
 LINES_CAP = 3000
 
 

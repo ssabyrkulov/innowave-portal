@@ -153,6 +153,25 @@ class Receipt(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ReturnLine(Base):
+    """Товарная строка возврата от покупателя (из построчного ТовВозв).
+
+    ReturnDoc хранит возвраты суммами по клиентам — для дебиторки этого
+    достаточно, но для расчётного остатка нужен товар и количество: возврат
+    возвращает товар на склад."""
+
+    __tablename__ = "return_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    client: Mapped[str | None] = mapped_column(String, nullable=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Expense(Base):
     """Расход денежных средств: исходящие платёжки (банк) и РКО (касса)."""
 

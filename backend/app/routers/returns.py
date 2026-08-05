@@ -52,6 +52,14 @@ def import_return_lines_workbook(
 
     # 2. Возвраты по документам: один ReturnDoc на документ по СуммаДокумента.
     db.query(models.ReturnDoc).filter(models.ReturnDoc.organization == org).delete()
+    # Товарные строки возвратов — для расчётного остатка (возврат возвращает
+    # товар на склад). Заменяются целиком вместе с документами.
+    db.query(models.ReturnLine).filter(models.ReturnLine.organization == org).delete()
+    for p in parsed:
+        db.add(models.ReturnLine(
+            organization=org, date=p["date"], client=p.get("client"),
+            product=p.get("product"), qty=p.get("qty"), amount=p.get("amount"),
+        ))
     db.flush()
     seen_docs: set = set()
     fallback: dict[tuple, dict] = {}  # документы без номера/итога — по строкам

@@ -119,10 +119,90 @@ export default function DashboardPage() {
   if (error) return <div className="error">{error}</div>
   if (!data) return <div className="center muted">Загрузка…</div>
 
-  return isMobile ? (
-    <MobileDash data={data} user={user} />
-  ) : (
-    <DesktopDash data={data} user={user} />
+  return (
+    <>
+      {isMobile ? (
+        <MobileDash data={data} user={user} />
+      ) : (
+        <DesktopDash data={data} user={user} />
+      )}
+      <CalcStockCard />
+    </>
+  )
+}
+
+// Расчётные остатки: поступило − продано + возвраты. Фактической выгрузки
+// остатков из 1С пока нет (файл пустой), поэтому расчёт — единственный
+// источник; когда факт появится, разница с ним покажет списания и недостачи.
+function CalcStockCard() {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [showAll, setShowAll] = useState(false)
+
+  useEffect(() => {
+    api.stockCalc().then(setData).catch((e) => setError(e.message))
+  }, [])
+
+  if (error || !data) return null
+  const rows = data.rows.filter((r) => !r.unmatched)
+  const shown = showAll ? rows : rows.slice(0, 8)
+  const fmt = (v) => Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })
+  if (rows.length === 0) return null
+  return (
+    <div className="chart-card">
+      <div className="sd-card-title">
+        📦 Расчётные остатки товаров
+        <span className="muted"> · поступило − продано + возвраты · без списаний</span>
+      </div>
+      <div className="table-wrap rc-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Номенклатура</th>
+              <th className="num">Поступило</th>
+              <th className="num">Продано</th>
+              <th className="num">Возвраты</th>
+              <th className="num">Расчётный остаток</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((r, i) => (
+              <tr key={i}>
+                <td>{r.product}</td>
+                <td className="num">{fmt(r.purchased)}</td>
+                <td className="num">{fmt(r.sold)}</td>
+                <td className="num">{fmt(r.returned)}</td>
+                <td className={`num ${r.calc_qty < 0 ? 'neg' : ''}`}>
+                  <b>{fmt(r.calc_qty)}</b>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td><b>Итого</b></td>
+              <td className="num"><b>{fmt(data.totals.purchased)}</b></td>
+              <td className="num"><b>{fmt(data.totals.sold)}</b></td>
+              <td className="num"><b>{fmt(data.totals.returned)}</b></td>
+              <td className="num"><b>{fmt(data.totals.calc_qty)}</b></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {rows.length > 8 && (
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowAll(!showAll)}>
+          {showAll ? 'Свернуть' : `Показать все ${rows.length}`}
+        </button>
+      )}
+      {data.unmatched_count > 0 && (
+        <p className="muted">
+          Ещё {data.unmatched_count} позиций продаж не сопоставились с закупками
+          по названию — они не в счёте. Отрицательный остаток обычно значит,
+          что продано больше, чем закуплено по этому имени (разные написания
+          номенклатуры), либо не выгружены списания.
+        </p>
+      )}
+    </div>
   )
 }
 
