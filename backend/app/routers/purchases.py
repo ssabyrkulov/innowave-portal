@@ -177,13 +177,28 @@ def stock_calc(
             return 3
         if "бумаг" in s and one:
             return 4
-        if "салфет" in s and one:
+        # Салфетки и бумажные полотенца — одна группа: это один вид товара.
+        if ("салфет" in s or "полотенц" in s) and one:
             return 5
         if "splash" in s or "сплэш" in s or "сплеш" in s:
             return 6
         return 7
 
-    rows.sort(key=lambda x: (group_of(x["product"]), x["product"] or ""))
+    # Внутри группы — по размеру, а не по алфавиту: NB, S, M, L, XL, XXL.
+    # Границы слова обязательны, иначе «L» находится внутри «XL», а «S» —
+    # внутри «StarKid».
+    size_rank = {"nb": 0, "s": 1, "m": 2, "l": 3, "xl": 4, "xxl": 5}
+
+    def size_of(name: str) -> int:
+        s = (name or "").lower()
+        for tok in ("xxl", "xl", "nb", "s", "m", "l"):  # от длинных к коротким
+            if re.search(rf"\b{tok}\b", s):
+                return size_rank[tok]
+        return 99  # без размера — после размерных
+
+    rows.sort(key=lambda x: (group_of(x["product"]),
+                             size_of(x["product"]),
+                             x["product"] or ""))
     return {
         "org": (org or "all"),
         "rows": rows,
