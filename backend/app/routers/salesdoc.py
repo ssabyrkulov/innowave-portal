@@ -1001,8 +1001,19 @@ def shipments_compare(
         how = "номер" if pair else None
         if pair is None:
             ckeys = {_extract_sd_id(d["client"]), _match_key(d["client"])}
-            pool = [r for ck in ckeys if ck
-                    for r in sd_by_client.get((ck, d["date"]), [])]
+            # Даты SalesDoc сдвинуты относительно 1С на день-два (dateDocument
+            # проставляется при проведении) — ищем с допуском, от ближней даты
+            # к дальней, и останавливаемся, как только нашли точную сумму.
+            base = date.fromisoformat(d["date"])
+            pool = []
+            for delta in (0, 1, -1, 2, -2, 3, -3):
+                dd = (base + timedelta(days=delta)).isoformat()
+                for ck in ckeys:
+                    if ck:
+                        pool.extend(sd_by_client.get((ck, dd), []))
+                if any(abs(r["amount"] - d["amount"]) < 0.5
+                       and id(r) not in used for r in pool):
+                    break
             pair = pick(pool, d["amount"])
             how = "клиент + дата" if pair else None
         if pair is not None:
