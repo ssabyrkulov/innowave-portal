@@ -1353,6 +1353,24 @@ def api_probe(
                 "документы выпадают из любого запроса с периодом. Причина "
                 "найдена — фильтровать журнал по датам нельзя")
 
+        # --- 1в. Филиал: не он ли отсекает документы ---
+        # Если в настройках задан filial_id, мы подставляем его в каждый
+        # запрос — и документы других филиалов просто не приходят. Это надо
+        # исключить прежде, чем винить API.
+        from ..config import settings as _st
+        out["filial"] = {"configured": _st.salesdoc_filial or None}
+        if _st.salesdoc_filial:
+            _, pg_nf = salesdoc.call("getOrder", {"limit": 1, "page": 1,
+                                                  "filter": no_period_filter},
+                                     with_filial=False)
+            nf_total = int((pg_nf or {}).get("total") or 0)
+            out["filial"]["without_filial_total"] = nf_total
+            if nf_total > np_total:
+                out["verdicts"].append(
+                    f"БЕЗ филиала приходит {nf_total} документов, с филиалом "
+                    f"{np_total}. Причина найдена: настройка SALESDOC_FILIAL "
+                    "отсекает документы других филиалов — её нужно убрать")
+
         # --- 2. Одна гигантская страница против пагинации ---
         result, _pg2 = salesdoc.call("getOrder", {"limit": 5000, "page": 1,
                                                   "filter": base_filter})

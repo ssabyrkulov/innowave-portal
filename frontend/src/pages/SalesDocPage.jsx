@@ -1672,6 +1672,17 @@ function ApiProbePanel() {
               {data.verdicts.map((v, i) => (
                 <div key={i} className="why-verdict">{v}</div>
               ))}
+              {data.filial && (
+                <div>
+                  <b>Филиал в настройках:</b>{' '}
+                  {data.filial.configured
+                    ? <><code>{data.filial.configured}</code>
+                        {data.filial.without_filial_total != null && (
+                          <> · без филиала документов: {data.filial.without_filial_total}</>
+                        )}</>
+                    : <span className="muted">не задан — фильтра по филиалу нет</span>}
+                </div>
+              )}
               {data.no_period && (
                 <div>
                   <b>Без фильтра периода:</b> {data.no_period.total} документов

@@ -171,14 +171,19 @@ def _refresh_if_stale(used_token: str) -> None:
             _login()
 
 
-def call(method: str, params: dict | None = None, _retry: bool = True) -> tuple[dict, dict | None]:
-    """Вызов метода SalesDoc. Возвращает (result, pagination)."""
+def call(method: str, params: dict | None = None, _retry: bool = True,
+         with_filial: bool = True) -> tuple[dict, dict | None]:
+    """Вызов метода SalesDoc. Возвращает (result, pagination).
+
+    with_filial=False — не подставлять filial_id из настроек. Нужно для
+    диагностики: если филиал задан, документы других филиалов в выдачу не
+    попадают, и это надо уметь отличить от дефекта API."""
     user_id, token = _ensure_session()
     auth: dict = {"token": token}
     if user_id:  # userId необязателен — по SalesDoc достаточно токена
         auth["userId"] = user_id
     payload: dict = {"method": method, "auth": auth}
-    if settings.salesdoc_filial:
+    if settings.salesdoc_filial and with_filial:
         payload["filial"] = {"filial_id": settings.salesdoc_filial}
     if params is not None:
         payload["params"] = params
