@@ -1221,6 +1221,7 @@ function ShipmentsComparePanel() {
   const FILTERS = [
     ['', 'Все'],
     ['diff', 'Суммы разные'],
+    ['new_sd', 'Не отгружен в SD'],
     ['only_1c', 'Нет в SalesDoc'],
     ['only_sd', 'Нет в 1С'],
     ['ok', 'Сходится'],
@@ -1229,6 +1230,8 @@ function ShipmentsComparePanel() {
   const VERDICT = {
     ok: ['сходится', 'sc-ok'],
     diff: ['суммы разные', 'sc-diff'],
+    // Заявка в SalesDoc есть, но висит в «Новых»: не «завести», а «провести».
+    new_sd: ['в SD не отгружен', 'sc-diff'],
     only_1c: ['нет в SalesDoc', 'sc-bad'],
     only_sd: ['нет в 1С', 'sc-bad'],
   }
@@ -1264,7 +1267,8 @@ function ShipmentsComparePanel() {
                 <div><span className="muted">SalesDoc</span><b>{data.sd.count} док.</b><span>{money(data.sd.amount)}</span></div>
                 <div><span className="muted">Сходится</span><b>{data.counts.ok}</b><span /></div>
                 <div><span className="muted">Расходится</span>
-                  <b>{data.counts.diff + data.counts.only_1c + data.counts.only_sd}</b><span /></div>
+                  <b>{data.counts.diff + data.counts.only_1c + data.counts.only_sd
+                    + (data.counts.new_sd || 0)}</b><span /></div>
               </div>
 
               {/* Выгрузка продаж 1С не всегда содержит номер и склад. Пока это

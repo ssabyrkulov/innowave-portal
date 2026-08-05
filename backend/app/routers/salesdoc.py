@@ -969,20 +969,54 @@ def shipments_compare(
         r["client"] = names.get(r["client"], r["client"])
         r["_ckey"] = _match_key(r["client"])
 
+    # Неотгруженные заявки («Новый»). В суммы отгрузок они не входят, но для
+    # непарных документов 1С важно отличать «в SalesDoc нет вовсе» от «есть,
+    # но застряло в Новых» — лечатся они по-разному: первое заводится, второе
+    # проводится. Классический пример — Алым Дан с заявками, забытыми в Новых.
+    new_q = db.query(models.SalesDocOrder).filter(
+        models.SalesDocOrder.date >= date_from,
+        models.SalesDocOrder.date <= date_to,
+        models.SalesDocOrder.status == 1,
+    )
+    if store_ids:
+        new_q = new_q.filter(models.SalesDocOrder.store_sd_id.in_(store_ids))
+    new_list = [
+        {
+            "date": r.date and r.date.isoformat(),
+            "doc_number": r.code_1c,
+            "sd_id": r.sd_id,
+            "client_sd_id": r.client_sd_id or "",
+            "client": names.get(r.client_sd_id or "",
+                                r.client_sd_id or r.client_code_1c or ""),
+            "store": store_names.get(r.store_sd_id or "", r.store_sd_id or ""),
+            "status": r.status,
+            "status_label": salesdoc.ORDER_STATUS.get(r.status, str(r.status)),
+            "amount": round(float(r.amount or 0), 2),
+        }
+        for r in new_q.all()
+    ]
+    for r in new_list:
+        r["_ckey"] = _match_key(r["client"])
+
     # --- Индексы для сопоставления ---
-    sd_by_key: dict = {}      # по номеру накладной
-    sd_by_tail: dict = {}     # по числовому хвосту номера
-    sd_by_client: dict = {}   # по (клиент, дата) — когда номера нет
-    for r in sd_list:
-        k = _doc_key(r["doc_number"])
-        if k:
-            sd_by_key.setdefault(k, []).append(r)
-            t = _doc_tail(k)
-            if t:
-                sd_by_tail.setdefault(t, []).append(r)
-        for ck in {r["client_sd_id"], r["_ckey"]}:
-            if ck:
-                sd_by_client.setdefault((ck, r["date"]), []).append(r)
+    def build_indexes(rows_in):
+        by_key: dict = {}      # по номеру накладной
+        by_tail: dict = {}     # по числовому хвосту номера
+        by_client: dict = {}   # по (клиент, дата) — когда номера нет
+        for r in rows_in:
+            k = _doc_key(r["doc_number"])
+            if k:
+                by_key.setdefault(k, []).append(r)
+                t = _doc_tail(k)
+                if t:
+                    by_tail.setdefault(t, []).append(r)
+            for ck in {r["client_sd_id"], r["_ckey"]}:
+                if ck:
+                    by_client.setdefault((ck, r["date"]), []).append(r)
+        return by_key, by_tail, by_client
+
+    sd_by_key, sd_by_tail, sd_by_client = build_indexes(sd_list)
+    new_by_key, new_by_tail, new_by_client = build_indexes(new_list)
 
     used: set = set()
     rows: list[dict] = []
@@ -1016,11 +1050,34 @@ def shipments_compare(
                     break
             pair = pick(pool, d["amount"])
             how = "клиент + дата" if pair else None
+        # Среди отгруженных пары нет — ищем в «Новых»: заявка может просто
+        # висеть не проведённой.
+        stuck = None
+        if pair is None:
+            k2 = _doc_key(d["doc_number"])
+            stuck = pick(new_by_key.get(k2, [])
+                         or new_by_tail.get(_doc_tail(k2), []), d["amount"])
+            if stuck is None:
+                base = date.fromisoformat(d["date"])
+                pool2 = []
+                for delta in (0, 1, -1, 2, -2, 3, -3):
+                    dd = (base + timedelta(days=delta)).isoformat()
+                    for ck in {_extract_sd_id(d["client"]), _match_key(d["client"])}:
+                        if ck:
+                            pool2.extend(new_by_client.get((ck, dd), []))
+                    if any(abs(r["amount"] - d["amount"]) < 0.5
+                           and id(r) not in used for r in pool2):
+                        break
+                stuck = pick(pool2, d["amount"])
         if pair is not None:
             used.add(id(pair))
             if how == "номер":
                 by_number += 1
-        same = pair is not None and abs(d["amount"] - pair["amount"]) < 0.5
+        elif stuck is not None:
+            used.add(id(stuck))
+            pair, how = stuck, "клиент + дата"
+        same = pair is not None and stuck is None \
+            and abs(d["amount"] - pair["amount"]) < 0.5
         rows.append({
             "date": d["date"],
             "client": d["client"],
@@ -1033,7 +1090,9 @@ def shipments_compare(
             "sd_amount": pair and pair["amount"],
             "diff": round(d["amount"] - pair["amount"], 2) if pair else None,
             "matched_by": how,
-            "verdict": "ok" if same else ("diff" if pair else "only_1c"),
+            "verdict": ("new_sd" if stuck is not None
+                        else "ok" if same
+                        else "diff" if pair else "only_1c"),
         })
     for r in sd_list:
         if id(r) in used:
@@ -1055,7 +1114,7 @@ def shipments_compare(
 
     rows.sort(key=lambda x: (x["date"] or ""), reverse=True)
     counts = {v: sum(1 for r in rows if r["verdict"] == v)
-              for v in ("ok", "diff", "only_1c", "only_sd")}
+              for v in ("ok", "diff", "only_1c", "only_sd", "new_sd")}
 
     def by_store(items, key) -> list[dict]:
         agg: dict = {}
