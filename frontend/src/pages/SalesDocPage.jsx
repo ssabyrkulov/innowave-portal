@@ -1672,6 +1672,19 @@ function ApiProbePanel() {
               {data.verdicts.map((v, i) => (
                 <div key={i} className="why-verdict">{v}</div>
               ))}
+              {data.no_period && (
+                <div>
+                  <b>Без фильтра периода:</b> {data.no_period.total} документов
+                  {data.no_period.total > data.journal.declared_total && (
+                    <span className="sc-bad"> · на {data.no_period.total - data.journal.declared_total} больше!</span>
+                  )}
+                  {data.no_period.extra?.length > 0 && (
+                    <pre className="order-raw-json">
+                      {JSON.stringify(data.no_period.extra, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              )}
               <div>
                 <b>Журнал getOrder:</b> заявлено {data.journal.declared_total} ·
                 получено {data.journal.received} · уникальных {data.journal.unique}

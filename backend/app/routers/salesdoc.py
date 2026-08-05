@@ -1318,6 +1318,41 @@ def api_probe(
         hist = Counter(str(r.get("status")) for r in rows)
         out["status_histogram"] = dict(hist)
 
+        # --- 1б. Журнал БЕЗ фильтра периода ---
+        # Ключевая проверка: все наши запросы идут с period.date. Если у
+        # документа поле даты пустое или сервер фильтрует по другому полю,
+        # такой документ выпадает из ЛЮБОГО запроса с периодом — и выглядит
+        # как несуществующий, хотя в интерфейсе он есть.
+        no_period_filter = {"include": "all", "status": [1, 2, 3, 4, 5]}
+        _, pg_np = salesdoc.call("getOrder", {"limit": 1, "page": 1,
+                                              "filter": no_period_filter})
+        np_total = int((pg_np or {}).get("total") or 0)
+        out["no_period"] = {"total": np_total, "extra": []}
+        if np_total > declared:
+            np_rows = salesdoc.call_all("getOrder", ("orders", "order"),
+                                        {"filter": no_period_filter})
+            have = set(ids)
+            extra = [r for r in np_rows
+                     if str(r.get("SD_id") or r.get("CS_id") or "") not in have]
+            out["no_period"]["extra"] = [
+                {
+                    "sd_id": r.get("SD_id") or r.get("CS_id"),
+                    "number": r.get("invoiceNumber") or r.get("code_1C"),
+                    "client": (r.get("client") or {}).get("SD_id"),
+                    "status": r.get("status"),
+                    "amount": round(float(r.get("totalSummaAfterDiscount")
+                                          or r.get("totalSumma") or 0), 2),
+                    "dates": {k: v for k, v in r.items()
+                              if "date" in k.lower() and v},
+                }
+                for r in extra[:20]
+            ]
+            out["verdicts"].append(
+                f"БЕЗ фильтра периода приходит {np_total} документов, а с "
+                f"фильтром — {declared}. Разница {np_total - declared}: эти "
+                "документы выпадают из любого запроса с периодом. Причина "
+                "найдена — фильтровать журнал по датам нельзя")
+
         # --- 2. Одна гигантская страница против пагинации ---
         result, _pg2 = salesdoc.call("getOrder", {"limit": 5000, "page": 1,
                                                   "filter": base_filter})
