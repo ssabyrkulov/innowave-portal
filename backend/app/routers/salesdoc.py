@@ -1425,6 +1425,44 @@ def method_probe(
     return {"found": found, "results": out}
 
 
+@router.get("/visits-sample")
+def visits_sample(
+    _: models.User = Depends(can_view),
+):
+    """Первые визиты getVisit как есть + сводка полей с примерами значений.
+
+    По ним проектируется зеркало визитов и «Дебиторка × визиты»: важно узнать,
+    как визит ссылается на точку и агента, где время и есть ли результат."""
+    _require_configured()
+    try:
+        result, pagination = salesdoc.call("getVisit", {"limit": 5, "page": 1})
+    except salesdoc.SalesDocError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    rows = salesdoc._pick(result, ("visit", "visits"))
+    fields: dict = {}
+    for r in rows:
+        if isinstance(r, dict):
+            for k, v in r.items():
+                if k not in fields and v not in (None, "", []):
+                    fields[k] = v
+    # Проверяем заодно, работает ли фильтр периода — от этого зависит,
+    # сможем ли грузить визиты инкрементально.
+    period_probe = {}
+    for key in ("date", "dateUpdate"):
+        try:
+            _, pg = salesdoc.call("getVisit", {"limit": 1, "page": 1, "filter": {
+                "period": {key: {"from": "2026-07-01", "to": "2026-07-31"}}}})
+            period_probe[key] = (pg or {}).get("total")
+        except salesdoc.SalesDocError as e:
+            period_probe[key] = f"ошибка: {e}"
+    return {
+        "total": (pagination or {}).get("total"),
+        "fields": {k: v for k, v in sorted(fields.items())},
+        "period_filter": period_probe,
+        "rows": rows,
+    }
+
+
 @router.get("/find-doc")
 def find_doc(
     db: Session = Depends(get_db),

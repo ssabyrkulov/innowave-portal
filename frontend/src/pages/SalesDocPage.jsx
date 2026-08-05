@@ -251,6 +251,8 @@ export default function SalesDocPage() {
 
       <MethodProbePanel />
 
+      <VisitsSamplePanel />
+
       <OrderChangesPanel />
 
       <AnalyzePanel />
@@ -1416,6 +1418,52 @@ function MethodProbePanel() {
                   </li>
                 ))}
               </ul>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Разбор полей визитов getVisit: сводка «поле → пример значения» и первые
+// записи целиком, всё сразу развёрнуто — по этому проектируется зеркало
+// визитов и «Дебиторка × визиты».
+function VisitsSamplePanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocVisitsSample()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 👣 Визиты SalesDoc: поля
+      </button>
+      {open && (
+        <div className="store-map-body">
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Спрашиваю SalesDoc…</div>}
+          {data && (
+            <>
+              <p>Всего визитов: <b>{data.total}</b> · фильтр периода:{' '}
+                date → {String(data.period_filter.date)},{' '}
+                dateUpdate → {String(data.period_filter.dateUpdate)}</p>
+              <div className="rc-col-title">Поля визита (пример значения)</div>
+              <pre className="order-raw-json">
+                {JSON.stringify(data.fields, null, 2)}
+              </pre>
+              <div className="rc-col-title">Первые записи целиком</div>
+              <pre className="order-raw-json">
+                {JSON.stringify(data.rows, null, 2)}
+              </pre>
             </>
           )}
         </div>
