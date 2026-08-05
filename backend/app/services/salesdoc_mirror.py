@@ -1128,6 +1128,10 @@ def reconcile_components(db: Session, date_from: date, date_to: date,
         # Отгружено, но ещё не доставлено: баланс SalesDoc такие заказы
         # долгом не считает, и разница на эту сумму — норма, а не ошибка.
         "in_transit": collect(O, O.status == 2, store_filter=True),
+        # Доставленное — то, из чего SalesDoc и складывает свой баланс.
+        # Сравнив баланс с этой суммой, видно, знает ли SalesDoc документы,
+        # которых нет в его выгрузке.
+        "delivered": collect(O, O.status.in_([3, 4]), store_filter=True),
         # Возвраты — из журнала операций, по клиенту (склада там нет).
         "returns": collect(P, P.txn == salesdoc.SHELF_RETURN_TXN),
         "payments": collect_payments(salesdoc.PAYMENT_TXN),

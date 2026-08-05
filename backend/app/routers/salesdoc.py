@@ -223,9 +223,28 @@ def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
     sd_sales = _sd_component(comp["sales"], row["sd_id"], row["code_1C"])
     sd_ret = _sd_component(comp["returns"], row["sd_id"], row["code_1C"])
     sd_pay = _sd_component(comp["payments"], row["sd_id"], row["code_1C"])
+
+    # «В 1С реализаций больше» бывает по двум противоположным причинам, и
+    # различить их можно, не открывая карточку: сравнить баланс SalesDoc с
+    # тем, что складывается из его же журналов. Баланс считается по
+    # доставленному, поэтому и сравниваем с доставленным. Если баланс знает
+    # ровно недостающую сумму — документы в SalesDoc есть, просто выгрузка их
+    # не отдаёт (так ведут себя документы деактивированных агентов), и в учёте
+    # всё в порядке. Если не знает — отгрузку в SalesDoc действительно не
+    # провели.
+    empty = {"sd": {}, "code": {}}
+    sd_delivered = _sd_component(comp.get("delivered", empty),
+                                 row["sd_id"], row["code_1C"])
+    hidden = round(row["sd_debt"] - (sd_delivered - sd_ret - sd_pay), 2)
+    sales_gap = round(row["our_sales"] - sd_sales, 2)
+    row["sd_hidden"] = hidden
+    sales_label = "реализации"
+    if sales_gap >= 500 and abs(hidden - sales_gap) < 500:
+        sales_label = "скрыто в SD"
+
     # Значимые расхождения по компонентам — коротким словом каждый.
     factors = [
-        ("реализации", round(sd_sales - row["our_sales"], 2)),
+        (sales_label, round(sd_sales - row["our_sales"], 2)),
         ("возврат", round(row["our_returns"] - sd_ret, 2)),
         ("оплата", round(row["our_pay"] - sd_pay, 2)),
     ]

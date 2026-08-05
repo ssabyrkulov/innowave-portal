@@ -433,6 +433,13 @@ export default function SalesDocPage() {
                       ) : (
                         <span className="muted">—</span>
                       )}
+                      {/* Сумма, которую баланс SalesDoc знает, а его журнал
+                          не показывает: документы есть, но не выгружаются. */}
+                      {r.reason?.includes('скрыто в SD') && (
+                        <div className="rc-note" title="Баланс SalesDoc учитывает эти документы, но в выгрузке их нет">
+                          {money(r.sd_hidden)}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
