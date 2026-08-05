@@ -334,6 +334,7 @@ def sync_clients(db: Session, updated_since: str | None = None) -> int:
             "code_1c": str(c["code_1C"]) if c["code_1C"] else None,
             "name": c["name"] or "",
             "debt": round(debt_by_id.get(sid, 0.0), 2),
+            "in_balance": sid in debt_by_id,
         })
     db.flush()
     # Точки, которых больше нет в SalesDoc, убираем из зеркала.
@@ -1028,6 +1029,7 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
     return {
         "balance": {
             "sd": sd_balance,
+            "in_balance": bool(cli_row.in_balance) if cli_row else False,
             "by_ops": by_ops,
             # Разница = сумма документов, известных балансу SalesDoc, но
             # отсутствующих в его журналах.

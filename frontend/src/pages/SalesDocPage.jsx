@@ -712,10 +712,20 @@ function ReconcileDetailModal({ row, onClose }) {
                 не отдаёт в выгрузках, — и показывает их сумму. */}
             {sd?.balance?.sd != null && Math.abs(sd.balance.diff) >= 0.5 && (
               <div className="note-readonly sd-warn">
-                Баланс SalesDoc <b>{money(sd.balance.sd)}</b>, а по его
-                операциям выходит <b>{money(sd.balance.by_ops)}</b> — разница{' '}
-                <b>{money(sd.balance.diff)}</b>. Столько SalesDoc учитывает
-                документами, которых нет в его выгрузках.
+                {sd.balance.in_balance ? (
+                  <>
+                    Баланс SalesDoc <b>{money(sd.balance.sd)}</b>, а по его
+                    операциям выходит <b>{money(sd.balance.by_ops)}</b> — разница{' '}
+                    <b>{money(sd.balance.diff)}</b>. Столько SalesDoc учитывает
+                    документами, которых нет в его выгрузках.
+                  </>
+                ) : (
+                  <>
+                    Этой точки нет в ответе SalesDoc о балансах — ноль в колонке
+                    «Долг SD» подставлен нами, а не сообщён SalesDoc. По его же
+                    операциям выходит <b>{money(sd.balance.by_ops)}</b>.
+                  </>
+                )}
               </div>
             )}
             <RcSection title="Возвраты" total={sd?.returns?.total} count={sd?.returns?.count}

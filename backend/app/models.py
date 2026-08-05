@@ -428,6 +428,10 @@ class SalesDocClient(Base):
     code_1c: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String, default="")
     debt: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    # Был ли клиент в ответе getBalance. Нолём долг может быть по двум разным
+    # причинам: SalesDoc сообщил ноль или не упомянул точку вовсе — и это
+    # надо различать, иначе «баланс 0» читается как факт, а не как заглушка.
+    in_balance: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
