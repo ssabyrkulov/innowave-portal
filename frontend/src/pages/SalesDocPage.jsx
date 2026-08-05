@@ -1446,8 +1446,13 @@ function JournalAnatomyPanel() {
           {loading && <div className="muted">Разбираю журнал…</div>}
           {data && (
             <>
+              {data.verdict && <div className="why-verdict">{data.verdict}</div>}
               <p>Всего в выдаче: <b>{data.total}</b> заказов ·
-                {' '}без номера накладной: {data.no_invoice_number}</p>
+                {' '}без номера накладной: {data.no_invoice_number}
+                {data.no_invoice_number === data.total && (
+                  <span className="muted"> (поле invoiceNumber SalesDoc не
+                    заполняет вовсе — искать документ можно только по ИД)</span>
+                )}</p>
 
               {data.agents_without_orders.length > 0 && (
                 <div className="note-readonly sd-warn">

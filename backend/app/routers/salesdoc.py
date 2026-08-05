@@ -1589,8 +1589,24 @@ def journal_anatomy(
     ]
     stores.sort(key=lambda x: (x["orders"], x["name"] or ""))
 
+    # Вердикт: если ВСЕ заказы выдачи принадлежат активным агентам, а у всех
+    # неактивных ровно ноль — выгрузка отсекает документы по признаку
+    # «агент деактивирован». Агенты увольняются, их отключают, и вся история
+    # их продаж пропадает из API, оставаясь в интерфейсе.
+    inactive = [a for a in agents if a["active"] == "N"]
+    active_orders = sum(a["orders"] for a in agents if a["active"] != "N")
+    verdict = None
+    if inactive and all(a["orders"] == 0 for a in inactive) and active_orders:
+        verdict = (
+            f"Все {active_orders} заказов выдачи принадлежат активным агентам, "
+            f"а у всех {len(inactive)} неактивных — ровно ноль. getOrder не "
+            "отдаёт заказы деактивированных агентов: их документы остаются в "
+            "интерфейсе, но исчезают из выгрузки."
+        )
+
     return {
         "total": len(rows),
+        "verdict": verdict,
         "months": [{"month": m, "count": c} for m, c in sorted(months.items())],
         "no_invoice_number": no_invoice,
         "agents": agents,
