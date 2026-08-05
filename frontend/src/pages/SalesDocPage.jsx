@@ -707,6 +707,17 @@ function ReconcileDetailModal({ row, onClose }) {
                   : 'Оплат этого клиента в SalesDoc не найдено. Если в SalesDoc они есть — данные ещё не догрузились, нажмите «↻ Обновить».'}
               </div>
             )}
+            {/* Баланс самого SalesDoc против баланса по его же журналам.
+                Расхождение означает, что SalesDoc знает документы, которых
+                не отдаёт в выгрузках, — и показывает их сумму. */}
+            {sd?.balance?.sd != null && Math.abs(sd.balance.diff) >= 0.5 && (
+              <div className="note-readonly sd-warn">
+                Баланс SalesDoc <b>{money(sd.balance.sd)}</b>, а по его
+                операциям выходит <b>{money(sd.balance.by_ops)}</b> — разница{' '}
+                <b>{money(sd.balance.diff)}</b>. Столько SalesDoc учитывает
+                документами, которых нет в его выгрузках.
+              </div>
+            )}
             <RcSection title="Возвраты" total={sd?.returns?.total} count={sd?.returns?.count}
               rows={(sd?.returns?.items || []).map((r) => ({
                 cells: [r.date, money(r.amount)],

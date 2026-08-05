@@ -1013,7 +1013,26 @@ def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
             "counted": counted,
         })
 
+    # Баланс, который считает сам SalesDoc (getBalance), против баланса по его
+    # же операциям. Если они расходятся — значит SalesDoc учитывает документы,
+    # которых нет в его выгрузках: долг есть, а документа не видно.
+    cli_row = None
+    if sid:
+        cli_row = db.query(models.SalesDocClient).filter_by(sd_id=sid).first()
+    if cli_row is None and code_1c:
+        cli_row = db.query(models.SalesDocClient).filter_by(
+            code_1c=str(code_1c)).first()
+    by_ops = round(o_total - p_total - r_total, 2)
+    sd_balance = round(float(cli_row.debt), 2) if cli_row else None
+
     return {
+        "balance": {
+            "sd": sd_balance,
+            "by_ops": by_ops,
+            # Разница = сумма документов, известных балансу SalesDoc, но
+            # отсутствующих в его журналах.
+            "diff": None if sd_balance is None else round(sd_balance - by_ops, 2),
+        },
         "orders": {"total": round(o_total, 2), "count": o_count, "items": orders,
                    "hidden_by_store": hidden_by_store,
                    "hidden_stores": hidden_stores},
