@@ -2783,6 +2783,12 @@ button.summary-card {
 /* Должник, к которому давно не ездили и не собираются — приоритет объезда. */
 .rc-row-warn td { background: rgba(255, 180, 0, 0.08); }
 
+/* Поступление товаров: строка-документ раскрывает свои позиции. */
+.doc-row { cursor: pointer; }
+.doc-row:hover td { background: var(--primary-soft, #f4f6ff); }
+.doc-lines { padding: 0 0 8px 24px !important; background: var(--bg-soft, #fafafa); }
+.doc-lines table { width: 100%; font-size: 12.5px; }
+
 .store-name { font-size: 14px; }
 /* Статистика склада — второй строкой, чтобы длина не ломала ряд. */
 .store-stat { display: block; font-size: 11.5px; color: var(--faint); margin-top: 2px; }

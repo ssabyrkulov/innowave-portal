@@ -159,6 +159,37 @@ const SORTS = {
   product: { label: 'Номенклатура А-Я', fn: (a, b) => (a.product || '').localeCompare(b.product || '') },
 }
 
+// Строки поступления сводятся в документы: одна строка на приход, позиции
+// раскрываются по клику. У документа своя валюта, поэтому итог показываем
+// и в ней, и в сомах — сумма строк 1С уже пересчитана.
+function groupDocs(items) {
+  const docs = new Map()
+  for (const r of items) {
+    const key = `${r.doc_number || '—'}|${r.date}|${r.supplier}`
+    let d = docs.get(key)
+    if (!d) {
+      d = {
+        key,
+        date: r.date,
+        doc_number: r.doc_number,
+        supplier: r.supplier,
+        warehouse: r.warehouse,
+        currency: r.currency,
+        doc_total: r.doc_total,
+        amount_kgs: 0,
+        qty: 0,
+        lines: [],
+      }
+      docs.set(key, d)
+    }
+    d.amount_kgs += r.amount_kgs
+    d.qty += r.qty || 0
+    d.lines.push(r)
+    if (r.doc_total != null) d.doc_total = r.doc_total
+  }
+  return [...docs.values()]
+}
+
 function PurchasesPanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)
@@ -190,6 +221,16 @@ function PurchasesPanel() {
       { amount: 0, qty: 0 }),
     [visible]
   )
+
+  // Документы из отфильтрованных строк: при поиске по товару в документе
+  // остаются только найденные позиции — так видно, сколько именно этого
+  // товара пришло каждым поступлением.
+  const docs = useMemo(() => {
+    const d = groupDocs(visible)
+    const cmp = SORTS[sort].fn
+    return d.sort((a, b) => cmp(a, b))
+  }, [visible, sort])
+  const [openDoc, setOpenDoc] = useState(null)
 
   return (
     <div className="chart-card store-map">
@@ -252,40 +293,67 @@ function PurchasesPanel() {
                       ))}
                     </select>
                     <span className="muted">
-                      {visible.length} строк · {fmtQty(visTotal.qty)} шт ·{' '}
-                      {formatMoney(visTotal.amount)} KGS
+                      {docs.length} поступлений · {visible.length} строк ·{' '}
+                      {fmtQty(visTotal.qty)} шт · {formatMoney(visTotal.amount)} KGS
                     </span>
                   </div>
-                  <div className="table-wrap rc-table sc-table">
+                  <div className="table-wrap rc-table">
                     <table>
                       <thead>
                         <tr>
                           <th>Дата</th><th>№</th><th>Поставщик</th><th>Склад</th>
-                          <th>Номенклатура</th>
-                          <th className="num">Кол-во</th><th>Ед.</th>
-                          <th className="num">Цена</th><th>Вал.</th>
-                          <th className="num">Сумма, KGS</th>
+                          <th className="num">Позиций</th>
+                          <th className="num">Кол-во</th>
                           <th className="num">Итог дока</th>
+                          <th className="num">Сумма, KGS</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {visible.map((r, i) => (
-                          <tr key={i}>
-                            <td>{r.date.split('-').reverse().join('.')}</td>
-                            <td>{r.doc_number || '—'}</td>
-                            <td>{r.supplier}</td>
-                            <td>{r.warehouse || '—'}</td>
-                            <td>{r.product || '—'}</td>
-                            <td className="num">{r.qty == null ? '—' : fmtQty(r.qty)}</td>
-                            <td>{r.unit || '—'}</td>
-                            <td className="num">{r.price == null ? '—' : r.price}</td>
-                            <td>{r.currency}</td>
-                            <td className="num">{formatMoney(r.amount_kgs)}</td>
+                        {docs.map((d) => [
+                          <tr key={d.key} className="doc-row"
+                            onClick={() => setOpenDoc(openDoc === d.key ? null : d.key)}>
+                            <td>{d.date.split('-').reverse().join('.')}</td>
+                            <td>{openDoc === d.key ? '▾' : '▸'} {d.doc_number || '—'}</td>
+                            <td>{d.supplier}</td>
+                            <td>{d.warehouse || '—'}</td>
+                            <td className="num">{d.lines.length}</td>
+                            <td className="num">{fmtQty(d.qty)}</td>
                             <td className="num">
-                              {r.doc_total == null ? '—' : `${formatMoney(r.doc_total)} ${r.currency}`}
+                              {d.doc_total == null
+                                ? '—'
+                                : `${formatMoney(d.doc_total)} ${d.currency}`}
                             </td>
-                          </tr>
-                        ))}
+                            <td className="num">{formatMoney(d.amount_kgs)}</td>
+                          </tr>,
+                          openDoc === d.key && (
+                            <tr key={d.key + ':lines'}>
+                              <td colSpan={8} className="doc-lines">
+                                <table>
+                                  <thead>
+                                    <tr>
+                                      <th>Номенклатура</th>
+                                      <th className="num">Кол-во</th><th>Ед.</th>
+                                      <th className="num">Цена</th><th>Вал.</th>
+                                      <th className="num">Сумма, KGS</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {d.lines.map((r, j) => (
+                                      <tr key={j}>
+                                        <td>{r.product || '—'}</td>
+                                        <td className="num">{r.qty == null ? '—' : fmtQty(r.qty)}</td>
+                                        <td>{r.unit || '—'}</td>
+                                        <td className="num">{r.price == null ? '—' : r.price}</td>
+                                        <td>{r.currency}</td>
+                                        <td className="num">{formatMoney(r.amount_kgs)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </td>
+                            </tr>
+                          ),
+                        ])}
                       </tbody>
                     </table>
                   </div>
