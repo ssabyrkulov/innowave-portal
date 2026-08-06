@@ -3,6 +3,7 @@ import { api } from '../api'
 import { formatMoney } from '../utils'
 
 const money = (v) => formatMoney(v)
+const qty = (v) => `${Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} шт`
 const fdate = (iso) => (iso ? iso.split('-').reverse().join('.') : '—')
 
 const TABS = [
@@ -27,8 +28,12 @@ const VERDICTS = {
              hint: 'В SalesDoc пары не нашлось' },
   only_sd: { icon: 'SD', label: 'только в SalesDoc', cls: 'sc-diff',
              hint: 'В 1С пары не нашлось' },
+  // Не «в SalesDoc документа нет», а «мы там не искали»: метода для складских
+  // документов в API мы пока не нашли. Путать эти две вещи нельзя.
+  no_sd_side: { icon: '❔', label: 'сторона SD не подключена', cls: 'muted',
+                hint: 'Портал пока не знает, каким методом SalesDoc отдаёт документы этого вида — сверка не проводилась' },
 }
-const ORDER = ['diff', 'only_1c', 'only_sd', 'guess', 'id']
+const ORDER = ['diff', 'only_1c', 'only_sd', 'guess', 'id', 'no_sd_side']
 
 export default function IdMatchPage() {
   const [kind, setKind] = useState('sales')
@@ -54,6 +59,10 @@ export default function IdMatchPage() {
   function pick(next) { setKind(next); setVerdict(''); setPage(1) }
 
   const counts = data?.counts || {}
+  // У списаний 1С не выгружает сумму — только количество. Показывать там
+  // «0 KGS» значит утверждать, что документ на ноль сомов.
+  const byQty = data?.measure === 'qty'
+  const val = (d) => (byQty ? qty(d.qty) : money(d.amount))
   const pages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1
 
   return (
@@ -83,8 +92,11 @@ export default function IdMatchPage() {
 
       {data && !data.has_sd && (
         <div className="note-readonly sd-warn">
-          В SalesDoc документов этого вида нет — сверять не с чем. Список ниже
-          показывает операции 1С и охват идентификатором.
+          Сторона SalesDoc здесь не подключена: портал пока не знает, каким
+          методом API отдаёт документы этого вида. Это <b>не</b> значит, что в
+          SalesDoc их нет — сверка просто не проводилась, поэтому строки ниже
+          помечены «сторона SD не подключена», а не «только в 1С». Найти метод
+          можно в разделе «Сверка SD» → «Какие методы есть в API SalesDoc».
         </div>
       )}
 
@@ -115,9 +127,9 @@ export default function IdMatchPage() {
               <th>Дата</th>
               <th>Контрагент</th>
               <th>1С</th>
-              <th className="num">Сумма 1С</th>
+              <th className="num">{byQty ? 'Кол-во 1С' : 'Сумма 1С'}</th>
               <th>SalesDoc</th>
-              <th className="num">Сумма SD</th>
+              <th className="num">{byQty ? 'Кол-во SD' : 'Сумма SD'}</th>
               <th className="num">Δ</th>
             </tr>
           </thead>
@@ -145,13 +157,13 @@ export default function IdMatchPage() {
                     {o?.note && <div className="rc-note">{o.note}</div>}
                     {o?.guid && <div className="rc-note sd-doc-id">{o.guid}</div>}
                   </td>
-                  <td className="num">{o ? money(o.amount) : '—'}</td>
+                  <td className="num">{o ? val(o) : '—'}</td>
                   <td>
                     {t ? (t.number || '—') : <span className="muted">нет</span>}
                     {t?.status && <div className="rc-note">{t.status}</div>}
                     {t?.guid && <div className="rc-note sd-doc-id">{t.guid}</div>}
                   </td>
-                  <td className="num">{t ? money(t.amount) : '—'}</td>
+                  <td className="num">{t ? val(t) : '—'}</td>
                   <td className={`num ${Math.abs(r.delta) > 0.5 ? 'sc-diff' : ''}`}>
                     {r.delta ? money(r.delta) : '—'}
                   </td>

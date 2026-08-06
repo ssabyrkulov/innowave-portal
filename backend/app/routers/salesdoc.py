@@ -1727,6 +1727,16 @@ def method_probe(
         # Долги и прочее полезное
         "getDebt", "getClientDebt", "getSupervisor", "getTerritory",
         "getCategory", "getProduct", "getPriceType",
+        # Складские документы: списание, перемещение, оприходование,
+        # инвентаризация. Где SalesDoc их держит — не выяснено, а списания в
+        # нём есть, поэтому перебираем правдоподобные имена.
+        "getWriteOff", "getWriteOffs", "getWriteoff", "getStockWriteOff",
+        "getStockMovement", "getMovement", "getMovements", "getTransfer",
+        "getInventory", "getInventarization", "getRevision", "getRecount",
+        "getStockDocument", "getStockDocuments", "getStockOperation",
+        "getDocument", "getDocuments", "getAct", "getWaybill",
+        "getIncome", "getExpense", "getConsumption", "getSupply",
+        "getOrderDefect", "getDefect", "getDefects", "getReturn", "getReturns",
     ]
     out = []
     for m in candidates:
@@ -2039,8 +2049,10 @@ def id_match(
         theirs = [sd_doc(p) for p in
                   db.query(P).filter(P.txn == salesdoc.PAYMENT_TXN).all()]
     else:
-        # Закупки и списания: пары в SalesDoc нет — показываем только 1С,
-        # чтобы реестр был единообразным и было видно охват идентификатором.
+        # Закупки и списания: где SalesDoc держит такие документы, пока не
+        # выяснено — метода в API мы не нашли. Поэтому сторона SD здесь не
+        # запрашивается вовсе, и помечать строки «только в 1С» нельзя: это
+        # означало бы «в SalesDoc документа нет», а на деле мы там не искали.
         model = models.Purchase if kind == "purchases" else models.WriteOff
         by_doc = {}
         for r in scope(model).all():
@@ -2058,6 +2070,7 @@ def id_match(
                                           "qty": round(d.get("qty", 0.0), 1)}))
 
     # --- Связывание: сначала по идентификатору, потом по сумме и дате ---
+    has_sd = bool(theirs)
     their_by_guid = {t["guid"]: t for t in theirs if t["guid"]}
     used: set[int] = set()
     rows: list[dict] = []
@@ -2096,8 +2109,9 @@ def id_match(
             rows.append({"verdict": "guess", "ours": o, "theirs": theirs[found],
                          "delta": 0.0})
         else:
-            rows.append({"verdict": "only_1c", "ours": o, "theirs": None,
-                         "delta": o["amount"]})
+            rows.append({"verdict": "only_1c" if has_sd else "no_sd_side",
+                         "ours": o, "theirs": None,
+                         "delta": o["amount"] if has_sd else 0.0})
     for i, t in enumerate(theirs):
         if i not in used:
             rows.append({"verdict": "only_sd", "ours": None, "theirs": t,
@@ -2125,6 +2139,9 @@ def id_match(
     start = (page - 1) * page_size
     return {
         "kind": kind, "label": ID_MATCH_KINDS[kind],
+        # У списаний в выгрузке 1С суммы нет — только количество. Показывать
+        # там «0 KGS» значит утверждать, что документ на ноль сомов.
+        "measure": "qty" if kind == "writeoffs" else "money",
         "counts": counts, "total": total,
         "page": page, "page_size": page_size,
         "has_sd": bool(theirs),
