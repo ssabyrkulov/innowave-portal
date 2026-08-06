@@ -90,6 +90,58 @@ def _store_ids_for_org(db: Session, org: str) -> set | None:
     return mine | unmapped
 
 
+@router.get("/store-clients")
+def store_clients(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    store_id: str = Query(default="", description="SD_id склада; пусто — все без фирмы"),
+):
+    """Точки, отгружавшиеся со склада без привязки к фирме.
+
+    Пока склад не отнесён к фирме, его реализации показываются в обеих —
+    и непонятно, чьи это точки. Здесь видно, по кому именно принимается
+    решение: клиент, число отгрузок, сумма и период."""
+    stores = {s.store_id.lower(): s for s in db.query(models.SalesDocStore).all()
+              if s.store_id}
+    targets = ([store_id.strip().lower()] if store_id.strip()
+               else [sid for sid, s in stores.items() if not s.organization])
+    names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+
+    out = []
+    for sid in targets:
+        rows = (db.query(models.SalesDocOrder)
+                .filter(models.SalesDocOrder.store_sd_id == sid,
+                        models.SalesDocOrder.status != salesdoc.CANCELLED_STATUS)
+                .all())
+        agg: dict = {}
+        for r in rows:
+            key = r.client_sd_id or r.client_code_1c or "—"
+            a = agg.setdefault(key, {"count": 0, "amount": 0.0,
+                                     "first": None, "last": None})
+            a["count"] += 1
+            a["amount"] += float(r.amount or 0)
+            if r.date:
+                if a["first"] is None or r.date < a["first"]:
+                    a["first"] = r.date
+                if a["last"] is None or r.date > a["last"]:
+                    a["last"] = r.date
+        store = stores.get(sid)
+        out.append({
+            "store_id": sid,
+            "name": (store.name if store else None) or sid,
+            "clients": sorted(
+                ({"name": names.get(k, k),
+                  "count": v["count"],
+                  "amount": round(v["amount"], 2),
+                  "first": v["first"] and v["first"].isoformat(),
+                  "last": v["last"] and v["last"].isoformat()}
+                 for k, v in agg.items()),
+                key=lambda x: -x["amount"],
+            ),
+        })
+    return {"stores": out}
+
+
 def _unmapped_stores(db: Session) -> list[str]:
     """Склады без фирмы, по которым реально были реализации.
 

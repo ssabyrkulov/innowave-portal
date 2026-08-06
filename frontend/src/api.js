@@ -204,6 +204,7 @@ export const api = {
     request(`/salesdoc/payment-raw?sd_id=${encodeURIComponent(sdId)}`),
   salesdocOrderRaw: (sdId) =>
     request(`/salesdoc/order-raw?sd_id=${encodeURIComponent(sdId)}`),
+  salesdocStoreClients: () => request('/salesdoc/store-clients'),
   salesdocStoreOrders: (storeId) =>
     request(`/salesdoc/store-orders?store_id=${encodeURIComponent(storeId)}`),
   salesdocShipmentsCompare: (params) =>

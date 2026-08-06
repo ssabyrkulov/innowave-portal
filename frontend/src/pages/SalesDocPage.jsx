@@ -282,12 +282,7 @@ export default function SalesDocPage() {
       {debt?.hidden?.clients > 0 && <HiddenDocsBanner hidden={debt.hidden} />}
 
       {debt?.unmapped_stores?.length > 0 && (
-        <p className="note-readonly sd-warn">
-          Складам не задана фирма: <b>{debt.unmapped_stores.join(', ')}</b>. Их
-          реализации показываются в обеих фирмах — иначе они бы исчезали при
-          переключении. Задайте фирму в панели «Склады SalesDoc → фирмы», чтобы
-          деление стало точным.
-        </p>
+        <UnmappedStoresBanner stores={debt.unmapped_stores} />
       )}
 
       {debt?.sd_account_wide && (
@@ -496,6 +491,66 @@ function HiddenDocsBanner({ hidden }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// Склады без фирмы: по кнопке показываем, чьи именно точки с них отгружались —
+// без этого решение «чей это склад» приходится принимать вслепую.
+function UnmappedStoresBanner({ stores }) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [open, setOpen] = useState(false)
+
+  function toggle() {
+    const n = !open
+    setOpen(n)
+    if (n && data === null) {
+      api.salesdocStoreClients().then(setData).catch((e) => setError(e.message))
+    }
+  }
+
+  return (
+    <div className="note-readonly sd-warn">
+      Складам не задана фирма: <b>{stores.join(', ')}</b>. Их реализации
+      показываются в обеих фирмах — иначе они бы исчезали при переключении.
+      Задайте фирму в панели «Склады SalesDoc → фирмы», чтобы деление стало
+      точным.{' '}
+      <button className="btn btn-ghost btn-sm" onClick={toggle}>
+        {open ? 'Свернуть' : 'Показать точки'}
+      </button>
+      {error && <div className="error">{error}</div>}
+      {open && data === null && !error && <div className="muted">Загрузка…</div>}
+      {open && data?.stores.map((s) => (
+        <div key={s.store_id}>
+          <div className="rc-col-title">{s.name} · {s.clients.length} точек</div>
+          {s.clients.length === 0 ? (
+            <div className="muted">Отгрузок с этого склада нет — фирму можно
+              задать любую, на цифры это не влияет.</div>
+          ) : (
+            <div className="table-wrap rc-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Точка</th><th className="num">Отгрузок</th>
+                    <th>Период</th><th className="num">Сумма</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {s.clients.map((c, i) => (
+                    <tr key={i}>
+                      <td>{c.name}</td>
+                      <td className="num">{c.count}</td>
+                      <td>{fdateShort(c.first)} — {fdateShort(c.last)}</td>
+                      <td className="num">{money(c.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   )
 }
