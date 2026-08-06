@@ -1343,6 +1343,10 @@ def reconcile_components(db: Session, date_from: date, date_to: date,
         # Возвраты — из журнала операций, по клиенту (склада там нет).
         "returns": collect(P, P.txn == salesdoc.SHELF_RETURN_TXN),
         "payments": collect_payments(salesdoc.PAYMENT_TXN),
+        # Списание долга и выплата клиенту: баланс SalesDoc они меняют, а в
+        # 1С такой операции нет. Без этого компонента точка со списанным
+        # долгом выглядит расхождением непонятного происхождения.
+        "debt_writeoff": collect(P, P.txn.in_(sorted(salesdoc.BALANCE_ONLY_TXN))),
     }
 
 

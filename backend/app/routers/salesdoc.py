@@ -243,19 +243,28 @@ def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
         return "bad", "нет в SD"
     if not row["in_1c"]:
         return "bad", "нет в 1С"
+    empty = {"sd": {}, "code": {}}
     delta = round(row["sd_debt"] - row["our_debt"], 2)
     if abs(delta) < 1:
         return "ok", "сходится"
     # Баланс SalesDoc считает долгом только доставленное: пока заказ в статусе
     # «Отправлен», он в баланс не входит. Если разница ровно на эту сумму —
     # расхождения нет, товар просто в пути.
-    transit = _sd_component(comp.get("in_transit", {"sd": {}, "code": {}}),
+    transit = _sd_component(comp.get("in_transit", empty),
                             row["sd_id"], row["code_1C"])
     if transit and abs(round(delta + transit, 2)) < 1:
         return "ok", "в пути"
     sd_sales = _sd_component(comp["sales"], row["sd_id"], row["code_1C"])
     sd_ret = _sd_component(comp["returns"], row["sd_id"], row["code_1C"])
     sd_pay = _sd_component(comp["payments"], row["sd_id"], row["code_1C"])
+    # Списание долга в SalesDoc пары в 1С не имеет: там долг просто обнулили.
+    # Если разница ровно на эту сумму — расхождение объяснено полностью, и
+    # выяснять больше нечего.
+    wroff = _sd_component(comp.get("debt_writeoff", empty),
+                          row["sd_id"], row["code_1C"])
+    row["sd_debt_writeoff"] = round(wroff, 2)
+    if wroff and abs(round(delta + wroff, 2)) < 1:
+        return "warn", "списание долга в SD"
 
     # «В 1С реализаций больше» бывает по двум противоположным причинам, и
     # различить их можно, не открывая карточку: сравнить баланс SalesDoc с
@@ -265,7 +274,6 @@ def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
     # не отдаёт (так ведут себя документы деактивированных агентов), и в учёте
     # всё в порядке. Если не знает — отгрузку в SalesDoc действительно не
     # провели.
-    empty = {"sd": {}, "code": {}}
     sd_delivered = _sd_component(comp.get("delivered", empty),
                                  row["sd_id"], row["code_1C"])
     hidden = round(row["sd_debt"] - (sd_delivered - sd_ret - sd_pay), 2)
@@ -1742,6 +1750,65 @@ def method_probe(
                         "error": msg[:160]})
     found = [r["method"] for r in out if r["exists"]]
     return {"found": found, "results": out}
+
+
+@router.get("/txn-types")
+def txn_types(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+):
+    """Какие виды операций реально встречаются в журнале SalesDoc и что портал
+    с каждым делает.
+
+    В журнале лежат не только оплаты: там же возврат с полки, списание долга,
+    выплата клиенту, конверсия, начальный остаток. В долг портал засчитывает
+    оплату и возврат, остальное баланс SalesDoc меняет, а в 1С пары не имеет.
+    Пока эти виды не показаны, точка со списанным долгом выглядит расхождением
+    неизвестного происхождения — отсюда и таблица: что есть, сколько, и как
+    учитывается."""
+    from sqlalchemy import func
+
+    P = models.SalesDocPayment
+    names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+    rows = (db.query(P.txn, func.count(P.id), func.sum(P.amount),
+                     func.min(P.date), func.max(P.date))
+            .group_by(P.txn).all())
+
+    def role(t):
+        if t == salesdoc.PAYMENT_TXN:
+            return "считается оплатой"
+        if t == salesdoc.SHELF_RETURN_TXN:
+            return "считается возвратом"
+        if t in salesdoc.BALANCE_ONLY_TXN:
+            return "меняет баланс SD, пары в 1С нет"
+        return "в расчёт долга не идёт"
+
+    types = sorted(
+        ({"txn": t,
+          "label": salesdoc.PAY_TXN.get(t, str(t) if t is not None else "—"),
+          "role": role(t),
+          "count": int(n or 0),
+          "amount": round(float(s or 0), 2),
+          "first": f.isoformat() if f else None,
+          "last": l.isoformat() if l else None}
+         for t, n, s, f, l in rows),
+        key=lambda x: -abs(x["amount"]))
+
+    # Сами операции «только баланс» — их немного, и именно их обычно ищут.
+    ops = [
+        {"sd_id": p.sd_id,
+         "date": p.date and p.date.isoformat(),
+         "client": names.get((p.client_sd_id or "").lower()) or p.client_sd_id
+                   or p.client_code_1c,
+         "amount": float(p.amount or 0),
+         "txn": p.txn,
+         "label": salesdoc.PAY_TXN.get(p.txn, str(p.txn)),
+         "type_name": p.type_name}
+        for p in (db.query(P).filter(P.txn.in_(sorted(salesdoc.BALANCE_ONLY_TXN)))
+                  .order_by(P.date.desc()).limit(200).all())
+    ]
+    return {"types": types, "balance_only": ops,
+            "balance_only_total": round(sum(o["amount"] for o in ops), 2)}
 
 
 @router.get("/agent-model")

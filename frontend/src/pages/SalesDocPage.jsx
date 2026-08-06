@@ -257,6 +257,8 @@ export default function SalesDocPage() {
 
       <AgentModelPanel />
 
+      <TxnTypesPanel />
+
       <VisitsSamplePanel />
 
       <OrderChangesPanel />
@@ -1543,6 +1545,92 @@ function StoreStats({ rows }) {
 // Модель агента: к чему он привязан — к точке или к документу. От ответа
 // зависит, что делать при увольнении, поэтому зонд отвечает сырыми полями
 // справочников, а не пересказом документации.
+// Виды операций журнала SalesDoc. В журнале не только оплаты: там же возврат
+// с полки, списание долга, выплата клиенту. Первые два портал считает, третий
+// и четвёртый баланс SalesDoc меняют, а в 1С пары не имеют — и пока это не
+// показано, точка со списанным долгом выглядит необъяснимым расхождением.
+function TxnTypesPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+
+  function load() {
+    api.salesdocTxnTypes().then(setData).catch((e) => setError(e.message))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 📒 Виды операций журнала SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Что реально лежит в журнале операций и как портал
+            это учитывает. Долг гасят оплата и возврат с полки; списание долга и
+            выплата клиенту меняют баланс SalesDoc, но в 1С пары не имеют —
+            поэтому в сверке они выделены отдельной причиной, а не свалены в
+            «баланс SD».</p>
+          {error && <div className="error">{error}</div>}
+          {data && (
+            <>
+              <div className="table-wrap rc-table">
+                <table>
+                  <thead>
+                    <tr><th>Вид операции</th><th>Как учитывается</th>
+                      <th className="num">Записей</th><th className="num">Сумма</th>
+                      <th>Период</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.types.map((t) => (
+                      <tr key={t.txn}>
+                        <td>{t.label} <span className="muted">#{t.txn}</span></td>
+                        <td className="muted">{t.role}</td>
+                        <td className="num">{t.count}</td>
+                        <td className="num">{money(t.amount)}</td>
+                        <td className="muted">
+                          {fdateShort(t.first)} — {fdateShort(t.last)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {data.balance_only.length > 0 && (
+                <>
+                  <div className="rc-col-title">
+                    Списания долга и выплаты клиентам · {data.balance_only.length} ·{' '}
+                    {money(data.balance_only_total)}
+                  </div>
+                  <div className="table-wrap rc-table">
+                    <table>
+                      <thead>
+                        <tr><th>Дата</th><th>Точка</th><th>Вид</th>
+                          <th className="num">Сумма</th></tr>
+                      </thead>
+                      <tbody>
+                        {data.balance_only.map((o) => (
+                          <tr key={o.sd_id}>
+                            <td>{fdateShort(o.date)}</td>
+                            <td>{o.client}</td>
+                            <td>{o.type_name || o.label}</td>
+                            <td className="num">{money(o.amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AgentModelPanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)
