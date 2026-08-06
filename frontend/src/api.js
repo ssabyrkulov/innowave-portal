@@ -199,6 +199,12 @@ export const api = {
   salesdocAgentModel: () => request('/salesdoc/agent-model'),
   salesdocTxnTypes: () => request('/salesdoc/txn-types'),
   salesdocByGuid: () => request('/salesdoc/by-guid'),
+  salesdocIdMatch: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString()
+    return request(`/salesdoc/id-match${qs ? `?${qs}` : ''}`)
+  },
   salesdocVisitsSample: () => request('/salesdoc/visits-sample'),
   salesdocVisitDebt: () => request('/salesdoc/visit-debt'),
   salesdocApiProbe: (params) =>

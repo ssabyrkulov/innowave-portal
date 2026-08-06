@@ -1945,6 +1945,193 @@ def reconcile_by_guid(
     return {"org": (org or "all"), "kinds": kinds}
 
 
+ID_MATCH_KINDS = {
+    "sales": "Реализации",
+    "returns": "Возвраты",
+    "payments": "Оплаты покупателей",
+    "purchases": "Поступления товаров",
+    "writeoffs": "Списания товаров",
+}
+
+# Насколько далеко разрешаем расходиться датам при сопоставлении без
+# идентификатора: документ правят задним числом, и день-два разницы — норма.
+ID_MATCH_DAYS = 3
+# Разница сумм, ниже которой считаем документы одним и тем же (копейки
+# округления), и порог, ниже которого расхождение не стоит показа.
+ID_MATCH_TOL = 1.0
+
+
+@router.get("/id-match")
+def id_match(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    kind: str = Query(default="sales"),
+    verdict: str = Query(default="", description="Фильтр по метке"),
+    q: str = Query(default="", description="Поиск по контрагенту, номеру, ИД"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=10, le=500),
+    org: str = Query(default="all"),
+):
+    """Операции 1С и SalesDoc одним списком, с меткой на каждой строке.
+
+    Сначала документы связываются по идентификатору — это надёжно. Оставшиеся
+    пробуем сопоставить по контрагенту, дате (±3 дня) и сумме: пока колонки
+    ДокументGUID нет в выгрузках 1С, иначе список выродился бы в две
+    несвязанные простыни. Такая пара помечается отдельно — «по сумме», чтобы
+    не выдавать догадку за факт.
+    """
+    if kind not in ID_MATCH_KINDS:
+        raise HTTPException(status_code=404, detail=f"Неизвестный вид: {kind}")
+
+    def doc(guid, date_, number, client, amount, extra=None):
+        return {"guid": (guid or "").strip().lower() or None,
+                "date": date_.isoformat() if date_ else None,
+                "number": number, "client": client,
+                "amount": round(float(amount or 0), 2), **(extra or {})}
+
+    ours: list[dict] = []
+    theirs: list[dict] = []
+    O, P = models.SalesDocOrder, models.SalesDocPayment
+    sd_names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+
+    def sd_doc(r, extra=None):
+        return doc(r.code_1c, r.date, getattr(r, "sd_id", None),
+                   sd_names.get((r.client_sd_id or "").lower())
+                   or r.client_sd_id or r.client_code_1c or "—",
+                   r.amount, extra)
+
+    def scope(model):
+        return models.org_scope(db.query(model), model, org)
+
+    if kind == "sales":
+        # Построчная выгрузка: сворачиваем строки в документы по номеру.
+        by_doc: dict = {}
+        for s in scope(models.Sale).all():
+            key = (s.doc_number, s.date, s.client)
+            d = by_doc.get(key)
+            if d is None:
+                d = by_doc[key] = {"guid": s.doc_guid, "date": s.date,
+                                   "number": s.doc_number, "client": s.client,
+                                   "amount": 0.0, "lines": 0,
+                                   "total": s.doc_total}
+            d["lines"] += 1
+            d["amount"] += float(s.amount or 0) * (
+                1 - float(s.discount_pct or 0) / 100)
+            if s.doc_total is not None:
+                d["total"] = s.doc_total
+        for d in by_doc.values():
+            amount = d["total"] if d["total"] is not None else d["amount"]
+            ours.append(doc(d["guid"], d["date"], d["number"], d["client"],
+                            amount, {"lines": d["lines"]}))
+        theirs = [sd_doc(o, {"status": salesdoc.ORDER_STATUS.get(o.status, o.status)})
+                  for o in db.query(O).filter(
+                      O.status != salesdoc.CANCELLED_STATUS).all()]
+    elif kind == "returns":
+        ours = [doc(r.doc_guid, r.date, None, r.client, r.amount)
+                for r in scope(models.ReturnDoc).all()]
+        theirs = [sd_doc(p) for p in
+                  db.query(P).filter(P.txn == salesdoc.SHELF_RETURN_TXN).all()]
+    elif kind == "payments":
+        ours = [doc(r.doc_guid, r.date, None, r.payer, r.amount_kgs,
+                    {"note": "касса" if r.kind == "cash" else "банк"})
+                for r in scope(models.Receipt).filter(
+                    models.Receipt.operation.like(f"{CUSTOMER_PAYMENT_PREFIX}%")).all()]
+        theirs = [sd_doc(p) for p in
+                  db.query(P).filter(P.txn == salesdoc.PAYMENT_TXN).all()]
+    else:
+        # Закупки и списания: пары в SalesDoc нет — показываем только 1С,
+        # чтобы реестр был единообразным и было видно охват идентификатором.
+        model = models.Purchase if kind == "purchases" else models.WriteOff
+        by_doc = {}
+        for r in scope(model).all():
+            key = (r.doc_number, r.date)
+            d = by_doc.setdefault(key, {
+                "guid": r.doc_guid, "date": r.date, "number": r.doc_number,
+                "client": getattr(r, "supplier", None) or r.warehouse or "—",
+                "amount": 0.0, "lines": 0})
+            d["lines"] += 1
+            d["amount"] += float(getattr(r, "amount_kgs", None) or 0)
+            d["qty"] = d.get("qty", 0.0) + float(r.qty or 0)
+        for d in by_doc.values():
+            ours.append(doc(d["guid"], d["date"], d["number"], d["client"],
+                            d["amount"], {"lines": d["lines"],
+                                          "qty": round(d.get("qty", 0.0), 1)}))
+
+    # --- Связывание: сначала по идентификатору, потом по сумме и дате ---
+    their_by_guid = {t["guid"]: t for t in theirs if t["guid"]}
+    used: set[int] = set()
+    rows: list[dict] = []
+
+    def norm(name):
+        return salesdoc_mirror.match_key(name or "")
+
+    # Индекс оставшихся документов SalesDoc для сопоставления по сумме.
+    pool: dict[tuple, list] = {}
+    for i, t in enumerate(theirs):
+        pool.setdefault((norm(t["client"]), round(t["amount"], 2)), []).append(i)
+    idx_of = {id(t): i for i, t in enumerate(theirs)}
+
+    def near(a, b) -> bool:
+        if not a or not b:
+            return False
+        return abs((date.fromisoformat(a) - date.fromisoformat(b)).days) <= ID_MATCH_DAYS
+
+    for o in ours:
+        t = their_by_guid.get(o["guid"]) if o["guid"] else None
+        if t is not None:
+            used.add(idx_of[id(t)])
+            delta = round(o["amount"] - t["amount"], 2)
+            rows.append({"verdict": "diff" if abs(delta) >= ID_MATCH_TOL else "id",
+                         "ours": o, "theirs": t, "delta": delta})
+            continue
+        # Идентификатора нет — пробуем по контрагенту, сумме и дате.
+        found = None
+        for i in pool.get((norm(o["client"]), o["amount"]), []):
+            if i in used or not near(o["date"], theirs[i]["date"]):
+                continue
+            found = i
+            break
+        if found is not None:
+            used.add(found)
+            rows.append({"verdict": "guess", "ours": o, "theirs": theirs[found],
+                         "delta": 0.0})
+        else:
+            rows.append({"verdict": "only_1c", "ours": o, "theirs": None,
+                         "delta": o["amount"]})
+    for i, t in enumerate(theirs):
+        if i not in used:
+            rows.append({"verdict": "only_sd", "ours": None, "theirs": t,
+                         "delta": -t["amount"]})
+
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
+
+    if verdict:
+        rows = [r for r in rows if r["verdict"] == verdict]
+    needle = q.strip().lower()
+    if needle:
+        def hit(r):
+            for side in ("ours", "theirs"):
+                d = r[side]
+                if d and any(needle in str(d.get(f) or "").lower()
+                             for f in ("client", "number", "guid")):
+                    return True
+            return False
+        rows = [r for r in rows if hit(r)]
+
+    rows.sort(key=lambda r: ((r["ours"] or r["theirs"])["date"] or ""), reverse=True)
+    total = len(rows)
+    start = (page - 1) * page_size
+    return {
+        "kind": kind, "label": ID_MATCH_KINDS[kind],
+        "counts": counts, "total": total,
+        "page": page, "page_size": page_size,
+        "has_sd": bool(theirs),
+        "rows": rows[start:start + page_size],
+    }
+
+
 @router.get("/txn-types")
 def txn_types(
     db: Session = Depends(get_db),
