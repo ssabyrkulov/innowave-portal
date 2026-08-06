@@ -17,7 +17,7 @@ from fastapi import (
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import models, onec
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 
@@ -33,7 +33,9 @@ DEFAULT_RATES = {"KGS": 1.0, "USD": 87.0, "EUR": 95.0, "RUB": 1.1, "KZT": 0.17}
 HEADERS = {"Дата": "date", "Сумма": "amount", "Валюта": "currency",
            "Контрагент": "payer", "ВидОперации": "operation",
            # Необязательная колонка обновлённых выгрузок 1С: GUID документа.
-           "ДокументGUID": "doc_guid"}
+           "ДокументGUID": "doc_guid",
+           # Непроведённые и помеченные на удаление — не операции.
+           **onec.header_map()}
 
 # Дебиторку формируют только оплаты покупателей.
 CUSTOMER_PAYMENT_PREFIX = "Оплата от покупателя"
@@ -125,11 +127,15 @@ def import_receipts_workbook(
                    "Контрагент, ВидОперации)",
         )
 
-    parsed_rows, errors = [], []
+    parsed_rows, errors, not_posted = [], [], []
 
     def process(row, line_no):
         data = {f: (row[j] if j < len(row) else None) for j, f in columns.items()}
         if all(v is None for v in data.values()):
+            return
+        skip = onec.skip_reason(data)
+        if skip:
+            not_posted.append(skip)
             return
         dt = _parse_date(data.get("date"))
         try:
@@ -202,6 +208,7 @@ def import_receipts_workbook(
     return {
         "added": added,
         "skipped_duplicates": skipped,
+        "skipped_not_posted": len(not_posted),
         "replaced_rows": replaced,
         "errors": errors,
         "total_in_db": db.query(models.Receipt).count(),

@@ -15,7 +15,7 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import models, onec
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 
@@ -47,6 +47,8 @@ HEADER_MAP = {
     # GUID документа: появился в обновлённых выгрузках 1С. Колонка
     # необязательная — файлы без неё грузятся как раньше.
     "ДокументGUID": "doc_guid",
+    # Непроведённые и помеченные на удаление документы — не операции.
+    **onec.header_map(),
 }
 
 REQUIRED_FIELDS = {"date", "client", "product", "qty", "price", "amount"}
@@ -149,12 +151,17 @@ def parse_sales_workbook(content: bytes) -> tuple[list[dict], list[str]]:
     # --- Фаза 1: разбор всех строк файла ---
     parsed_rows: list[dict] = []
     errors: list[str] = []
+    skipped_docs: list[str] = []
 
     def process(row, line_no):
         data = {}
         for j, field in columns.items():
             data[field] = row[j] if j < len(row) else None
         if all(v is None for v in data.values()):
+            return
+        skip = onec.skip_reason(data)
+        if skip:
+            skipped_docs.append(skip)
             return
         parsed = {
             "date": _parse_date(data.get("date")),
@@ -187,7 +194,7 @@ def parse_sales_workbook(content: bytes) -> tuple[list[dict], list[str]]:
     for line_no, row in enumerate(rows, start=line_no + 1):
         process(row, line_no)
 
-    return parsed_rows, errors
+    return parsed_rows, errors, skipped_docs
 
 
 def import_sales_workbook(
@@ -201,7 +208,7 @@ def import_sales_workbook(
     """Импорт выгрузки продаж из байтов Excel (используется и веб-загрузкой,
     и автоприёмом из Google Drive)."""
     org = models.normalize_org(org)
-    parsed_rows, errors = parse_sales_workbook(content)
+    parsed_rows, errors, not_posted = parse_sales_workbook(content)
 
     replaced = 0
     if replace_period and parsed_rows:
@@ -244,6 +251,9 @@ def import_sales_workbook(
     return {
         "added": added,
         "skipped_duplicates": skipped,
+        # Непроведённые и помеченные на удаление — не ошибка импорта, но
+        # молчать о них нельзя: строки файла есть, а в учёт не пошли.
+        "skipped_not_posted": len(not_posted),
         "replaced_rows": replaced,
         "errors": errors,
         "total_in_db": total,

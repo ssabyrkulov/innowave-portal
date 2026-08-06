@@ -12,7 +12,7 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import models, onec
 from ..database import get_db
 from ..deps import get_current_user
 
@@ -32,6 +32,8 @@ HEADERS = {
     "СчетУчета": "account",
     "НоменклатураЕдиницаИзмеренияНаименование": "unit",
     "ДокументGUID": "doc_guid",
+    # Непроведённые и помеченные на удаление — не операции.
+    **onec.header_map(),
 }
 
 
@@ -64,7 +66,11 @@ def import_purchases_workbook(db: Session, content: bytes, filename: str,
         return row[j] if j is not None and j < len(row) else None
 
     parsed: list[models.Purchase] = []
+    not_posted = 0
     for row in rows[header_idx + 1:]:
+        if onec.skip_reason({k: cell(row, k) for k in ("_posted", "_deleted")}):
+            not_posted += 1
+            continue
         d = _day(cell(row, "date"))
         amount = _num(cell(row, "amount_kgs"))
         supplier = str(cell(row, "supplier") or "").strip()
@@ -98,7 +104,7 @@ def import_purchases_workbook(db: Session, content: bytes, filename: str,
         user_id=user_id, added=len(parsed), skipped=0, errors_count=0,
     ))
     db.commit()
-    return {"added": len(parsed)}
+    return {"added": len(parsed), "skipped_not_posted": not_posted}
 
 
 import re

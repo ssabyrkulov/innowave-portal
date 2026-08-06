@@ -39,7 +39,7 @@ def import_return_lines_workbook(
     from .sales import _row_hash, parse_sales_workbook
 
     org = models.normalize_org(org)
-    parsed, errors = parse_sales_workbook(content)
+    parsed, errors, not_posted = parse_sales_workbook(content)
 
     # 1. Очистка продаж от возвратных строк (в рамках своей организации)
     hashes = [_row_hash(p, org) for p in parsed]
