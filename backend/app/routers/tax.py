@@ -272,6 +272,8 @@ def tax_groups(
     бы искажением."""
     from .receipts import CUSTOMER_PAYMENT_PREFIX
 
+    from .purchases import _norm_product, _group_of, _size_of
+
     links = _links_map(db)
     if not links:
         return {"groups": []}
@@ -279,23 +281,58 @@ def tax_groups(
     uq_org = o or "hygiene"  # налоговый контур пока только по Hygiene
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
 
+    # Один реальный партнёр — это связная группа имён: шесть налоговых ИП и
+    # один контрагент управленки образуют одну группу, а не шесть. Раньше на
+    # каждое налоговое имя строилась своя строка с ОДНИМ И ТЕМ ЖЕ итогом
+    # управленки — управленческая сторона считалась шесть раз, и разница
+    # получалась бессмысленной. Собираем компоненты связности.
+    parent: dict = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for tax_name, upr_names in links.items():
+        for upr in upr_names:
+            union(("T", tax_name), ("U", upr))
+
+    comps: dict = {}
+    for node in list(parent):
+        c = comps.setdefault(find(node), {"tax": set(), "upr": set()})
+        c["tax" if node[0] == "T" else "upr"].add(node[1])
+
     groups = []
-    for tax_name, upr_names in sorted(links.items()):
+    for comp in comps.values():
+        tax_names, upr_names = sorted(comp["tax"]), sorted(comp["upr"])
+        if not tax_names or not upr_names:
+            continue
+
+        # --- Налоговая сторона ---
         ops = db.query(models.TaxOperation).filter(
-            models.TaxOperation.counterparty == tax_name).all()
+            models.TaxOperation.organization == uq_org,
+            models.TaxOperation.counterparty.in_(tax_names)).all()
         if not ops:
             continue
         nal_sales = sum(float(op.amount) for op in ops if op.kind == "sale")
         nal_pay = sum(float(op.amount) for op in ops if op.kind == "cash_in")
         nal_ret = sum(float(op.amount) for op in ops if op.kind == "return")
+        nal_qty = sum(float(op.qty or 0) for op in ops if op.kind == "sale")
 
-        names = set(upr_names)
-
-        # Продажи управленки по связанным точкам: итог документа — один раз.
-        upr_sales, seen_docs = 0.0, set()
-        for s in db.query(models.Sale).filter(
-                models.Sale.organization == uq_org,
-                models.Sale.client.in_(sorted(names))).all():
+        # --- Управленка: продажи (итог документа — один раз) ---
+        upr_sales, upr_qty, seen_docs = 0.0, 0.0, set()
+        sales_rows = db.query(models.Sale).filter(
+            models.Sale.organization == uq_org,
+            models.Sale.client.in_(upr_names)).all()
+        for s in sales_rows:
+            upr_qty += float(s.qty or 0)
             if s.doc_number and s.doc_total is not None:
                 key = (s.doc_number, s.date, s.client)
                 if key in seen_docs:
@@ -312,25 +349,67 @@ def tax_groups(
             if not r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
                 continue
             client = aliases.get(r.payer, r.payer)
-            if client in names or r.payer in names:
+            if client in upr_names or r.payer in upr_names:
                 upr_pay += float(r.amount_kgs)
 
         upr_ret = sum(
             float(rd.amount) for rd in db.query(models.ReturnDoc).filter(
                 models.ReturnDoc.organization == uq_org).all()
-            if aliases.get(rd.client, rd.client) in names or rd.client in names
+            if aliases.get(rd.client, rd.client) in upr_names
+            or rd.client in upr_names
+        )
+
+        # --- По товарам: штуки и суммы с обеих сторон ---
+        # Названия номенклатуры в контурах пишутся по-разному, поэтому ключ —
+        # нормализованное имя (как в расчёте остатков).
+        prod: dict = {}
+
+        def cell(name):
+            key = _norm_product(name)
+            e = prod.get(key)
+            if e is None:
+                e = prod[key] = {"product": name or "—", "nal_qty": 0.0,
+                                 "upr_qty": 0.0, "nal_amount": 0.0,
+                                 "upr_amount": 0.0}
+            return e
+
+        for op in ops:
+            if op.kind == "sale":
+                e = cell(op.product)
+                e["nal_qty"] += float(op.qty or 0)
+                e["nal_amount"] += float(op.amount)
+        for s in sales_rows:
+            e = cell(s.product)
+            e["upr_qty"] += float(s.qty or 0)
+            e["upr_amount"] += float(s.amount) * (1 - float(s.discount_pct or 0) / 100)
+
+        products = sorted(
+            ({**e,
+              "diff_qty": round(e["nal_qty"] - e["upr_qty"], 1),
+              "nal_qty": round(e["nal_qty"], 1),
+              "upr_qty": round(e["upr_qty"], 1),
+              "nal_amount": round(e["nal_amount"], 2),
+              "upr_amount": round(e["upr_amount"], 2)}
+             for e in prod.values()),
+            key=lambda x: (_group_of(x["product"]), _size_of(x["product"]),
+                           x["product"] or ""),
         )
 
         groups.append({
-            "tax_name": tax_name,
-            "upr_names": sorted(names),
+            "name": upr_names[0] if len(upr_names) == 1 else f"{upr_names[0]} +{len(upr_names) - 1}",
+            "tax_names": tax_names,
+            "upr_names": upr_names,
             "sales": {"nal": round(nal_sales, 2), "upr": round(upr_sales, 2),
                       "diff": round(nal_sales - upr_sales, 2)},
+            "qty": {"nal": round(nal_qty, 1), "upr": round(upr_qty, 1),
+                    "diff": round(nal_qty - upr_qty, 1)},
             "pay": {"nal": round(nal_pay, 2), "upr": round(upr_pay, 2),
                     "diff": round(nal_pay - upr_pay, 2)},
             "returns": {"nal": round(nal_ret, 2), "upr": round(upr_ret, 2),
                         "diff": round(nal_ret - upr_ret, 2)},
+            "products": products,
         })
+    groups.sort(key=lambda g: -g["sales"]["upr"])
     return {"groups": groups}
 
 

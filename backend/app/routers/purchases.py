@@ -115,6 +115,40 @@ def _norm_product(s: str | None) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# Порядок как в голове у владельца, а не по алфавиту или объёму:
+# подгузники ONE (обычные, затем mini), StarKid, туалетная бумага,
+# салфетки, Splash, остальное.
+def _group_of(name: str) -> int:
+    s = (name or "").lower()
+    one = "one" in s
+    if "подгуз" in s and one:
+        return 1 if "mini" not in s and "мини" not in s else 2
+    if "подгуз" in s and "starkid" in s:
+        return 3
+    if "бумаг" in s and one:
+        return 4
+    # Салфетки и бумажные полотенца — одна группа: это один вид товара.
+    if ("салфет" in s or "полотенц" in s) and one:
+        return 5
+    if "splash" in s or "сплэш" in s or "сплеш" in s:
+        return 6
+    return 7
+
+
+# Внутри группы — по размеру, а не по алфавиту: NB, S, M, L, XL, XXL.
+# Границы слова обязательны, иначе «L» находится внутри «XL», а «S» —
+# внутри «StarKid».
+_SIZE_RANK = {"nb": 0, "s": 1, "m": 2, "l": 3, "xl": 4, "xxl": 5}
+
+
+def _size_of(name: str) -> int:
+    s = (name or "").lower()
+    for tok in ("xxl", "xl", "nb", "s", "m", "l"):  # от длинных к коротким
+        if re.search(rf"\b{tok}\b", s):
+            return _SIZE_RANK[tok]
+    return 99  # без размера — после размерных
+
+
 @router.get("/stock-calc")
 def stock_calc(
     db: Session = Depends(get_db),
@@ -165,39 +199,8 @@ def stock_calc(
             # что имена не склеились; честно помечаем вместо тихого минуса.
             "unmatched": not e["has_purchase"] and e["sold"] > 0,
         })
-    # Порядок как в голове у владельца, а не по алфавиту или объёму:
-    # подгузники ONE (обычные, затем mini), StarKid, туалетная бумага,
-    # салфетки, Splash, остальное. Внутри группы — по размеру-названию.
-    def group_of(name: str) -> int:
-        s = (name or "").lower()
-        one = "one" in s
-        if "подгуз" in s and one:
-            return 1 if "mini" not in s and "мини" not in s else 2
-        if "подгуз" in s and "starkid" in s:
-            return 3
-        if "бумаг" in s and one:
-            return 4
-        # Салфетки и бумажные полотенца — одна группа: это один вид товара.
-        if ("салфет" in s or "полотенц" in s) and one:
-            return 5
-        if "splash" in s or "сплэш" in s or "сплеш" in s:
-            return 6
-        return 7
-
-    # Внутри группы — по размеру, а не по алфавиту: NB, S, M, L, XL, XXL.
-    # Границы слова обязательны, иначе «L» находится внутри «XL», а «S» —
-    # внутри «StarKid».
-    size_rank = {"nb": 0, "s": 1, "m": 2, "l": 3, "xl": 4, "xxl": 5}
-
-    def size_of(name: str) -> int:
-        s = (name or "").lower()
-        for tok in ("xxl", "xl", "nb", "s", "m", "l"):  # от длинных к коротким
-            if re.search(rf"\b{tok}\b", s):
-                return size_rank[tok]
-        return 99  # без размера — после размерных
-
-    rows.sort(key=lambda x: (group_of(x["product"]),
-                             size_of(x["product"]),
+    rows.sort(key=lambda x: (_group_of(x["product"]),
+                             _size_of(x["product"]),
                              x["product"] or ""))
     return {
         "org": (org or "all"),

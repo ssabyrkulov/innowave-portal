@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { formatMoney } from '../utils'
 
-const money = (v) => `${formatMoney(v)} KGS`
+// formatMoney уже подставляет валюту — второй раз её дописывать не нужно.
+const money = (v) => formatMoney(v)
+const qty = (v) => Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })
 
 // Налоговый контур — черновик. Файлы налоговой базы (1С ред. 1.7) грузятся
 // вручную и живут в отдельной таблице: с управленческими цифрами портала они
@@ -123,53 +125,103 @@ function TaxLinksPanel({ onChanged }) {
 function TaxGroupsPanel({ refreshKey }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
+  const [expanded, setExpanded] = useState(null)
 
   useEffect(() => {
     api.taxGroups().then(setData).catch((e) => setError(e.message))
   }, [refreshKey])
 
   const cls = (v) => (Math.abs(v) < 0.5 ? 'sc-ok' : 'sc-diff')
+  const clsQty = (v) => (Math.abs(v) < 0.5 ? 'sc-ok' : 'sc-diff')
   if (error) return <div className="error">{error}</div>
   if (!data || data.groups.length === 0) return null
   return (
     <div className="chart-card">
       <div className="rc-col-title">Сверка групп: налоговая ↔ управленка (совокупно)</div>
-      <p className="muted">Итоги по каждой связке за всю историю: контрагент
-        налоговой базы против суммы всех его контрагентов управленки.
-        Расхождение оплат при сходящихся реализациях — разный график платежей;
-        расхождение реализаций — продажи, проведённые только в одном контуре.</p>
+      <p className="muted">Одна строка — один реальный партнёр. Слева всё, что
+        числится за ним в налоговой базе (шесть ИП «Байго» — это одна строка),
+        справа — совокупность связанных контрагентов управленки. Сравниваем и
+        суммы, и штуки: сумма может сойтись при разной цене, штуки — нет.
+        Клик по строке раскрывает разбивку по номенклатуре и размерам.</p>
       <div className="table-wrap rc-table sc-table">
         <table>
           <thead>
             <tr>
-              <th>Группа</th>
+              <th>Партнёр</th>
               <th className="num">Реализации НАЛ</th>
               <th className="num">Реализации УПР</th>
-              <th className="num">Δ</th>
+              <th className="num">Δ сумма</th>
+              <th className="num">Штук НАЛ</th>
+              <th className="num">Штук УПР</th>
+              <th className="num">Δ штук</th>
               <th className="num">Оплаты НАЛ</th>
               <th className="num">Оплаты УПР</th>
-              <th className="num">Δ</th>
+              <th className="num">Δ оплат</th>
             </tr>
           </thead>
           <tbody>
-            {data.groups.map((g) => (
-              <tr key={g.tax_name}>
-                <td>
-                  {g.tax_name}
-                  <div className="rc-note" title={g.upr_names.join(', ')}>
-                    ↔ {g.upr_names.length === 1
-                      ? g.upr_names[0]
-                      : `${g.upr_names.length} контрагентов упр.`}
-                  </div>
-                </td>
-                <td className="num">{money(g.sales.nal)}</td>
-                <td className="num">{money(g.sales.upr)}</td>
-                <td className={`num ${cls(g.sales.diff)}`}>{money(g.sales.diff)}</td>
-                <td className="num">{money(g.pay.nal)}</td>
-                <td className="num">{money(g.pay.upr)}</td>
-                <td className={`num ${cls(g.pay.diff)}`}>{money(g.pay.diff)}</td>
-              </tr>
-            ))}
+            {data.groups.map((g) => {
+              const key = g.tax_names.join('|')
+              const open = expanded === key
+              return (
+                <Fragment key={key}>
+                  <tr className="doc-row"
+                    onClick={() => setExpanded(open ? null : key)}>
+                    <td>
+                      <span className="muted">{open ? '▾' : '▸'}</span> {g.name}
+                      <div className="rc-note">
+                        {g.tax_names.length} в налоговой ↔ {g.upr_names.length} в управленке
+                      </div>
+                    </td>
+                    <td className="num">{money(g.sales.nal)}</td>
+                    <td className="num">{money(g.sales.upr)}</td>
+                    <td className={`num ${cls(g.sales.diff)}`}>{money(g.sales.diff)}</td>
+                    <td className="num">{qty(g.qty.nal)}</td>
+                    <td className="num">{qty(g.qty.upr)}</td>
+                    <td className={`num ${clsQty(g.qty.diff)}`}>{qty(g.qty.diff)}</td>
+                    <td className="num">{money(g.pay.nal)}</td>
+                    <td className="num">{money(g.pay.upr)}</td>
+                    <td className={`num ${cls(g.pay.diff)}`}>{money(g.pay.diff)}</td>
+                  </tr>
+                  {open && (
+                    <tr>
+                      <td className="doc-lines" colSpan={10}>
+                        <div className="rc-note">
+                          Налоговая: {g.tax_names.join(' · ')}
+                        </div>
+                        <div className="rc-note">
+                          Управленка: {g.upr_names.join(' · ')}
+                        </div>
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Номенклатура</th>
+                              <th className="num">Штук НАЛ</th>
+                              <th className="num">Штук УПР</th>
+                              <th className="num">Δ</th>
+                              <th className="num">Сумма НАЛ</th>
+                              <th className="num">Сумма УПР</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {g.products.map((p) => (
+                              <tr key={p.product}>
+                                <td>{p.product}</td>
+                                <td className="num">{qty(p.nal_qty)}</td>
+                                <td className="num">{qty(p.upr_qty)}</td>
+                                <td className={`num ${clsQty(p.diff_qty)}`}>{qty(p.diff_qty)}</td>
+                                <td className="num">{money(p.nal_amount)}</td>
+                                <td className="num">{money(p.upr_amount)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
           </tbody>
         </table>
       </div>
