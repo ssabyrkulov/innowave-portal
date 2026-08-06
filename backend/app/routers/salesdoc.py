@@ -1822,10 +1822,14 @@ def reconcile_by_guid(
 
     def add(kind, label, our_rows, our_key, our_label, our_amount,
             their_rows, their_key, their_label, their_amount,
-            our_source, their_source, note=None):
+            our_source, their_source, our_doc_key, note=None):
         ours_idx = index(our_rows, our_key, our_label, our_amount)
         theirs_idx = index(their_rows, their_key, their_label, their_amount)
+        # Выгрузки 1С построчные: 5233 строки — это далеко не 5233 документа.
+        # Сравнивать охват идентификатором со строками нельзя, иначе «103 из
+        # 311» читается как треть, хотя на деле это все документы файла.
         our_total = len(our_rows)
+        our_docs = len({our_doc_key(r) for r in our_rows}) if our_rows else 0
         their_total = len(their_rows)
         matched, only_1c, only_sd = [], [], []
         for g, e in ours_idx.items():
@@ -1863,11 +1867,16 @@ def reconcile_by_guid(
         kinds.append({
             "kind": kind, "label": label, "status": status, "hint": hint,
             "note": note,
-            "ours": {"source": our_source, "rows": our_total,
+            "ours": {"source": our_source, "rows": our_total, "docs": our_docs,
                      "docs_with_guid": len(ours_idx),
                      "shape": our_shape, "sample": our_ids},
+            # У SalesDoc строка = документ. Документы без code_1C — те, что в
+            # 1С не проведены (или проведены, но связь не записалась); это
+            # отдельная находка, а не шум.
             "theirs": {"source": their_source, "rows": their_total,
+                       "docs": their_total,
                        "docs_with_guid": len(theirs_idx),
+                       "without_guid": their_total - len(theirs_idx),
                        "shape": their_shape, "sample": their_ids},
             "matched": len(matched),
             "diff_count": sum(1 for m in matched if abs(m["delta"]) >= 1),
@@ -1885,7 +1894,8 @@ def reconcile_by_guid(
         lambda s: s.client, lambda s: s.amount,
         db.query(O).filter(O.status != salesdoc.CANCELLED_STATUS).all(),
         lambda o: o.code_1c, sd_client, lambda o: o.amount,
-        "Реализация товаров и услуг", "getOrder")
+        "Реализация товаров и услуг", "getOrder",
+        our_doc_key=lambda s: (s.doc_number, s.date, s.client))
 
     # --- Возвраты: документы 1С против операции «Возврат с полки» ---
     add("returns", "Возвраты",
@@ -1893,7 +1903,8 @@ def reconcile_by_guid(
         lambda r: r.client, lambda r: r.amount,
         db.query(P).filter(P.txn == salesdoc.SHELF_RETURN_TXN).all(),
         lambda p: p.code_1c, sd_client, lambda p: p.amount,
-        "Возврат товаров от покупателя", "getPayment · возврат с полки")
+        "Возврат товаров от покупателя", "getPayment · возврат с полки",
+        our_doc_key=lambda r: r.row_hash)
 
     # --- Оплаты покупателей ---
     add("payments", "Оплаты покупателей",
@@ -1902,7 +1913,8 @@ def reconcile_by_guid(
         lambda r: r.doc_guid, lambda r: r.payer, lambda r: r.amount_kgs,
         db.query(P).filter(P.txn == salesdoc.PAYMENT_TXN).all(),
         lambda p: p.code_1c, sd_client, lambda p: p.amount,
-        "Платёжное поручение входящее / ПКО", "getPayment · оплата")
+        "Платёжное поручение входящее / ПКО", "getPayment · оплата",
+        our_doc_key=lambda r: r.row_hash)
 
     # --- Закупки и списания: пары в SalesDoc нет вовсе ---
     for kind, label, model, source in (
@@ -1913,16 +1925,18 @@ def reconcile_by_guid(
         rows = ours(model)
         idx = index(rows, lambda r: r.doc_guid, lambda r: r.doc_number or "—",
                     lambda r: getattr(r, "amount_kgs", None) or r.qty)
+        docs = len({(r.doc_number, r.date) for r in rows}) if rows else 0
         kinds.append({
             "kind": kind, "label": label, "status": "no_counterpart",
             "hint": "в SalesDoc таких документов нет — сверять не с чем",
             "note": "Идентификаторы в 1С есть и хранятся: они делают импорт "
                     "идемпотентным и пригодятся, если SalesDoc заведёт "
                     "складские документы.",
-            "ours": {"source": source, "rows": len(rows),
+            "ours": {"source": source, "rows": len(rows), "docs": docs,
                      "docs_with_guid": len(idx),
                      "shape": shape(list(idx)[:5]), "sample": list(idx)[:5]},
-            "theirs": {"source": "—", "rows": 0, "docs_with_guid": 0,
+            "theirs": {"source": "—", "rows": 0, "docs": 0,
+                       "docs_with_guid": 0, "without_guid": 0,
                        "shape": "—", "sample": []},
             "matched": 0, "diff_count": 0, "only_1c_count": 0, "only_sd_count": 0,
             "diffs": [], "only_1c": [], "only_sd": [],

@@ -1596,11 +1596,19 @@ function GuidKind({ k }) {
           {k.hint && <div className="rc-note">{k.hint}</div>}
         </td>
         <td className="num">
-          {k.ours.docs_with_guid} / {k.ours.rows}
+          {k.ours.docs_with_guid} / {k.ours.docs}
+          <div className="rc-note">
+            {k.ours.docs} док. из {k.ours.rows} строк
+          </div>
           <IdSample side={k.ours} />
         </td>
         <td className="num">
-          {k.theirs.docs_with_guid} / {k.theirs.rows}
+          {k.theirs.docs_with_guid} / {k.theirs.docs}
+          {k.theirs.without_guid > 0 && (
+            <div className="rc-note sc-diff" title="Документы SalesDoc без code_1C — в 1С они не проведены">
+              {k.theirs.without_guid} без связи с 1С
+            </div>
+          )}
           <IdSample side={k.theirs} />
         </td>
         <td className="num">{clickable ? k.matched : '—'}</td>
@@ -1660,6 +1668,50 @@ function GuidList({ title, rows, withDelta }) {
   )
 }
 
+// Что именно нужно сделать, чтобы сверка заработала. Список считается из
+// данных, а не написан руками: виды, где SalesDoc уже отдаёт идентификатор,
+// ждут только колонку в выгрузке 1С; где не отдаёт — колонка не поможет.
+function GuidTodo({ kinds }) {
+  const waiting = kinds.filter(
+    (k) => k.status === 'no_guid_1c' && k.theirs.docs_with_guid > 0)
+  const blocked = kinds.filter((k) => k.status === 'no_guid_both')
+  return (
+    <div className="note-readonly sd-warn">
+      Сверка по идентификатору пока не работает ни по одному виду операций.
+      {waiting.length > 0 && (
+        <>
+          <div className="rc-col-title">Ждут колонку в выгрузке 1С</div>
+          <ul className="debt-other-ops">
+            {waiting.map((k) => (
+              <li key={k.kind}>
+                <b>{k.label}</b> — SalesDoc идентификатор уже отдаёт
+                ({k.theirs.docs_with_guid} из {k.theirs.docs} документов).
+                Нужна колонка <code>ДокументGUID</code> в выгрузке
+                «{k.ours.source}» — портал прочтёт её сам, доработок не нужно.
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {blocked.length > 0 && (
+        <>
+          <div className="rc-col-title">Колонка не поможет</div>
+          <ul className="debt-other-ops">
+            {blocked.map((k) => (
+              <li key={k.kind}>
+                <b>{k.label}</b> — идентификатора нет и на стороне SalesDoc
+                ({k.theirs.source}), поэтому сверять будет не с чем даже после
+                правки выгрузки. Здесь остаётся сопоставление по клиенту,
+                сумме и дате.
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  )
+}
+
 function ByGuidPanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)
@@ -1687,24 +1739,15 @@ function ByGuidPanel() {
           {error && <div className="error">{error}</div>}
           {data && (
             <>
-              {ready.length === 0 && (
-                <div className="note-readonly sd-warn">
-                  Пока ни по одному виду операций сверка по идентификатору
-                  невозможна: в выгрузках 1С нет колонки{' '}
-                  <code>ДокументGUID</code> — она есть только в поступлениях и
-                  списаниях, а им нет пары в SalesDoc. Портал уже готов её
-                  читать: как только колонка появится в выгрузке реализаций,
-                  строка «Реализации» станет рабочей сама.
-                </div>
-              )}
+              {ready.length === 0 && <GuidTodo kinds={data.kinds} />}
               <div className="table-wrap rc-table">
                 <table>
                   <thead>
                     <tr>
                       <th>Вид операции</th>
                       <th>Состояние</th>
-                      <th className="num">1С: с ИД / всего</th>
-                      <th className="num">SD: с ИД / всего</th>
+                      <th className="num">1С: док. с ИД / док.</th>
+                      <th className="num">SD: док. с ИД / док.</th>
                       <th className="num">Совпало</th>
                       <th className="num">Только 1С</th>
                       <th className="num">Только SD</th>
