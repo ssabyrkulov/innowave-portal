@@ -1825,22 +1825,44 @@ def agent_model(
         a["orders"] for v in per_client.values() for a in v)
     out["orders_total"] = db.query(func.count(O.id)).scalar() or 0
 
-    # --- 3. Что с точками уволенных ---
+    # --- 3. Закрепление из карточек точек и что с точками уволенных ---
     agents = {a.sd_id: a for a in db.query(models.SalesDocAgent).all()}
-    names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+    clients = {c.sd_id: c for c in db.query(models.SalesDocClient).all()}
+    names = {sid: c.name for sid, c in clients.items()}
     inactive = {sid for sid, a in agents.items() if not a.active}
+
+    links: dict[str, list] = {}
+    for l in db.query(models.SalesDocClientAgent).all():
+        links.setdefault((l.client_sd_id or "").lower(), []).append(l)
+    out["clients_total"] = len(clients)
+    out["clients_assigned"] = len(links)
+    out["clients_unassigned"] = len(clients) - len(links)
+
+    # Точка «осиротела», если все закреплённые за ней агенты деактивированы.
+    # Это и есть авторитетный ответ, а не догадка по истории заказов: так
+    # считает сам SalesDoc.
     orphans = []
-    for cli, v in per_client.items():
-        active_part = [a for a in v if a["agent_sd_id"] not in inactive]
-        if active_part:
+    for cli, ls in links.items():
+        if any(l.agent_sd_id not in inactive for l in ls):
             continue
-        v.sort(key=lambda a: a["last"] or "", reverse=True)
-        orphans.append({"client_sd_id": cli, "client": names.get(cli) or cli,
-                        "agents": v})
+        orphans.append({
+            "client_sd_id": cli,
+            "client": names.get(cli) or cli,
+            "debt": float(clients[cli].debt or 0) if cli in clients else 0.0,
+            "agents": [
+                {"agent": (agents[l.agent_sd_id].name
+                           if l.agent_sd_id in agents else l.agent_sd_id),
+                 "agent_sd_id": l.agent_sd_id, "days": l.days,
+                 "orders": sum(a["orders"] for a in per_client.get(cli, [])),
+                 "last": (per_client.get(cli) or [{}])[0].get("last")}
+                for l in ls
+            ],
+        })
     out["agents_total"] = len(agents)
     out["agents_inactive"] = len(inactive)
-    out["orphan_clients"] = sorted(orphans, key=lambda o: o["client"])[:100]
+    out["orphan_clients"] = sorted(orphans, key=lambda o: -o["debt"])[:100]
     out["orphan_count"] = len(orphans)
+    out["orphan_debt"] = round(sum(o["debt"] for o in orphans), 2)
 
     # --- 4. Вердикт ---
     verdicts = []
@@ -1855,20 +1877,30 @@ def agent_model(
             + ", ".join(out["client_keys"][:12])
             + ". Значит через API «закрепления» не видно: агент известен только "
             "как реквизит документа.")
-    if out["clients_with_orders"]:
+    if out["clients_total"]:
+        verdicts.append(
+            f"Закрепление есть у {out['clients_assigned']} точек из "
+            f"{out['clients_total']}; без агента — {out['clients_unassigned']}.")
+    if out["orders_total"] and not out["orders_with_agent"]:
+        verdicts.append(
+            "Агент в зеркале заказов ещё не заполнен: поле добавлено недавно, а "
+            "дельта-синхронизация обновляет только изменённые документы. "
+            "Заполнится при ближайшей полной выгрузке (раз в час) или по кнопке "
+            "«Обновить зеркало полностью».")
+    elif out["clients_with_orders"]:
         share = round(100 * out["clients_multi_agent"] / out["clients_with_orders"])
         verdicts.append(
             f"У {out['clients_multi_agent']} из {out['clients_with_orders']} точек "
             f"({share}%) в истории заказов больше одного агента. "
-            + ("Агент меняется от документа к документу — это реквизит заказа, "
-               "а не постоянная привязка." if share >= 20 else
-               "Агент у точки почти всегда один — на практике привязка "
-               "постоянная, даже если формально это реквизит документа."))
+            + ("Агент в заказе меняется от документа к документу — он говорит, "
+               "кто выписал документ, а не за кем точка." if share >= 20 else
+               "Агент в заказах у точки почти всегда один — на практике он "
+               "совпадает с закреплением."))
     if out["orphan_count"]:
         verdicts.append(
-            f"{out['orphan_count']} точек остались только за деактивированными "
-            "агентами: их заказы API больше не отдаёт, и в портале эти точки "
-            "выглядят как «без агента» либо с завышенным долгом.")
+            f"{out['orphan_count']} точек закреплены только за деактивированными "
+            f"агентами (долг {out['orphan_debt']}). Их заказы API больше не "
+            "отдаёт, и точки некому вести — их надо переназначить в SalesDoc.")
     out["verdicts"] = verdicts
     return out
 

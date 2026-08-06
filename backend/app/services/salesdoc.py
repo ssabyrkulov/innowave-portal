@@ -486,14 +486,26 @@ def fetch_client_store_orgs(store_org: dict, date_from, date_to, use_cache: bool
 
 
 def fetch_clients(use_cache: bool = False) -> list[dict]:
-    """Справочник клиентов SalesDoc: [{sd_id, code_1C, name}] — вся вселенная
-    точек, в т.ч. с нулевым балансом (их нет в getBalance)."""
+    """Справочник клиентов SalesDoc — вся вселенная точек, в т.ч. с нулевым
+    балансом (их нет в getBalance).
+
+    agents — закрепление точки за агентом: [{id, code, days}], где days —
+    дни недели маршрута (1 = понедельник). Это и есть настоящее «за кем точка»,
+    в отличие от агента в заказе, который лишь говорит, кто выписал документ."""
     rows = call_all("getClient", "client", use_cache=use_cache, ttl=LIVE_TTL)
     return [
         {
             "sd_id": r.get("SD_id"),
             "code_1C": r.get("code_1C"),
             "name": r.get("name") or "",
+            "active": r.get("active"),
+            "agents": [
+                {"sd_id": str(a.get("id") or "").lower(),
+                 "code_1C": a.get("code"),
+                 "days": a.get("days") or []}
+                for a in (r.get("agents") or [])
+                if isinstance(a, dict) and a.get("id")
+            ],
         }
         for r in rows
     ]

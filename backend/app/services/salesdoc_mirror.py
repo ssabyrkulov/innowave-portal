@@ -363,6 +363,10 @@ def sync_clients(db: Session, updated_since: str | None = None) -> int:
             debt_by_id[sid] = debt_by_id.get(sid, 0.0) + b["debt"]
 
     seen: set = set()
+    # Закрепление точек за агентами перекладываем целиком: снятие агента с
+    # точки в SalesDoc — это исчезновение записи, а не флаг, и добавочная
+    # синхронизация его бы не заметила.
+    db.query(models.SalesDocClientAgent).delete(synchronize_session=False)
     for c in clients:
         sid = (c["sd_id"] or "").lower()
         if not sid:
@@ -374,6 +378,11 @@ def sync_clients(db: Session, updated_since: str | None = None) -> int:
             "debt": round(debt_by_id.get(sid, 0.0), 2),
             "in_balance": sid in debt_by_id,
         })
+        for a in c.get("agents") or []:
+            db.add(models.SalesDocClientAgent(
+                client_sd_id=sid, agent_sd_id=a["sd_id"],
+                days=",".join(str(d) for d in a.get("days") or []) or None,
+            ))
     db.flush()
     # Точки, которых больше нет в SalesDoc, убираем из зеркала.
     stale = [row.id for row in db.query(models.SalesDocClient.id,
@@ -767,13 +776,15 @@ AGENT_WINDOW_DAYS = 180
 def agent_by_client_1c(db: Session) -> dict:
     """Кто из действующих агентов ведёт каждую точку — ключом по имени 1С.
 
-    Источники, в порядке достоверности: заказ SalesDoc (агент проставлен в
-    самом документе), затем визит. Заказы деактивированных агентов SalesDoc в
-    выгрузку не отдаёт вовсе, поэтому всё, что приходит оттуда, — работа
-    действующих сотрудников; признак active всё равно проверяем по справочнику,
-    чтобы отличать «агента нет» от «агент уволен».
+    Главный источник — закрепление в карточке точки (getClient.agents): это
+    настоящее «за кем точка», да ещё и с днями маршрута. Если закрепления нет,
+    смотрим по следам работы: агент последнего заказа, затем последнего визита.
+    Заказы деактивированных агентов SalesDoc в выгрузку не отдаёт вовсе,
+    поэтому по следам виден только действующий; признак active всё равно
+    проверяем по справочнику — иначе «агента нет» и «агент уволен» неразличимы,
+    а это ровно тот случай, когда точка осталась без хозяина.
 
-    Возвращает {имя контрагента 1С: {agent, active, source, at}} — плюс
+    Возвращает {имя контрагента 1С: {agent, active, source, at, days}} — плюс
     справочник агентов для фильтра."""
     agents = {a.sd_id: a for a in db.query(models.SalesDocAgent).all()}
     active_ids = {sid for sid, a in agents.items() if a.active}
@@ -832,6 +843,27 @@ def agent_by_client_1c(db: Session) -> dict:
             "agent_active": is_active(agent_sd_id, agent_name),
             "agent_source": source,
             "agent_at": at.date().isoformat(),
+            "agent_days": None,
+        }
+
+    # Закрепление из карточки точки перекрывает следы работы: это то, что
+    # SalesDoc считает правдой, включая случай «точка закреплена за уволенным».
+    for link in db.query(models.SalesDocClientAgent).all():
+        a = agents.get(link.agent_sd_id)
+        if a is None:
+            continue
+        cli = (link.client_sd_id or "").lower()
+        cur = by_sd_id.get(cli)
+        # Несколько агентов на точке — берём действующего, иначе первого.
+        if cur and cur.get("agent_source") == "карточка" and not (
+                a.active and not cur["agent_active"]):
+            continue
+        by_sd_id[cli] = {
+            "agent": a.name,
+            "agent_active": bool(a.active),
+            "agent_source": "карточка",
+            "agent_at": (cur or {}).get("agent_at"),
+            "agent_days": link.days,
         }
 
     # Индексы для сопоставления с 1С: по коду, по ИД в имени, по имени.

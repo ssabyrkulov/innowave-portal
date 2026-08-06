@@ -487,6 +487,22 @@ class SalesDocVisit(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocClientAgent(Base):
+    """Закрепление точки за агентом (getClient.agents) с днями маршрута.
+
+    Это настоящее «за кем точка», в отличие от агента в заказе: тот говорит
+    лишь, кто выписал конкретный документ. days — дни недели визита по
+    маршруту (1 = понедельник); их SalesDoc хранит прямо в карточке точки."""
+
+    __tablename__ = "salesdoc_client_agents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    client_sd_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    agent_sd_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    days: Mapped[str | None] = mapped_column(String, nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class SalesDocAgent(Base):
     """Справочник агентов SalesDoc с признаком «работает сейчас».
 

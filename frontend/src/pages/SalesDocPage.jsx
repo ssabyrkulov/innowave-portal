@@ -1593,31 +1593,39 @@ function AgentModelPanel() {
                 { getAgent: data.getAgent_sample, getTerritory: data.getTerritory_sample },
                 null, 1)}</pre>
 
-              <div className="rc-col-title">История заказов</div>
+              <div className="rc-col-title">Закрепление точек</div>
               <p>
-                Точек с заказами: <b>{data.clients_with_orders}</b> · из них
-                сменили агента: <b>{data.clients_multi_agent}</b> · заказов с
-                агентом: {data.orders_with_agent} из {data.orders_total}
+                Точек всего: <b>{data.clients_total}</b> · закреплено за
+                агентом: <b>{data.clients_assigned}</b> · без агента:{' '}
+                <b>{data.clients_unassigned}</b>
+              </p>
+              <p className="muted">
+                Агент в заказах (кто выписал документ): точек с заказами{' '}
+                {data.clients_with_orders} · из них с разными агентами{' '}
+                {data.clients_multi_agent} · заказов с агентом{' '}
+                {data.orders_with_agent} из {data.orders_total}
               </p>
 
               {data.orphan_count > 0 && (
                 <>
                   <div className="note-readonly sd-warn">
-                    Точек только за уволенными: <b>{data.orphan_count}</b>. Их
-                    заказы API больше не отдаёт.
+                    Точек закреплено только за уволенными:{' '}
+                    <b>{data.orphan_count}</b> на {formatMoney(data.orphan_debt)}.
+                    Их заказы API больше не отдаёт, вести точку некому —
+                    переназначьте агента в карточке точки SalesDoc.
                   </div>
                   <div className="table-wrap rc-table">
                     <table>
                       <thead>
-                        <tr><th>Точка</th><th>Агент</th><th className="num">Заказов</th><th>Последний</th></tr>
+                        <tr><th>Точка</th><th>Уволенный агент</th><th>Маршрут</th><th className="num">Долг</th></tr>
                       </thead>
                       <tbody>
                         {data.orphan_clients.map((o) => (
                           <tr key={o.client_sd_id}>
                             <td>{o.client}</td>
                             <td>{o.agents.map((a) => a.agent).join(', ')}</td>
-                            <td className="num">{o.agents.reduce((s, a) => s + a.orders, 0)}</td>
-                            <td>{o.agents[0]?.last}</td>
+                            <td className="muted">{o.agents.map((a) => a.days).filter(Boolean).join(' / ') || '—'}</td>
+                            <td className="num">{formatMoney(o.debt)}</td>
                           </tr>
                         ))}
                       </tbody>

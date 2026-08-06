@@ -605,12 +605,14 @@ def receivables(
                  # Неизвестного справочнику агента не объявляем уволенным:
                  # в 1С встречаются и менеджеры, которых в SalesDoc нет вовсе.
                  "agent_active": known_agents.get(_ag_key(name), True),
-                 "agent_source": "1С", "agent_at": when.isoformat()}
+                 "agent_source": "1С", "agent_at": when.isoformat(),
+                 "agent_days": None}
         clients.append({
             "agent": a and a["agent"],
             "agent_active": a["agent_active"] if a else None,
             "agent_source": a and a["agent_source"],
             "agent_at": a and a["agent_at"],
+            "agent_days": a and a.get("agent_days"),
             "client": client,
             "shipped": round(sh, 2),
             "returned": round(ret, 2),

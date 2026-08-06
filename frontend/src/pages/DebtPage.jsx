@@ -44,9 +44,21 @@ const CAT_BY_KIND = Object.fromEntries(CATEGORIES.map((c) => [c.kind, c]))
 // Откуда известен агент точки. Заказ SalesDoc — самый надёжный источник:
 // выгрузка не отдаёт заказы уволенных, значит там всегда действующий агент.
 const SOURCE_HINT = {
-  'заказ': 'Агент последнего заказа в SalesDoc',
-  'визит': 'Агент последнего визита в SalesDoc',
+  'карточка': 'Закрепление в карточке точки SalesDoc — то, что система считает правдой',
+  'заказ': 'Закрепления в карточке нет; агент последнего заказа в SalesDoc',
+  'визит': 'Закрепления в карточке нет; агент последнего визита в SalesDoc',
   '1С': 'Агент последней реализации в 1С — в SalesDoc точка не найдена',
+}
+
+// Дни маршрута из карточки точки: SalesDoc хранит их числами, 1 = понедельник.
+const WEEKDAYS = ['', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс']
+
+function routeDays(days) {
+  if (!days) return null
+  return String(days)
+    .split(',')
+    .map((d) => WEEKDAYS[Number(d)] || d)
+    .join(', ')
 }
 
 // Ячейка «Агент»: имя, метка уволенного и источник. Пустая ячейка — это тоже
@@ -64,7 +76,9 @@ function AgentCell({ c }) {
         </span>
       )}
       <div className="rc-note" title={SOURCE_HINT[c.agent_source] || ''}>
-        {c.agent_source}{c.agent_at ? ` · ${fmtDate(c.agent_at)}` : ''}
+        {c.agent_source}
+        {routeDays(c.agent_days) ? ` · маршрут ${routeDays(c.agent_days)}` : ''}
+        {!c.agent_days && c.agent_at ? ` · ${fmtDate(c.agent_at)}` : ''}
       </div>
     </>
   )
