@@ -7,6 +7,7 @@
 
 import difflib
 import re
+import time
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -2211,14 +2212,43 @@ def store_log(
     rows_out: list[dict] = []
     errors: list[dict] = []
     names = {p.sd_id: p.name for p in db.query(models.SalesDocProduct).all()}
+    # Как называется массив в ответе — из документации не видно, а угадывать
+    # нельзя: не тот ключ даёт «ноль строк», неотличимый от пустого журнала.
+    # Поэтому берём ЛЮБОЙ список из result и запоминаем его имя.
+    result_keys: set[str] = set()
 
-    for sid, sname in stores:
-        params: dict = {"storeId": sid, "from": frm, "to": to}
+    def fetch(sid: str) -> list:
+        """Одна страница журнала склада, с уважением к лимиту запросов.
+
+        SalesDoc отвечает HTTP 429, если долбить его подряд: восемь складов
+        подряд метод не переживает. Ждём и повторяем — иначе половина складов
+        молча выпадает из выдачи, а выглядит это как «списаний нет»."""
+        params: dict = {"storeId": sid, "from": frm, "to": to, "limit": 1000,
+                        "page": 1}
         if document:
             params["documents"] = [document]
+        out: list = []
+        for attempt in range(4):
+            try:
+                result, _pag = salesdoc.call("getStoreLog", params)
+            except salesdoc.SalesDocError as e:
+                if "429" in str(e) and attempt < 3:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise
+            if isinstance(result, dict):
+                for k, v in result.items():
+                    if isinstance(v, list):
+                        result_keys.add(k)
+                        out.extend(v)
+            break
+        return out
+
+    for i, (sid, sname) in enumerate(stores):
+        if i:
+            time.sleep(1.2)  # лимит: не больше нескольких запросов в секунду
         try:
-            rows = salesdoc.call_all("getStoreLog", ("storeLog", "log", "store_log",
-                                                     "rows", "data"), params)
+            rows = fetch(sid)
         except salesdoc.SalesDocError as e:
             errors.append({"store": sname, "error": str(e)[:160]})
             continue
@@ -2252,6 +2282,10 @@ def store_log(
         "period": {"from": frm, "to": to},
         "stores_asked": len(stores),
         "errors": errors,
+        # Имена массивов, которые реально пришли в ответе. Пустой набор при
+        # успешных запросах означает, что журнал действительно пуст, а не что
+        # мы читали не тот ключ, — эти два случая надо различать.
+        "result_keys": sorted(result_keys),
         "by_store": sorted(by_store, key=lambda s: -s["rows"]),
         "by_document": sorted(
             ({"document": v["document"], "rows": v["rows"],

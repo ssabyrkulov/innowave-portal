@@ -1813,10 +1813,31 @@ function StoreLogPanel() {
               </p>
               {data.errors?.length > 0 && (
                 <div className="note-readonly sd-warn">
+                  Складов не ответило: {data.errors.length}. HTTP 429 — это
+                  лимит частоты запросов; портал ждёт и повторяет до четырёх
+                  раз, но если склады всё равно отваливаются, откройте панель
+                  ещё раз через минуту.
                   {data.errors.map((e, i) => (
                     <div key={i}>{e.store}: {e.error}</div>
                   ))}
                 </div>
+              )}
+              {data.rows_total === 0 && data.errors.length < data.stores_asked && (
+                <div className="note-readonly sd-warn">
+                  {data.result_keys?.length > 0 ? (
+                    <>Ответ пришёл, массивы в нём:{' '}
+                      <b>{data.result_keys.join(', ')}</b> — но строк в них нет.</>
+                  ) : (
+                    <>Складов ответило {data.stores_asked - data.errors.length}, и
+                    ни один не вернул ни одного массива. Значит журнал за период
+                    действительно пуст либо метод требует ещё какой-то параметр —
+                    но не «мы прочитали не тот ключ»: портал берёт из ответа
+                    любой список, как бы он ни назывался.</>
+                  )}
+                </div>
+              )}
+              {data.result_keys?.length > 0 && (
+                <p className="muted">Массив в ответе: <code>{data.result_keys.join(', ')}</code></p>
               )}
               <div className="rc-col-title">Типы документов в журнале</div>
               <div className="table-wrap rc-table">
