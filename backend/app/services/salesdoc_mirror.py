@@ -745,6 +745,53 @@ def sync_warehouses(db: Session, updated_since: str | None = None) -> int:
     return len(rows)
 
 
+def sync_movements(db: Session, updated_since: str | None = None) -> int:
+    """Перемещения между складами (getMovement) — в зеркало вместе со строками.
+
+    Дельты у метода нет, документов немного (десятки), поэтому перекладываем
+    целиком: так же уходят и удалённые в SalesDoc."""
+    rows = salesdoc.call_all("getMovement", ("movement", "movements"))
+    names = {r.product_sd_id: r.product_name
+             for r in db.query(models.SalesDocStock).all() if r.product_sd_id}
+    db.query(models.SalesDocMovementLine).delete(synchronize_session=False)
+    seen: set = set()
+    for m in rows:
+        sd_id = str(m.get("SD_id") or m.get("CS_id") or "").strip()
+        if not sd_id:
+            continue
+        seen.add(sd_id)
+        detail = [d for d in (m.get("detail") or []) if isinstance(d, dict)]
+        qty = sum(float(d.get("quantity") or 0) for d in detail)
+        frm, to = m.get("from_store") or {}, m.get("to_store") or {}
+        _upsert(db, models.SalesDocMovement, sd_id, {
+            "date": _day(m.get("date")),
+            "from_store_sd_id": _ref_id(frm),
+            "from_store_name": _ref_name(frm),
+            "to_store_sd_id": _ref_id(to),
+            "to_store_name": _ref_name(to),
+            "qty": qty,
+            "positions": len(detail),
+            "code_1c": str(m.get("code_1C") or "") or None,
+        })
+        for d in detail:
+            pid = str(d.get("SD_id") or "").lower() or None
+            db.add(models.SalesDocMovementLine(
+                movement_sd_id=sd_id,
+                product_sd_id=pid,
+                product_code_1c=str(d.get("code_1C") or "") or None,
+                product_name=names.get(pid),
+                qty=float(d.get("quantity") or 0),
+            ))
+    db.flush()
+    stale = [row.id for row in db.query(models.SalesDocMovement.id,
+                                        models.SalesDocMovement.sd_id).all()
+             if row.sd_id not in seen]
+    if stale:
+        db.query(models.SalesDocMovement).filter(
+            models.SalesDocMovement.id.in_(stale)).delete(synchronize_session=False)
+    return len(rows)
+
+
 def sync_agents(db: Session, updated_since: str | None = None) -> int:
     """Справочник агентов с признаком «работает сейчас» (getAgent.active).
 
@@ -1010,6 +1057,7 @@ def sync(full: bool = False) -> dict:
                     ("clients", sync_clients, None, models.SalesDocClient),
                     ("warehouses", sync_warehouses, None, models.SalesDocStore),
                     ("agents", sync_agents, None, models.SalesDocAgent),
+                    ("movements", sync_movements, None, models.SalesDocMovement),
                     ("stock", sync_stock, None, models.SalesDocStock),
                     ("visits", sync_visits, None, models.SalesDocVisit)):
                 st = _state(db, kind)

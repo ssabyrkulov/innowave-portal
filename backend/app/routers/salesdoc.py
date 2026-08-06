@@ -1961,7 +1961,14 @@ ID_MATCH_KINDS = {
     "payments": "Оплаты покупателей",
     "purchases": "Поступления товаров",
     "writeoffs": "Списания товаров",
+    "movements": "Перемещения между складами",
 }
+
+# Виды, у которых одна из сторон в портал пока не заведена. Помечать их
+# «только в 1С» или «только в SalesDoc» нельзя: это утверждение об отсутствии
+# документа, а на деле мы во второй системе просто не искали.
+NO_SD_SIDE = {"purchases", "writeoffs"}
+NO_1C_SIDE = {"movements"}
 
 # Насколько далеко разрешаем расходиться датам при сопоставлении без
 # идентификатора: документ правят задним числом, и день-два разницы — норма.
@@ -2048,6 +2055,14 @@ def id_match(
                     models.Receipt.operation.like(f"{CUSTOMER_PAYMENT_PREFIX}%")).all()]
         theirs = [sd_doc(p) for p in
                   db.query(P).filter(P.txn == salesdoc.PAYMENT_TXN).all()]
+    elif kind == "movements":
+        # Перемещения есть только в SalesDoc: 1С выгружает их отдельным файлом
+        # «Перемещение товаров», а его портал пока не грузит.
+        theirs = [doc(m.code_1c, m.date, m.sd_id,
+                      f"{m.from_store_name or m.from_store_sd_id or '—'} → "
+                      f"{m.to_store_name or m.to_store_sd_id or '—'}",
+                      0, {"qty": float(m.qty or 0), "lines": m.positions})
+                  for m in db.query(models.SalesDocMovement).all()]
     else:
         # Закупки и списания: где SalesDoc держит такие документы, пока не
         # выяснено — метода в API мы не нашли. Поэтому сторона SD здесь не
@@ -2112,10 +2127,12 @@ def id_match(
             rows.append({"verdict": "only_1c" if has_sd else "no_sd_side",
                          "ours": o, "theirs": None,
                          "delta": o["amount"] if has_sd else 0.0})
+    no_1c = kind in NO_1C_SIDE
     for i, t in enumerate(theirs):
         if i not in used:
-            rows.append({"verdict": "only_sd", "ours": None, "theirs": t,
-                         "delta": -t["amount"]})
+            rows.append({"verdict": "no_1c_side" if no_1c else "only_sd",
+                         "ours": None, "theirs": t,
+                         "delta": 0.0 if no_1c else -t["amount"]})
 
     counts: dict[str, int] = {}
     for r in rows:
@@ -2141,7 +2158,8 @@ def id_match(
         "kind": kind, "label": ID_MATCH_KINDS[kind],
         # У списаний в выгрузке 1С суммы нет — только количество. Показывать
         # там «0 KGS» значит утверждать, что документ на ноль сомов.
-        "measure": "qty" if kind == "writeoffs" else "money",
+        "measure": "qty" if kind in ("writeoffs", "movements") else "money",
+        "has_1c": kind not in NO_1C_SIDE,
         "counts": counts, "total": total,
         "page": page, "page_size": page_size,
         "has_sd": bool(theirs),

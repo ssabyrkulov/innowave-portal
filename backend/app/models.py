@@ -552,6 +552,42 @@ class SalesDocClientAgent(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocMovement(Base):
+    """Перемещение товара между складами SalesDoc (getMovement).
+
+    Списанием оно не является — у документа два склада, «откуда» и «куда», а
+    статьи затрат нет. Для товарного баланса это важно: перемещение не меняет
+    общий остаток, но меняет остаток каждого склада, и без него расклад по
+    складам не сходится. Сумм в документе нет, только количество."""
+
+    __tablename__ = "salesdoc_movements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    from_store_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    from_store_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    to_store_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    to_store_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
+    positions: Mapped[int] = mapped_column(Integer, default=0)
+    code_1c: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SalesDocMovementLine(Base):
+    """Товарная строка перемещения: что именно и сколько переехало."""
+
+    __tablename__ = "salesdoc_movement_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    movement_sd_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    product_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    product_code_1c: Mapped[str | None] = mapped_column(String, nullable=True)
+    product_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
+
+
 class SalesDocAgent(Base):
     """Справочник агентов SalesDoc с признаком «работает сейчас».
 
