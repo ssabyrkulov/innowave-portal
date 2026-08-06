@@ -1779,6 +1779,22 @@ def reconcile_by_guid(
             q = q.filter(f)
         return q.all()
 
+    # GUID 1С выглядит как 8-4-4-4-12 шестнадцатеричных знаков. Проверка нужна
+    # не для красоты: если стороны заполняют code_1C по-разному (одна — GUID,
+    # другая — внутренний код вида d0_1131), совпадений не будет никогда, а
+    # выглядеть это будет как «документов нет» вместо «ключи разного вида».
+    _GUID_RE = re.compile(r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.I)
+
+    def shape(values: list[str]) -> str:
+        if not values:
+            return "—"
+        guids = sum(1 for v in values if _GUID_RE.match(v))
+        if guids == len(values):
+            return "GUID 1С"
+        if guids:
+            return f"смешанный ({guids} из {len(values)} — GUID)"
+        return "не GUID"
+
     def index(rows, key, label, amount):
         """GUID → карточка документа. Построчные выгрузки дают на документ
         несколько строк — сворачиваем в один документ и складываем суммы."""
@@ -1826,12 +1842,21 @@ def reconcile_by_guid(
 
         # Состояние вида: сверять можно только там, где GUID есть с обеих
         # сторон. Иначе честно называем, какой половины не хватает.
+        our_ids = list(ours_idx)[:5]
+        their_ids = list(theirs_idx)[:5]
+        our_shape, their_shape = shape(our_ids), shape(their_ids)
+
         if not ours_idx and not theirs_idx:
             status, hint = "no_guid_both", "идентификатора нет ни в 1С, ни в SalesDoc"
         elif not ours_idx:
             status, hint = "no_guid_1c", f"нет колонки ДокументGUID в выгрузке «{our_source}»"
         elif not theirs_idx:
             status, hint = "no_guid_sd", f"SalesDoc не отдаёт code_1C в {their_source}"
+        elif our_shape != their_shape:
+            # Ключи есть с обеих сторон, но разного вида — сверять их бесполезно.
+            status = "shape_mismatch"
+            hint = (f"1С даёт «{our_shape}», SalesDoc — «{their_shape}»: "
+                    "это разные ключи, совпадений не будет")
         else:
             status, hint = "ready", None
 
@@ -1839,9 +1864,11 @@ def reconcile_by_guid(
             "kind": kind, "label": label, "status": status, "hint": hint,
             "note": note,
             "ours": {"source": our_source, "rows": our_total,
-                     "docs_with_guid": len(ours_idx)},
+                     "docs_with_guid": len(ours_idx),
+                     "shape": our_shape, "sample": our_ids},
             "theirs": {"source": their_source, "rows": their_total,
-                       "docs_with_guid": len(theirs_idx)},
+                       "docs_with_guid": len(theirs_idx),
+                       "shape": their_shape, "sample": their_ids},
             "matched": len(matched),
             "diff_count": sum(1 for m in matched if abs(m["delta"]) >= 1),
             "only_1c_count": len(only_1c),
@@ -1893,8 +1920,10 @@ def reconcile_by_guid(
                     "идемпотентным и пригодятся, если SalesDoc заведёт "
                     "складские документы.",
             "ours": {"source": source, "rows": len(rows),
-                     "docs_with_guid": len(idx)},
-            "theirs": {"source": "—", "rows": 0, "docs_with_guid": 0},
+                     "docs_with_guid": len(idx),
+                     "shape": shape(list(idx)[:5]), "sample": list(idx)[:5]},
+            "theirs": {"source": "—", "rows": 0, "docs_with_guid": 0,
+                       "shape": "—", "sample": []},
             "matched": 0, "diff_count": 0, "only_1c_count": 0, "only_sd_count": 0,
             "diffs": [], "only_1c": [], "only_sd": [],
         })

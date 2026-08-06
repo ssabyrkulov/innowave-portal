@@ -1559,13 +1559,27 @@ const GUID_STATUS = {
   no_guid_1c: { icon: '⛔', text: 'нет идентификатора в 1С' },
   no_guid_sd: { icon: '⛔', text: 'нет идентификатора в SalesDoc' },
   no_guid_both: { icon: '⛔', text: 'нет идентификатора с обеих сторон' },
+  shape_mismatch: { icon: '⚠️', text: 'ключи разного вида' },
   no_counterpart: { icon: '➖', text: 'пары в SalesDoc нет' },
+}
+
+// Что реально лежит в поле идентификатора. Без этого «сверка не работает»
+// читается как отговорка: видно, есть ли ключ и одного ли он вида.
+function IdSample({ side }) {
+  if (!side.sample || side.sample.length === 0) {
+    return <div className="rc-note">значений нет</div>
+  }
+  return (
+    <div className="rc-note" title={side.sample.join('\n')}>
+      {side.shape}: <span className="sd-doc-id">{side.sample[0]}</span>
+    </div>
+  )
 }
 
 function GuidKind({ k }) {
   const [open, setOpen] = useState(false)
   const st = GUID_STATUS[k.status] || GUID_STATUS.no_guid_both
-  const clickable = k.status === 'ready'
+  const clickable = k.status === 'ready' || k.status === 'shape_mismatch'
   return (
     <>
       <tr className={clickable ? 'doc-row' : ''}
@@ -1583,16 +1597,18 @@ function GuidKind({ k }) {
         </td>
         <td className="num">
           {k.ours.docs_with_guid} / {k.ours.rows}
+          <IdSample side={k.ours} />
         </td>
         <td className="num">
           {k.theirs.docs_with_guid} / {k.theirs.rows}
+          <IdSample side={k.theirs} />
         </td>
-        <td className="num">{k.status === 'ready' ? k.matched : '—'}</td>
+        <td className="num">{clickable ? k.matched : '—'}</td>
         <td className={`num ${k.only_1c_count ? 'sc-diff' : ''}`}>
-          {k.status === 'ready' ? k.only_1c_count : '—'}
+          {clickable ? k.only_1c_count : '—'}
         </td>
         <td className={`num ${k.only_sd_count ? 'sc-diff' : ''}`}>
-          {k.status === 'ready' ? k.only_sd_count : '—'}
+          {clickable ? k.only_sd_count : '—'}
         </td>
       </tr>
       {open && (
