@@ -64,6 +64,19 @@ def _receipt_row(r: models.Receipt) -> dict:
     }
 
 
+def _writeoff_row(w: models.WriteOff) -> dict:
+    return {
+        "date": w.date.isoformat(),
+        "doc_number": w.doc_number,
+        "warehouse": w.warehouse,
+        "product": w.product,
+        "qty": float(w.qty or 0),
+        "unit": w.unit,
+        "subconto": w.subconto,
+        "comment": w.comment,
+    }
+
+
 def _return_row(r: models.ReturnDoc) -> dict:
     return {
         "date": r.date.isoformat(),
@@ -141,6 +154,26 @@ TYPES: dict[str, dict] = {
         ],
         "row": _receipt_row,
     },
+    "writeoffs": {
+        "label": "Списания",
+        "model": models.WriteOff,
+        "date_col": lambda M: M.date,
+        "text_cols": lambda M: [M.product, M.comment, M.subconto, M.doc_number],
+        # Сумм в выгрузке списаний нет — итогом по выборке идут штуки.
+        "amount_col": lambda M: M.qty,
+        "base": None,
+        "columns": [
+            _c("date", "Дата", "date"),
+            _c("doc_number", "Документ"),
+            _c("warehouse", "Склад"),
+            _c("product", "Номенклатура"),
+            _c("qty", "Кол-во", "num"),
+            _c("unit", "Ед."),
+            _c("subconto", "Статья затрат"),
+            _c("comment", "Комментарий"),
+        ],
+        "row": _writeoff_row,
+    },
     "returns": {
         "label": "Возвраты",
         "model": models.ReturnDoc,
@@ -200,6 +233,7 @@ TYPE_ORDER = [
     "receipt_bank",
     "receipt_cash",
     "returns",
+    "writeoffs",
     "expense_bank",
     "expense_cash",
 ]

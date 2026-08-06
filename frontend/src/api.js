@@ -174,6 +174,8 @@ export const api = {
     return request(`/salesdoc/client-debug${qs ? `?${qs}` : ''}`)
   },
   purchasesSummary: () => request('/purchases/summary'),
+  writeoffsSummary: () => request('/writeoffs/summary'),
+  writeoffsLines: () => request('/writeoffs/lines'),
   purchasesLines: () => request('/purchases/lines'),
   stockCalc: () => request('/purchases/stock-calc'),
   taxSummary: () => request('/tax/summary'),

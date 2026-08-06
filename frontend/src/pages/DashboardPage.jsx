@@ -131,9 +131,9 @@ export default function DashboardPage() {
   )
 }
 
-// Расчётные остатки: поступило − продано + возвраты. Фактической выгрузки
-// остатков из 1С пока нет (файл пустой), поэтому расчёт — единственный
-// источник; когда факт появится, разница с ним покажет списания и недостачи.
+// Расчётные остатки: поступило − продано + возвраты − списано. Фактической
+// выгрузки остатков из 1С пока нет (файл пустой), поэтому расчёт — единственный
+// источник; когда факт появится, разница с ним покажет пересорт и недостачи.
 function CalcStockCard() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -155,7 +155,7 @@ function CalcStockCard() {
     <div className="chart-card">
       <div className="sd-card-title">
         📦 Расчётные остатки товаров
-        <span className="muted"> · поступило − продано + возвраты · без списаний</span>
+        <span className="muted"> · поступило − продано + возвраты − списано</span>
       </div>
       <div className="table-wrap rc-table">
         <table>
@@ -165,6 +165,7 @@ function CalcStockCard() {
               <th className="num">Поступило</th>
               <th className="num">Продано</th>
               <th className="num">Возвраты</th>
+              <th className="num">Списано</th>
               <th className="num">Расчётный остаток</th>
             </tr>
           </thead>
@@ -175,6 +176,7 @@ function CalcStockCard() {
                 <td className="num">{fmt(r.purchased)}</td>
                 <td className="num">{fmt(r.sold)}</td>
                 <td className="num">{fmt(r.returned)}</td>
+                <td className="num">{r.written_off ? `−${fmt(r.written_off)}` : '—'}</td>
                 <td className={`num ${r.calc_qty < 0 ? 'neg' : ''}`}>
                   <b>{fmt(r.calc_qty)}</b>
                 </td>
@@ -187,6 +189,7 @@ function CalcStockCard() {
               <td className="num"><b>{fmt(data.totals.purchased)}</b></td>
               <td className="num"><b>{fmt(data.totals.sold)}</b></td>
               <td className="num"><b>{fmt(data.totals.returned)}</b></td>
+              <td className="num"><b>{fmt(data.totals.written_off)}</b></td>
               <td className="num"><b>{fmt(data.totals.calc_qty)}</b></td>
             </tr>
           </tfoot>

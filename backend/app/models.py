@@ -128,6 +128,36 @@ class Purchase(Base):
     doc_total: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     unit: Mapped[str | None] = mapped_column(String, nullable=True)
     account: Mapped[str | None] = mapped_column(String, nullable=True)
+    # GUID документа 1С — тот же идентификатор, который SalesDoc отдаёт в
+    # code_1C. Он делает связку документов точной: раньше приходилось искать
+    # по сумме и дате с допуском, а правка суммы или даты рвала совпадение.
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class WriteOff(Base):
+    """Строка списания товаров из 1С (ВыгрузкаСпис).
+
+    Сумму 1С в этой выгрузке не отдаёт — только количество, поэтому списания
+    участвуют в товарном балансе (остатки), но не в деньгах. Зато отдаёт счёт
+    затрат, субконто и комментарий: по ним видно, куда ушёл товар — торговому
+    агенту, на маркетинг, в брак."""
+
+    __tablename__ = "writeoffs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    account: Mapped[str | None] = mapped_column(String, nullable=True)
+    cost_account: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    subconto: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { formatMoney } from '../utils'
 
@@ -142,6 +142,8 @@ export default function StockPage() {
       )}
 
       <PurchasesPanel />
+
+      <WriteoffsPanel />
     </div>
   )
 }
@@ -361,6 +363,199 @@ function PurchasesPanel() {
                     <p className="muted">Показаны первые {lines.cap} из {lines.total} строк.</p>
                   )}
                 </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Списания товаров (ВыгрузкаСпис). Суммы 1С в этой выгрузке не даёт — только
+// количество, поэтому весь разрез в штуках. Зато даёт статью затрат и
+// комментарий, а это и есть ответ «куда ушёл товар»: торговому агенту,
+// на маркетинг, в брак.
+const WSORTS = {
+  date_desc: { label: 'Дата ↓ (новые)', fn: (a, b) => b.date.localeCompare(a.date) },
+  date_asc: { label: 'Дата ↑ (старые)', fn: (a, b) => a.date.localeCompare(b.date) },
+  qty_desc: { label: 'Количество ↓', fn: (a, b) => (b.qty || 0) - (a.qty || 0) },
+  product: { label: 'Номенклатура А-Я', fn: (a, b) => (a.product || '').localeCompare(b.product || '') },
+  subconto: { label: 'Статья затрат', fn: (a, b) => (a.subconto || '').localeCompare(b.subconto || '') },
+}
+
+function groupWriteoffDocs(items) {
+  const docs = new Map()
+  for (const r of items) {
+    const key = r.doc_guid || `${r.doc_number || '—'}|${r.date}`
+    let d = docs.get(key)
+    if (!d) {
+      d = { key, date: r.date, doc_number: r.doc_number, warehouse: r.warehouse,
+            subconto: r.subconto, comment: r.comment, qty: 0, lines: [] }
+      docs.set(key, d)
+    }
+    d.qty += r.qty || 0
+    d.lines.push(r)
+  }
+  return [...docs.values()]
+}
+
+export function WriteoffsPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [lines, setLines] = useState(null)
+  const [error, setError] = useState(null)
+  const [q, setQ] = useState('')
+  const [sort, setSort] = useState('date_desc')
+  const [openDoc, setOpenDoc] = useState(null)
+
+  function load() {
+    api.writeoffsSummary().then(setData).catch((e) => setError(e.message))
+    api.writeoffsLines().then(setLines).catch((e) => setError(e.message))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  const visible = useMemo(() => {
+    let items = lines?.rows || []
+    const s = q.trim().toLowerCase()
+    if (s) {
+      items = items.filter((r) =>
+        [r.product, r.warehouse, r.doc_number, r.subconto, r.comment]
+          .some((v) => (v || '').toLowerCase().includes(s)))
+    }
+    return [...items].sort(WSORTS[sort].fn)
+  }, [lines, q, sort])
+
+  const docs = useMemo(() => {
+    const cmp = WSORTS[sort].fn
+    return groupWriteoffDocs(visible).sort((a, b) => cmp(a, b))
+  }, [visible, sort])
+  const visQty = useMemo(() => visible.reduce((s, r) => s + (r.qty || 0), 0), [visible])
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 📤 Списания товаров
+      </button>
+      {open && (
+        <div className="store-map-body">
+          {error && <div className="error">{error}</div>}
+          {data && data.count === 0 && (
+            <div className="muted">Списаний пока нет — загрузите из 1С выгрузку
+              списаний (ВыгрузкаСпис).</div>
+          )}
+          {data && data.count > 0 && (
+            <>
+              <p className="muted">Сумм 1С в этой выгрузке не отдаёт — только
+                количество, поэтому всё считается в штуках. Списания вычитаются
+                из расчётных остатков наравне с продажами.</p>
+              <div className="summary-bar">
+                <div className="summary-card">
+                  <span className="summary-label">Документов</span>
+                  <span className="summary-value">{data.docs}</span>
+                </div>
+                <div className="summary-card">
+                  <span className="summary-label">Позиций</span>
+                  <span className="summary-value">{data.count}</span>
+                </div>
+                <div className="summary-card summary-out">
+                  <span className="summary-label">Списано, шт</span>
+                  <span className="summary-value">{fmtQty(data.qty)}</span>
+                </div>
+                <div className="summary-card">
+                  <span className="summary-label">Период</span>
+                  <span className="summary-value">
+                    {data.first?.split('-').reverse().join('.')} —{' '}
+                    {data.last?.split('-').reverse().join('.')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rc-col-title">Куда ушёл товар</div>
+              <div className="table-wrap rc-table">
+                <table>
+                  <thead>
+                    <tr><th>Статья затрат</th><th className="num">Штук</th>
+                      <th className="num">Позиций</th><th className="num">Документов</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.by_subconto.map((s) => (
+                      <tr key={s.subconto}>
+                        <td>{s.subconto}</td>
+                        <td className="num">{fmtQty(s.qty)}</td>
+                        <td className="num">{s.lines}</td>
+                        <td className="num">{s.docs}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="rc-period">
+                <input className="filter-select" value={q}
+                  placeholder="поиск: товар, склад, статья, комментарий"
+                  onChange={(e) => setQ(e.target.value)} />
+                <select className="filter-select" value={sort}
+                  onChange={(e) => setSort(e.target.value)}>
+                  {Object.entries(WSORTS).map(([k, v]) => (
+                    <option key={k} value={k}>{v.label}</option>
+                  ))}
+                </select>
+                <span className="muted">
+                  {docs.length} док. · {visible.length} позиций · {fmtQty(visQty)} шт
+                </span>
+              </div>
+
+              <div className="table-wrap rc-table">
+                <table>
+                  <thead>
+                    <tr><th>Дата</th><th>Документ</th><th>Склад</th>
+                      <th>Комментарий</th><th className="num">Штук</th></tr>
+                  </thead>
+                  <tbody>
+                    {docs.map((d) => (
+                      <Fragment key={d.key}>
+                        <tr className="doc-row"
+                          onClick={() => setOpenDoc(openDoc === d.key ? null : d.key)}>
+                          <td>{d.date.split('-').reverse().join('.')}</td>
+                          <td>
+                            <span className="muted">{openDoc === d.key ? '▾' : '▸'}</span>{' '}
+                            {d.doc_number || '—'}
+                            <div className="rc-note">{d.lines.length} позиций</div>
+                          </td>
+                          <td>{d.warehouse || '—'}</td>
+                          <td>{d.comment || d.subconto || '—'}</td>
+                          <td className="num"><b>{fmtQty(d.qty)}</b></td>
+                        </tr>
+                        {openDoc === d.key && (
+                          <tr>
+                            <td className="doc-lines" colSpan={5}>
+                              <table>
+                                <thead>
+                                  <tr><th>Номенклатура</th><th className="num">Кол-во</th>
+                                    <th>Ед.</th><th>Статья затрат</th></tr>
+                                </thead>
+                                <tbody>
+                                  {d.lines.map((r, i) => (
+                                    <tr key={i}>
+                                      <td>{r.product}</td>
+                                      <td className="num">{fmtQty(r.qty)}</td>
+                                      <td>{r.unit || '—'}</td>
+                                      <td className="muted">{r.subconto || '—'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {lines?.capped && (
+                <p className="muted">Показаны последние {lines.shown} из {lines.total} позиций.</p>
               )}
             </>
           )}

@@ -143,12 +143,16 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # раньше денежного «поступления», иначе закупки грузились бы как оплаты.
     if has("поступлен", "postuplen") and has("товар", "tovar"):
         return "purchases"
+    # Списание товаров: «ВыгрузкаСпис» и полное «Списание товаров». Правило
+    # обязано стоять раньше блока неподдерживаемых — там «списан» до сих пор
+    # значилось как вид без импортёра.
+    if has("списан", "spisan", "спис", "spis"):
+        return "writeoffs"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
     # поступлений/расходов именно из-за таких пересечений.
     if has("оприходован", "oprihodovan",
-           "списан", "spisan",
            "перемещен", "peremeshen", "peremeshch",
            "инвентариз", "inventariz",
            "корректировк", "korrektirovk",
@@ -362,6 +366,9 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
     elif kind == "purchases":
         from .purchases import import_purchases_workbook
         result = import_purchases_workbook(db, content, auto_name, robot.id, org=org)
+    elif kind == "writeoffs":
+        from .writeoffs import import_writeoffs_workbook
+        result = import_writeoffs_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "return_docs":
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":

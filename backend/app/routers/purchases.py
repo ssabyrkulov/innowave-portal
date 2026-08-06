@@ -31,6 +31,7 @@ HEADERS = {
     "СуммаДокумента": "doc_total",
     "СчетУчета": "account",
     "НоменклатураЕдиницаИзмеренияНаименование": "unit",
+    "ДокументGUID": "doc_guid",
 }
 
 
@@ -83,6 +84,7 @@ def import_purchases_workbook(db: Session, content: bytes, filename: str,
             doc_total=_num(cell(row, "doc_total")),
             unit=str(cell(row, "unit") or "").strip() or None,
             account=str(cell(row, "account") or "").strip() or None,
+            doc_guid=str(cell(row, "doc_guid") or "").strip() or None,
         ))
     if not parsed:
         raise HTTPException(status_code=400,
@@ -155,13 +157,14 @@ def stock_calc(
     _: models.User = Depends(get_current_user),
     org: str = "all",
 ):
-    """Расчётные остатки: поступило − продано + возвраты, по номенклатуре.
+    """Расчётные остатки: поступило − продано + возвраты − списано.
 
-    Списания и инвентаризации пока не выгружаются, поэтому это верхняя оценка
-    остатка; когда появится фактическая выгрузка остатков, разница между
-    расчётом и фактом покажет объём списаний и недостач. Продажи Innowave
-    выгружаются документами без товарных строк — расчёт работает там, где
-    продажи построчные."""
+    Списания теперь выгружаются (ВыгрузкаСпис) и вычитаются наравне с
+    продажами — раньше их приходилось считать невидимой погрешностью, и
+    расчёт был заведомо верхней оценкой. Инвентаризации и пересорт всё ещё
+    не выгружаются, так что расхождение с фактическими остатками теперь
+    показывает именно их. Продажи Innowave выгружаются документами без
+    товарных строк — расчёт работает там, где продажи построчные."""
     def scope(q, model):
         return models.org_scope(q, model, org)
 
@@ -173,7 +176,7 @@ def stock_calc(
         if e is None:
             e = agg[key] = {"name": product or "(без названия)",
                             "purchased": 0.0, "sold": 0.0, "returned": 0.0,
-                            "has_purchase": False}
+                            "written_off": 0.0, "has_purchase": False}
         return e
 
     for p in scope(db.query(models.Purchase), models.Purchase).all():
@@ -185,15 +188,18 @@ def stock_calc(
         entry(s.product)["sold"] += float(s.qty or 0)
     for r in scope(db.query(models.ReturnLine), models.ReturnLine).all():
         entry(r.product)["returned"] += float(r.qty or 0)
+    for w in scope(db.query(models.WriteOff), models.WriteOff).all():
+        entry(w.product)["written_off"] += float(w.qty or 0)
 
     rows = []
     for e in agg.values():
-        calc = e["purchased"] - e["sold"] + e["returned"]
+        calc = e["purchased"] - e["sold"] + e["returned"] - e["written_off"]
         rows.append({
             "product": e["name"],
             "purchased": round(e["purchased"], 1),
             "sold": round(e["sold"], 1),
             "returned": round(e["returned"], 1),
+            "written_off": round(e["written_off"], 1),
             "calc_qty": round(calc, 1),
             # Продано то, чего не закупали (по имени) — почти всегда значит,
             # что имена не склеились; честно помечаем вместо тихого минуса.
@@ -209,6 +215,7 @@ def stock_calc(
             "purchased": round(sum(r["purchased"] for r in rows), 1),
             "sold": round(sum(r["sold"] for r in rows), 1),
             "returned": round(sum(r["returned"] for r in rows), 1),
+            "written_off": round(sum(r["written_off"] for r in rows), 1),
             "calc_qty": round(sum(r["calc_qty"] for r in rows), 1),
         },
         "unmatched_count": sum(1 for r in rows if r["unmatched"]),
