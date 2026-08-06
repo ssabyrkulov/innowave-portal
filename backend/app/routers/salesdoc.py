@@ -2149,6 +2149,74 @@ def id_match(
     }
 
 
+@router.get("/movements-probe")
+def movements_probe(
+    _: models.User = Depends(can_view),
+):
+    """Что такое getMovement: перемещения между складами или списания?
+
+    Метод нашёлся зондом (91 запись), но по имени не понять, что в нём лежит.
+    Ответ дают поля: если у записи два склада («откуда» и «куда») — это
+    перемещение; если один склад и статья затрат — списание. Смотрим сырые
+    записи целиком, а не гадаем по названию.
+
+    Заодно опрашиваем getConsumption и getInventory: они существуют, но на
+    limit=1 вернули ноль — а ноль на одной странице ещё не значит, что метод
+    пуст (у getOrderDefect фильтр статусов по умолчанию скрывал всё)."""
+    _require_configured()
+    out: dict = {}
+
+    for method, keys in (("getMovement", ("movement", "movements")),
+                         ("getConsumption", ("consumption", "consumptions")),
+                         ("getInventory", ("inventory", "inventories"))):
+        entry: dict = {"method": method}
+        try:
+            # Без фильтра и со всеми статусами: у SalesDoc метод может по
+            # умолчанию отдавать только новые документы — на getOrder и
+            # getOrderDefect мы на это уже наступали.
+            rows = salesdoc.call_all(method, keys, {"filter": {
+                "include": "all", "status": [1, 2, 3, 4, 5]}})
+            if not rows:
+                rows = salesdoc.call_all(method, keys)
+            entry["count"] = len(rows)
+            entry["sample"] = rows[:3]
+            fields: dict = {}
+            for r in rows[:200]:
+                if not isinstance(r, dict):
+                    continue
+                for k, v in r.items():
+                    f = fields.setdefault(k, {"field": k, "filled": 0,
+                                              "example": None})
+                    if v not in (None, "", [], {}):
+                        f["filled"] += 1
+                        if f["example"] is None:
+                            f["example"] = v
+            entry["fields"] = sorted(fields.values(), key=lambda f: -f["filled"])
+
+            # Признак перемещения — две ссылки на склад в одной записи.
+            store_fields = [f["field"] for f in entry["fields"]
+                            if any(t in f["field"].lower()
+                                   for t in ("store", "warehouse", "sklad"))]
+            entry["store_fields"] = store_fields
+            if len(store_fields) >= 2:
+                entry["verdict"] = (
+                    f"Две ссылки на склад ({', '.join(store_fields)}) — это "
+                    "перемещение между складами, а не списание.")
+            elif store_fields and rows:
+                entry["verdict"] = (
+                    f"Один склад ({store_fields[0]}) и нет второго — похоже на "
+                    "списание или расход со склада.")
+            elif rows:
+                entry["verdict"] = "Складских ссылок в записи нет — см. поля."
+            else:
+                entry["verdict"] = "Метод существует, но записей не отдаёт."
+        except salesdoc.SalesDocError as e:
+            entry["error"] = str(e)[:200]
+        out[method] = entry
+
+    return out
+
+
 @router.get("/txn-types")
 def txn_types(
     db: Session = Depends(get_db),

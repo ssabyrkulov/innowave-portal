@@ -259,6 +259,8 @@ export default function SalesDocPage() {
 
       <ByGuidPanel />
 
+      <MovementsProbePanel />
+
       <TxnTypesPanel />
 
       <VisitsSamplePanel />
@@ -1760,6 +1762,81 @@ function ByGuidPanel() {
               </div>
             </>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// getMovement нашёлся зондом (91 запись), но по имени не понять, перемещения
+// это или списания. Отвечают поля: два склада — перемещение, один склад со
+// статьёй затрат — списание. Смотрим сырые записи, а не гадаем.
+function MovementsProbePanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocMovementsProbe()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 📦 Что в getMovement: перемещения или списания?
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Зонд нашёл три складских метода — getMovement (91
+            запись), getConsumption и getInventory. По имени не понять, что в
+            них: если у записи два склада, «откуда» и «куда», — это перемещение;
+            если один склад и статья затрат — списание. Ниже поля и сырые
+            записи целиком.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Опрашиваю SalesDoc…</div>}
+          {data && Object.values(data).map((m) => (
+            <div key={m.method}>
+              <div className="rc-col-title">
+                {m.method} · {m.error ? 'ошибка' : `${m.count} записей`}
+              </div>
+              {m.error && <div className="error">{m.error}</div>}
+              {m.verdict && <div className="why-verdict">{m.verdict}</div>}
+              {m.fields?.length > 0 && (
+                <div className="table-wrap rc-table">
+                  <table>
+                    <thead>
+                      <tr><th>Поле</th><th className="num">Заполнено</th><th>Пример</th></tr>
+                    </thead>
+                    <tbody>
+                      {m.fields.map((f) => (
+                        <tr key={f.field}>
+                          <td>{f.field}</td>
+                          <td className="num">{f.filled}</td>
+                          <td className="muted">
+                            {typeof f.example === 'object'
+                              ? JSON.stringify(f.example)
+                              : String(f.example ?? '—')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {m.sample?.length > 0 && (
+                <details>
+                  <summary className="muted">сырые записи ({m.sample.length})</summary>
+                  <pre className="order-raw-json">
+                    {JSON.stringify(m.sample, null, 2)}
+                  </pre>
+                </details>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
