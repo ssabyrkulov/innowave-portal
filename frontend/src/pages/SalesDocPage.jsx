@@ -1797,8 +1797,8 @@ function StoreLogDebug() {
         формат даты, обязательный <code>documents</code>, иное имя поля склада.
         Перебор идёт по одному складу, чтобы не упереться в лимит запросов —
         занимает около 15 секунд.</p>
-      <button className="btn btn-sm" onClick={run} disabled={loading}>
-        {loading ? 'Перебираю формы запроса…' : 'Разобраться, почему пусто'}
+      <button className="btn btn-primary" onClick={run} disabled={loading}>
+        {loading ? '⏳ Перебираю формы запроса…' : '🔎 Разобраться, почему пусто'}
       </button>
       {error && <div className="error">{error}</div>}
       {data && (
@@ -1895,12 +1895,12 @@ function StoreLogPanel() {
                     но не «мы прочитали не тот ключ»: портал берёт из ответа
                     любой список, как бы он ни назывался.</>
                   )}
+                  <StoreLogDebug />
                 </div>
               )}
               {data.result_keys?.length > 0 && (
                 <p className="muted">Массив в ответе: <code>{data.result_keys.join(', ')}</code></p>
               )}
-              {data.rows_total === 0 && <StoreLogDebug />}
               <div className="rc-col-title">Типы документов в журнале</div>
               <div className="table-wrap rc-table">
                 <table>
