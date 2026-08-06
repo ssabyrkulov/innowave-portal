@@ -2202,13 +2202,37 @@ def movements_probe(
     for method, keys in probes:
         entry: dict = {"method": method}
         try:
-            # Без фильтра и со всеми статусами: у SalesDoc метод может по
-            # умолчанию отдавать только новые документы — на getOrder и
-            # getOrderDefect мы на это уже наступали.
-            rows = salesdoc.call_all(method, keys, {"filter": {
-                "include": "all", "status": [1, 2, 3, 4, 5]}})
-            if not rows:
-                rows = salesdoc.call_all(method, keys)
+            # «Ноль записей» у SalesDoc дважды означало не «пусто», а «спросили
+            # не так»: getOrder скрывал заказы без списка статусов,
+            # getOrderDefect — без него же. Поэтому не верим первому нулю, а
+            # перебираем формы запроса и показываем, какая что вернула.
+            today = date.today()
+            wide = {"from": f"{today.year - 3}-01-01",
+                    "to": f"{today.year + 1}-12-31"}
+            shapes = [
+                ("без параметров", None),
+                ("include=all + все статусы",
+                 {"filter": {"include": "all", "status": [1, 2, 3, 4, 5]}}),
+                ("период по date", {"filter": {"period": {"date": wide}}}),
+                ("период + все статусы",
+                 {"filter": {"include": "all", "status": [1, 2, 3, 4, 5],
+                             "period": {"date": wide}}}),
+                ("период по dateCreate",
+                 {"filter": {"period": {"dateCreate": wide}}}),
+            ]
+            rows, tried = [], []
+            for name, params in shapes:
+                try:
+                    got = salesdoc.call_all(method, keys, params) if params \
+                        else salesdoc.call_all(method, keys)
+                except salesdoc.SalesDocError as e:
+                    tried.append({"shape": name, "error": str(e)[:120]})
+                    continue
+                tried.append({"shape": name, "count": len(got)})
+                if len(got) > len(rows):
+                    rows = got
+                    entry["worked"] = name
+            entry["attempts"] = tried
             entry["count"] = len(rows)
             entry["sample"] = rows[:3]
             fields: dict = {}
@@ -2250,7 +2274,10 @@ def movements_probe(
             elif rows:
                 entry["verdict"] = "Складских ссылок в записи нет — см. поля."
             else:
-                entry["verdict"] = "Метод существует, но записей не отдаёт."
+                entry["verdict"] = (
+                    "Метод существует, но не отдал ни одной записи ни при одной "
+                    "форме запроса — включая период за три года и все статусы. "
+                    "Похоже, он действительно пуст.")
         except salesdoc.SalesDocError as e:
             entry["error"] = str(e)[:200]
         out[method] = entry

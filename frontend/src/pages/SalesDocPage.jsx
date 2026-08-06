@@ -1817,6 +1817,18 @@ function MovementsProbePanel() {
               </div>
               {m.error && <div className="error">{m.error}</div>}
               {m.verdict && <div className="why-verdict">{m.verdict}</div>}
+              {m.attempts?.length > 0 && (
+                <p className="muted">
+                  Формы запроса:{' '}
+                  {m.attempts.map((a, i) => (
+                    <span key={i}>
+                      {i > 0 && ' · '}
+                      {a.shape} → {a.error ? `ошибка (${a.error})` : `${a.count}`}
+                    </span>
+                  ))}
+                  {m.worked && <> · сработала: <b>{m.worked}</b></>}
+                </p>
+              )}
               {m.fields?.length > 0 && (
                 <div className="table-wrap rc-table">
                   <table>
