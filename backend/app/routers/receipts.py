@@ -550,18 +550,32 @@ def receivables(
     paid: dict[str, float] = defaultdict(float)
     last_payment: dict[str, date] = {}
     unmatched: dict[str, dict] = {}
-    # Банк и касса раздельно: пока 1С не выгружает ПКО, наличные оплаты в
-    # портал не попадают и долги выглядят завышенными. Предупреждать об этом
-    # надо по факту, а не текстом в вёрстке: как только касса поедет, плашка
-    # должна погаснуть сама, иначе она начнёт врать.
+    # Банк и касса раздельно, и в каждом — сколько строк дошло до дебиторки.
+    # Две причины, по которым касса может не влиять на долг, выглядят снаружи
+    # одинаково («долг завышен»), а лечатся по-разному: файла ПКО нет вовсе
+    # либо он грузится, но с видом операции, который к покупателям отношения
+    # не имеет (розничная выручка, снятие в банке, возврат подотчётника).
+    # Поэтому считаем обе цифры и отдаём наружу, а не пишем вывод в вёрстке.
+    def _kind_of(r) -> str:
+        return r.kind or "bank"
+
     by_kind: dict[str, dict] = {
-        "bank": {"paid": 0.0, "count": 0},
-        "cash": {"paid": 0.0, "count": 0},
+        "bank": {"paid": 0.0, "count": 0, "rows": 0},
+        "cash": {"paid": 0.0, "count": 0, "rows": 0},
     }
+    other_ops: dict[str, dict] = {}
     for r in receipts:
+        k = by_kind.setdefault(_kind_of(r), {"paid": 0.0, "count": 0, "rows": 0})
+        k["rows"] += 1
         if not r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
+            key = (_kind_of(r), r.operation)
+            o = other_ops.setdefault(key, {
+                "kind": key[0], "operation": r.operation,
+                "amount": 0.0, "count": 0,
+            })
+            o["amount"] += float(r.amount_kgs)
+            o["count"] += 1
             continue
-        k = by_kind.setdefault(r.kind or "bank", {"paid": 0.0, "count": 0})
         k["paid"] += float(r.amount_kgs)
         k["count"] += 1
         client = aliases.get(r.payer)
@@ -638,9 +652,17 @@ def receivables(
         "flag_notes": flag_notes,
         "has_receipts": len(receipts) > 0,
         "payment_kinds": {
-            k: {"paid": round(v["paid"], 2), "count": v["count"]}
+            k: {"paid": round(v["paid"], 2), "count": v["count"], "rows": v["rows"]}
             for k, v in by_kind.items()
         },
+        # Поступления, которые в дебиторку не идут: это не ошибка (розничная
+        # выручка и снятие наличных долг покупателя не гасят), но видеть их
+        # надо — иначе «оплата в кассе есть, а долг не уменьшился» выглядит
+        # как сбой портала.
+        "other_operations": sorted(
+            ({**o, "amount": round(o["amount"], 2)} for o in other_ops.values()),
+            key=lambda o: -o["amount"],
+        ),
         # Для фильтра: только те агенты, за кем реально числится хоть одна
         # точка — справочник целиком в выпадающем списке не нужен.
         "agents": agent_list,

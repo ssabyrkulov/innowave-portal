@@ -70,6 +70,51 @@ function AgentCell({ c }) {
   )
 }
 
+// Что с наличными. Состояний три, и путать их нельзя: файла ПКО нет вовсе;
+// файл грузится, но все его строки — не оплаты покупателей (розничная выручка,
+// снятие в банке) и долг гасить не должны; касса учтена. Первые два выглядят
+// снаружи одинаково — «долг завышен», — а лечатся по-разному.
+function CashNote({ cash, bank, other }) {
+  const [open, setOpen] = useState(false)
+  const otherCash = other.filter((o) => o.kind === 'cash')
+  const otherSum = otherCash.reduce((s, o) => s + o.amount, 0)
+
+  if (cash.rows === 0) {
+    return (
+      <div className="note-readonly">
+        Учитываются только безналичные оплаты — «Платёжное поручение входящее».
+        Наличные (приходный кассовый ордер) из 1С не приходят, поэтому реальные
+        долги могут быть ниже показанных. Портал такой файл уже принимает: как
+        только он появится в папке выгрузок, касса подхватится сама.
+      </div>
+    )
+  }
+  return (
+    <div className="note-readonly">
+      Учтены оплаты и по банку ({bank.count} шт. на {formatMoney(bank.paid)}), и
+      по кассе ({cash.count} шт. на {formatMoney(cash.paid)}).
+      {otherCash.length > 0 && (
+        <>
+          {' '}Ещё {cash.rows - cash.count} кассовых строк на{' '}
+          {formatMoney(otherSum)} долг не гасят — это не оплаты покупателей.{' '}
+          <button className="btn btn-ghost btn-sm" onClick={() => setOpen((v) => !v)}>
+            {open ? 'скрыть' : 'показать виды'}
+          </button>
+          {open && (
+            <ul className="debt-other-ops">
+              {otherCash.map((o) => (
+                <li key={o.operation}>
+                  {o.operation} — {o.count} шт. на {formatMoney(o.amount)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function DebtPage() {
   const { can } = useAuth()
   const [data, setData] = useState(null)
@@ -162,8 +207,8 @@ export default function DebtPage() {
   }
 
   const kinds = data?.payment_kinds || {}
-  const cash = kinds.cash || { paid: 0, count: 0 }
-  const bank = kinds.bank || { paid: 0, count: 0 }
+  const cash = kinds.cash || { paid: 0, count: 0, rows: 0 }
+  const bank = kinds.bank || { paid: 0, count: 0, rows: 0 }
   const flags = data?.flags || {}
   const flaggedSet = new Set(Object.keys(flags))
   const allDebtors = data ? data.clients.filter((c) => c.debt > 0.01) : []
@@ -199,21 +244,7 @@ export default function DebtPage() {
         <h1>Дебиторка</h1>
       </div>
 
-      {cash.count > 0 ? (
-        <div className="note-readonly">
-          Учитываются оплаты и по банку ({bank.count} шт. на{' '}
-          {formatMoney(bank.paid)}), и по кассе ({cash.count} шт. на{' '}
-          {formatMoney(cash.paid)}).
-        </div>
-      ) : (
-        <div className="note-readonly">
-          Учитываются только безналичные оплаты — «Платёжное поручение
-          входящее». Наличные (приходный кассовый ордер) 1С пока не выгружает,
-          поэтому реальные долги могут быть ниже показанных. Портал такой файл
-          уже принимает: как только он появится в папке выгрузок, касса
-          подхватится сама и это предупреждение исчезнет.
-        </div>
-      )}
+      <CashNote cash={cash} bank={bank} other={data?.other_operations || []} />
 
       {error && <div className="error">{error}</div>}
 
