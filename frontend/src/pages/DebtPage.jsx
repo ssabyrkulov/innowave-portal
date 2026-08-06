@@ -41,6 +41,35 @@ const CATEGORIES = [
 ]
 const CAT_BY_KIND = Object.fromEntries(CATEGORIES.map((c) => [c.kind, c]))
 
+// Откуда известен агент точки. Заказ SalesDoc — самый надёжный источник:
+// выгрузка не отдаёт заказы уволенных, значит там всегда действующий агент.
+const SOURCE_HINT = {
+  'заказ': 'Агент последнего заказа в SalesDoc',
+  'визит': 'Агент последнего визита в SalesDoc',
+  '1С': 'Агент последней реализации в 1С — в SalesDoc точка не найдена',
+}
+
+// Ячейка «Агент»: имя, метка уволенного и источник. Пустая ячейка — это тоже
+// сигнал: точка есть, долг есть, а спросить не с кого.
+function AgentCell({ c }) {
+  if (!c.agent) {
+    return <span className="badge badge-overdue" title="За точкой не закреплён агент — долг некому взыскивать">без агента</span>
+  }
+  return (
+    <>
+      <span className={c.agent_active === false ? 'muted' : ''}>{c.agent}</span>
+      {c.agent_active === false && (
+        <span className="badge badge-overdue debt-agent-badge" title="Агент деактивирован в SalesDoc — точку надо передать">
+          уволен
+        </span>
+      )}
+      <div className="rc-note" title={SOURCE_HINT[c.agent_source] || ''}>
+        {c.agent_source}{c.agent_at ? ` · ${fmtDate(c.agent_at)}` : ''}
+      </div>
+    </>
+  )
+}
+
 export default function DebtPage() {
   const { can } = useAuth()
   const [data, setData] = useState(null)
@@ -52,6 +81,10 @@ export default function DebtPage() {
   const [detailClient, setDetailClient] = useState(null)
   const [pickClient, setPickClient] = useState('')
   const [pickNote, setPickNote] = useState('')
+  const [q, setQ] = useState('')
+  const [agentFilter, setAgentFilter] = useState('')   // '' | имя | __none__ | __fired__
+  const [minDebt, setMinDebt] = useState('')
+  const [staleOnly, setStaleOnly] = useState(false)
 
   async function load() {
     setError(null)
@@ -135,7 +168,27 @@ export default function DebtPage() {
   // Помеченные показываем даже с нулевым/погашенным долгом — это ручной список.
   const clientsOf = (kind) =>
     data ? data.clients.filter((c) => flags[c.client] === kind) : []
+  // Итог в шапке считаем по всей активной дебиторке, а не по отфильтрованной:
+  // фильтр — это способ посмотреть срез, а не изменить сумму долга компании.
   const activeDebt = debtors.reduce((s, c) => s + c.debt, 0)
+
+  const min = Number(minDebt) || 0
+  const needle = q.trim().toLowerCase()
+  const shown = debtors.filter((c) => {
+    if (needle && !(c.client || '').toLowerCase().includes(needle)
+        && !(c.agent || '').toLowerCase().includes(needle)) return false
+    if (agentFilter === '__none__' && c.agent) return false
+    if (agentFilter === '__fired__' && c.agent_active !== false) return false
+    if (agentFilter && !agentFilter.startsWith('__') && c.agent !== agentFilter) return false
+    if (min && c.debt < min) return false
+    if (staleOnly && !(daysSince(c.last_payment) > STALE_DAYS)) return false
+    return true
+  })
+  const shownDebt = shown.reduce((s, c) => s + c.debt, 0)
+  const filtersOn = Boolean(needle || agentFilter || min || staleOnly)
+  const agents = data?.agents || []
+  const noAgentCount = debtors.filter((c) => !c.agent).length
+  const firedCount = debtors.filter((c) => c.agent_active === false).length
 
   return (
     <div>
@@ -260,11 +313,68 @@ export default function DebtPage() {
           )}
 
           {tab === 'active' && (
+            <div className="chart-card debt-filters">
+              <div className="debt-filter-row">
+                <input
+                  className="product-search-input"
+                  placeholder="Поиск: клиент или агент…"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                />
+                <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)}>
+                  <option value="">Все агенты</option>
+                  {noAgentCount > 0 && (
+                    <option value="__none__">— без агента ({noAgentCount})</option>
+                  )}
+                  {firedCount > 0 && (
+                    <option value="__fired__">— агент уволен ({firedCount})</option>
+                  )}
+                  {agents.map((a) => (
+                    <option key={a.name} value={a.name}>
+                      {a.name}{a.active ? '' : ' (уволен)'} · {a.clients} т. · {formatMoney(a.debt)}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="product-search-input debt-filter-num"
+                  type="number"
+                  placeholder="Долг от…"
+                  value={minDebt}
+                  onChange={(e) => setMinDebt(e.target.value)}
+                />
+                <label className="debt-filter-check">
+                  <input
+                    type="checkbox"
+                    checked={staleOnly}
+                    onChange={(e) => setStaleOnly(e.target.checked)}
+                  />
+                  Только без оплат &gt; {STALE_DAYS} дн.
+                </label>
+                {filtersOn && (
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => { setQ(''); setAgentFilter(''); setMinDebt(''); setStaleOnly(false) }}
+                  >
+                    Сбросить
+                  </button>
+                )}
+              </div>
+              {filtersOn && (
+                <p className="muted debt-filter-total">
+                  Показано {shown.length} из {debtors.length} · долг в выборке{' '}
+                  <b>{formatMoney(shownDebt)}</b>
+                </p>
+              )}
+            </div>
+          )}
+
+          {tab === 'active' && (
           <div className="table-wrap compact">
             <table>
               <thead>
                 <tr>
                   <th>Клиент</th>
+                  <th>Агент</th>
                   <th className="num hide-mobile">Отгружено</th>
                   <th className="num hide-mobile">Возвраты</th>
                   <th className="num">Оплачено</th>
@@ -276,14 +386,14 @@ export default function DebtPage() {
                 </tr>
               </thead>
               <tbody>
-                {debtors.length === 0 && (
+                {shown.length === 0 && (
                   <tr>
-                    <td colSpan={can.editPayments ? 9 : 8} className="muted center">
-                      Долгов нет 🎉
+                    <td colSpan={can.editPayments ? 10 : 9} className="muted center">
+                      {debtors.length === 0 ? 'Долгов нет 🎉' : 'Под фильтр никто не подходит'}
                     </td>
                   </tr>
                 )}
-                {debtors.map((c) => {
+                {shown.map((c) => {
                   const stale = daysSince(c.last_payment) > STALE_DAYS
                   return (
                     <tr key={c.client}>
@@ -298,6 +408,7 @@ export default function DebtPage() {
                           </span>
                         )}
                       </td>
+                      <td className="debt-agent-col"><AgentCell c={c} /></td>
                       <td className="num hide-mobile">{formatMoney(c.shipped)}</td>
                       <td className="num muted hide-mobile">
                         {c.returned > 0 ? `−${formatMoney(c.returned)}` : '—'}
@@ -459,6 +570,7 @@ function CategoryTab({
           <thead>
             <tr>
               <th>Клиент</th>
+              <th>Агент</th>
               <th className="num">Долг</th>
               <th className="num">Дней без оплат</th>
               <th className="hide-mobile">Причина</th>
@@ -469,7 +581,7 @@ function CategoryTab({
           <tbody>
             {list.length === 0 && (
               <tr>
-                <td colSpan={canEdit ? 6 : 5} className="muted center">
+                <td colSpan={canEdit ? 7 : 6} className="muted center">
                   Список пуст. {canEdit ? 'Добавьте контрагента выше.' : ''}
                 </td>
               </tr>
@@ -481,6 +593,7 @@ function CategoryTab({
                     {c.client}
                   </button>
                 </td>
+                <td className="debt-agent-col" data-label="Агент"><AgentCell c={c} /></td>
                 <td className="num neg" data-label="Долг">{formatMoney(c.debt)}</td>
                 <td className="num" data-label="Дней без оплат">
                   {daysNoPay(c) != null ? `${daysNoPay(c)} дн.` : '—'}

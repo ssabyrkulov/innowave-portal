@@ -20,29 +20,10 @@ from ..services import salesdoc, salesdoc_mirror
 from .receipts import CUSTOMER_PAYMENT_PREFIX, receivables
 from .sales import sales_summary
 
-# Технические коды-хвосты вида z8_1249 / e4_1252 / (j1_129), которыми SalesDoc
-# и 1С помечают контрагентов по-разному и из-за которых точное имя не
-# совпадает. Для сопоставления их убираем.
-_CODE_RE = re.compile(r"[a-zа-я]{0,3}\d*_\d+", re.IGNORECASE)
-
-
-def _match_key(name: str) -> str:
-    """Ключ сопоставления клиента по имени: без кодов, скобок, кавычек и лишних
-    пробелов. Запасной вариант, если не удалось связать по ИД SalesDoc."""
-    s = (name or "").lower().replace("ё", "е")
-    s = re.sub(r"\([^)]*\)", " ", s)          # (…)
-    s = _CODE_RE.sub(" ", s)                   # z8_1249 и т.п.
-    # Любую пунктуацию (кавычки, дефис и пр.) сводим к пробелу — «Ош-Нурзаман»
-    # и «Ош Нурзаман» должны совпасть.
-    s = re.sub(r"[^\w\s]", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
-def _extract_sd_id(name: str) -> str | None:
-    """Достаёт ИД клиента SalesDoc (напр. z8_1249) из имени контрагента 1С —
-    самый надёжный ключ, т.к. он присутствует и там, и там."""
-    m = _CODE_RE.search(name or "")
-    return m.group(0).lower() if m else None
+# Сопоставление имён 1С ↔ SalesDoc живёт в зеркале: дебиторке оно нужно так же,
+# как сверке, а импортировать роутер из роутера нельзя (получится цикл).
+_match_key = salesdoc_mirror.match_key
+_extract_sd_id = salesdoc_mirror.extract_sd_id
 
 router = APIRouter(prefix="/salesdoc", tags=["salesdoc"])
 

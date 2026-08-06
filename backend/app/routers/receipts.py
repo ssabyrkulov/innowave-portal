@@ -479,6 +479,8 @@ def receivables(
     org: str = Query(default="all"),
 ):
     """Дебиторка: отгружено − возвраты − оплачено по каждому клиенту."""
+    from ..services import salesdoc_mirror
+
     sales = models.org_scope(db.query(models.Sale), models.Sale, org).all()
     receipts = models.org_scope(db.query(models.Receipt), models.Receipt, org).all()
     return_docs = models.org_scope(db.query(models.ReturnDoc), models.ReturnDoc, org).all()
@@ -516,6 +518,27 @@ def receivables(
 
     norm_clients = {_normalize(c): c for c in shipped}
 
+    # Агент точки. Долг взыскивает живой человек, поэтому колонка отвечает не
+    # на вопрос «кто когда-то продал», а «кому сегодня ставить задачу»:
+    # действующий агент из SalesDoc, а если точки там нет — агент последней
+    # реализации 1С, помеченный уволенным, если в справочнике он неактивен.
+    try:
+        idx = salesdoc_mirror.agent_by_client_1c(db)
+    except Exception:  # noqa: BLE001 — дебиторка обязана открыться и без SalesDoc
+        idx = {"by_client": {}, "agents": [], "active_names": []}
+    agent_of = idx["by_client"]
+    _ag_key = salesdoc_mirror.match_key
+    known_agents = {_ag_key(a["name"]): a["active"] for a in idx["agents"]}
+
+    last_1c_agent: dict[str, tuple[date, str]] = {}
+    for s in sales:
+        name = s.agent or s.responsible
+        if not name:
+            continue
+        prev = last_1c_agent.get(s.client)
+        if prev is None or s.date > prev[0]:
+            last_1c_agent[s.client] = (s.date, name)
+
     # Возвраты уменьшают долг клиента (сопоставление имён — как у оплат)
     returned: dict[str, float] = defaultdict(float)
     for rd in return_docs:
@@ -550,7 +573,19 @@ def receivables(
         sh = shipped.get(client, 0.0)
         pd = paid.get(client, 0.0)
         ret = returned.get(client, 0.0)
+        a = agent_of.get(client)
+        if a is None and client in last_1c_agent:
+            when, name = last_1c_agent[client]
+            a = {"agent": name,
+                 # Неизвестного справочнику агента не объявляем уволенным:
+                 # в 1С встречаются и менеджеры, которых в SalesDoc нет вовсе.
+                 "agent_active": known_agents.get(_ag_key(name), True),
+                 "agent_source": "1С", "agent_at": when.isoformat()}
         clients.append({
+            "agent": a and a["agent"],
+            "agent_active": a["agent_active"] if a else None,
+            "agent_source": a and a["agent_source"],
+            "agent_at": a and a["agent_at"],
             "client": client,
             "shipped": round(sh, 2),
             "returned": round(ret, 2),
@@ -561,6 +596,21 @@ def receivables(
             "last_payment": last_payment.get(client) and last_payment[client].isoformat(),
         })
     clients.sort(key=lambda c: -c["debt"])
+
+    by_agent: dict[str, dict] = {}
+    for c in clients:
+        if not c["agent"]:
+            continue
+        a = by_agent.setdefault(c["agent"], {
+            "name": c["agent"], "active": c["agent_active"],
+            "clients": 0, "debt": 0.0,
+        })
+        a["clients"] += 1
+        a["debt"] += c["debt"]
+    agent_list = sorted(
+        ({**a, "debt": round(a["debt"], 2)} for a in by_agent.values()),
+        key=lambda a: -a["debt"],
+    )
 
     total_shipped = sum(shipped.values())
     total_paid = sum(paid.values())
@@ -576,4 +626,7 @@ def receivables(
         "flags": flags,
         "flag_notes": flag_notes,
         "has_receipts": len(receipts) > 0,
+        # Для фильтра: только те агенты, за кем реально числится хоть одна
+        # точка — справочник целиком в выпадающем списке не нужен.
+        "agents": agent_list,
     }

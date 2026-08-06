@@ -357,6 +357,11 @@ class SalesDocOrder(Base):
     amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     returns_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     code_1c: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Агент заказа. Именно он показывает, кто сейчас ведёт точку: getOrder не
+    # отдаёт заказы деактивированных агентов, поэтому всё, что здесь лежит, —
+    # работа действующих сотрудников.
+    agent_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    agent_name: Mapped[str | None] = mapped_column(String, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -479,6 +484,23 @@ class SalesDocVisit(Base):
     reject: Mapped[str | None] = mapped_column(String, nullable=True)
     has_order: Mapped[bool] = mapped_column(Boolean, default=False)
     order_summa: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SalesDocAgent(Base):
+    """Справочник агентов SalesDoc с признаком «работает сейчас».
+
+    Признак active — не украшение: деактивированного агента SalesDoc вычёркивает
+    из выгрузки вместе со всей его историей продаж, а его точки остаются без
+    хозяина. В дебиторке колонка «агент» без этого признака бесполезна:
+    непонятно, кому ставить задачу по долгу."""
+
+    __tablename__ = "salesdoc_agents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

@@ -15,10 +15,12 @@
 SalesDoc не дёргается на каждый клик.
 """
 
+import re
 import threading
 import time
 from datetime import date, datetime, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -76,6 +78,40 @@ def _day(value) -> date | None:
         return date.fromisoformat(s)
     except ValueError:
         return None
+
+
+# Технические коды-хвосты вида z8_1249 / e4_1252 / (j1_129), которыми SalesDoc
+# и 1С помечают контрагентов по-разному и из-за которых точное имя не
+# совпадает. Для сопоставления их убираем.
+_CODE_RE = re.compile(r"[a-zа-я]{0,3}\d*_\d+", re.IGNORECASE)
+
+
+def match_key(name: str) -> str:
+    """Ключ сопоставления клиента по имени: без кодов, скобок, кавычек и лишних
+    пробелов. Запасной вариант, если не удалось связать по ИД SalesDoc."""
+    s = (name or "").lower().replace("ё", "е")
+    s = re.sub(r"\([^)]*\)", " ", s)          # (…)
+    s = _CODE_RE.sub(" ", s)                   # z8_1249 и т.п.
+    # Любую пунктуацию (кавычки, дефис и пр.) сводим к пробелу — «Ош-Нурзаман»
+    # и «Ош Нурзаман» должны совпасть.
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def extract_sd_id(name: str) -> str | None:
+    """Достаёт ИД клиента SalesDoc (напр. z8_1249) из имени контрагента 1С —
+    самый надёжный ключ, т.к. он присутствует и там, и там."""
+    m = _CODE_RE.search(name or "")
+    return m.group(0).lower() if m else None
+
+
+def _ref_id(v) -> str | None:
+    """SD_id вложенной ссылки (агент, склад, направление) — если она словарь."""
+    return str(v.get("SD_id") or "").lower() or None if isinstance(v, dict) else None
+
+
+def _ref_name(v) -> str | None:
+    return (v.get("name") or None) if isinstance(v, dict) else None
 
 
 def _client_keys(cli: dict | None) -> tuple[str | None, str | None]:
@@ -264,6 +300,8 @@ def sync_orders(db: Session, updated_since: str | None = None) -> int:
             "amount": float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0),
             "returns_amount": float(o.get("totalReturnsSumma") or 0),
             "code_1c": o.get("code_1C"),
+            "agent_sd_id": _ref_id(o.get("agent")),
+            "agent_name": _ref_name(o.get("agent")),
         })
     if updated_since is None:  # полная выгрузка — вычищаем удалённое в SalesDoc
         db.flush()
@@ -697,6 +735,143 @@ def sync_warehouses(db: Session, updated_since: str | None = None) -> int:
     return len(rows)
 
 
+def sync_agents(db: Session, updated_since: str | None = None) -> int:
+    """Справочник агентов с признаком «работает сейчас» (getAgent.active).
+
+    Справочник маленький (два десятка записей), дельты у него нет — читаем
+    целиком. Уволенных из справочника не удаляем: их имена ещё встречаются в
+    истории 1С, и по ним надо уметь сказать «этот уже не работает»."""
+    rows = salesdoc.call_all("getAgent", ("agent", "agents"))
+    for a in rows:
+        sid = str(a.get("SD_id") or "").lower()
+        if not sid:
+            continue
+        row = db.query(models.SalesDocAgent).filter_by(sd_id=sid).first()
+        if row is None:
+            row = models.SalesDocAgent(sd_id=sid)
+            db.add(row)
+        row.name = a.get("name") or row.name or ""
+        # SalesDoc отдаёт признак строкой «Y»/«N», а не булевым.
+        act = a.get("active")
+        row.active = not (act in ("N", "n", False, 0, "0"))
+        row.synced_at = datetime.utcnow()
+    return len(rows)
+
+
+# Агент «ведёт точку», если работал по ней за это окно. Дольше — уже история:
+# маршруты за год пересобираются не раз, и старый агент к точке отношения не
+# имеет, даже если формально числится.
+AGENT_WINDOW_DAYS = 180
+
+
+def agent_by_client_1c(db: Session) -> dict:
+    """Кто из действующих агентов ведёт каждую точку — ключом по имени 1С.
+
+    Источники, в порядке достоверности: заказ SalesDoc (агент проставлен в
+    самом документе), затем визит. Заказы деактивированных агентов SalesDoc в
+    выгрузку не отдаёт вовсе, поэтому всё, что приходит оттуда, — работа
+    действующих сотрудников; признак active всё равно проверяем по справочнику,
+    чтобы отличать «агента нет» от «агент уволен».
+
+    Возвращает {имя контрагента 1С: {agent, active, source, at}} — плюс
+    справочник агентов для фильтра."""
+    agents = {a.sd_id: a for a in db.query(models.SalesDocAgent).all()}
+    active_ids = {sid for sid, a in agents.items() if a.active}
+    # Имена тоже нужны: в 1С агент записан именем, без ИД SalesDoc.
+    active_names = {match_key(a.name) for a in agents.values() if a.active and a.name}
+    known_names = {match_key(a.name): a.active for a in agents.values() if a.name}
+
+    since = datetime.utcnow() - timedelta(days=AGENT_WINDOW_DAYS)
+    # События «агент работал по точке»: заказы и визиты. Ключ — клиент SalesDoc.
+    events: dict[str, list[tuple]] = {}
+
+    def add(client_sd_id, at, agent_sd_id, agent_name, source):
+        if not client_sd_id or not agent_name or at is None:
+            return
+        events.setdefault(str(client_sd_id).lower(), []).append(
+            (at, agent_sd_id, agent_name, source))
+
+    for o in (db.query(models.SalesDocOrder)
+              .filter(models.SalesDocOrder.agent_name.isnot(None),
+                      models.SalesDocOrder.date.isnot(None),
+                      models.SalesDocOrder.date >= since.date(),
+                      models.SalesDocOrder.status != salesdoc.CANCELLED_STATUS)
+              .all()):
+        add(o.client_sd_id, datetime.combine(o.date, datetime.min.time()),
+            o.agent_sd_id, o.agent_name, "заказ")
+
+    # Визитов ~100 тыс. — сворачиваем в СУБД: на пару «точка + агент» нужен
+    # только последний визит, тянуть каждый в питон незачем.
+    visit_rows = (
+        db.query(models.SalesDocVisit.client_sd_id,
+                 models.SalesDocVisit.agent_sd_id,
+                 models.SalesDocVisit.agent_name,
+                 func.max(models.SalesDocVisit.at))
+        .filter(models.SalesDocVisit.visited.is_(True),
+                models.SalesDocVisit.at >= since)
+        .group_by(models.SalesDocVisit.client_sd_id,
+                  models.SalesDocVisit.agent_sd_id,
+                  models.SalesDocVisit.agent_name)
+        .all())
+    for client_sd_id, agent_sd_id, agent_name, at in visit_rows:
+        add(client_sd_id, at, agent_sd_id, agent_name, "визит")
+
+    def is_active(agent_sd_id, agent_name) -> bool:
+        if agent_sd_id and agent_sd_id in agents:
+            return agent_sd_id in active_ids
+        return known_names.get(match_key(agent_name), True)
+
+    by_sd_id: dict[str, dict] = {}
+    for cli, evs in events.items():
+        # Действующий агент важнее свежести: если точку последним трогал
+        # уволенный, показывать надо того, кто работает по ней сейчас.
+        evs.sort(key=lambda e: (is_active(e[1], e[2]), e[0]), reverse=True)
+        at, agent_sd_id, agent_name, source = evs[0]
+        by_sd_id[cli] = {
+            "agent": agent_name,
+            "agent_active": is_active(agent_sd_id, agent_name),
+            "agent_source": source,
+            "agent_at": at.date().isoformat(),
+        }
+
+    # Индексы для сопоставления с 1С: по коду, по ИД в имени, по имени.
+    by_code: dict[str, dict] = {}
+    by_key: dict[str, dict] = {}
+    for c in db.query(models.SalesDocClient).all():
+        e = by_sd_id.get((c.sd_id or "").lower())
+        if not e:
+            continue
+        if c.code_1c:
+            by_code[str(c.code_1c)] = e
+        if c.name:
+            by_key.setdefault(match_key(c.name), e)
+
+    links = {l.client_1c: (l.sd_id or "").lower()
+             for l in db.query(models.SalesDocClientLink).all()}
+
+    out: dict[str, dict] = {}
+
+    def resolve(name: str) -> dict | None:
+        sid = links.get(name) or extract_sd_id(name)
+        return (by_sd_id.get(sid) if sid else None) or by_key.get(match_key(name))
+
+    for name in {s.client for s in db.query(models.Sale.client).distinct()}:
+        e = resolve(name)
+        if e:
+            out[name] = e
+
+    return {
+        "by_client": out,
+        "by_sd_id": by_sd_id,
+        "by_code_1c": by_code,
+        "agents": sorted(
+            ({"name": a.name, "active": bool(a.active)} for a in agents.values() if a.name),
+            key=lambda a: (not a["active"], a["name"]),
+        ),
+        "active_names": sorted(active_names),
+    }
+
+
 def sync_stock(db: Session, updated_since: str | None = None) -> int:
     """Остатки по складам и позициям — в зеркало.
 
@@ -801,6 +976,7 @@ def sync(full: bool = False) -> dict:
                     ("payments", sync_payments, "getPayment", models.SalesDocPayment),
                     ("clients", sync_clients, None, models.SalesDocClient),
                     ("warehouses", sync_warehouses, None, models.SalesDocStore),
+                    ("agents", sync_agents, None, models.SalesDocAgent),
                     ("stock", sync_stock, None, models.SalesDocStock),
                     ("visits", sync_visits, None, models.SalesDocVisit)):
                 st = _state(db, kind)
