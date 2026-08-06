@@ -99,6 +99,7 @@ class Sale(Base):
     agent: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     discount_pct: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     account: Mapped[str | None] = mapped_column(String, nullable=True)
+    responsible: Mapped[str | None] = mapped_column(String, nullable=True)
     # GUID документа 1С. SalesDoc отдаёт его же в поле code_1C, поэтому
     # связка документов по нему точная — в отличие от поиска по сумме и
     # дате с допуском, который рвётся от любой правки документа.
