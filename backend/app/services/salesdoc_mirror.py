@@ -775,6 +775,80 @@ def sync_products(db: Session, updated_since: str | None = None) -> int:
     return len(rows)
 
 
+STORE_LOG_DAYS = 1200  # глубина журнала склада — как у остального зеркала
+
+
+def sync_store_log(db: Session, updated_since: str | None = None) -> int:
+    """Журнал движений склада — в зеркало, по всем складам.
+
+    Метод устроен иначе прочих: параметры идут напрямую (storeId, from, to), а
+    не внутри filter, склад обязателен, ответ приходит массивом без обёртки, и
+    сервер отбивает частые запросы кодом 429. Отсюда обход складов по одному с
+    паузой и повторами.
+
+    Дельты у метода нет — перекладываем целиком. Строк тысячи, не десятки
+    тысяч, так что это дёшево."""
+    import hashlib
+
+    today = date.today()
+    frm = (today - timedelta(days=STORE_LOG_DAYS)).isoformat()
+    to = (today + timedelta(days=1)).isoformat()
+    stores = [(s.store_id, s.name or s.store_id)
+              for s in db.query(models.SalesDocStore).all() if s.store_id]
+    names = {p.sd_id: p.name for p in db.query(models.SalesDocProduct).all()}
+
+    fetched: list[tuple] = []
+    for i, (sid, sname) in enumerate(stores):
+        if i:
+            time.sleep(1.2)
+        rows = None
+        for attempt in range(4):
+            try:
+                rows = salesdoc.call_all("getStoreLog", ("storeLog", "log"),
+                                         {"storeId": sid, "from": frm, "to": to})
+                break
+            except salesdoc.SalesDocError as e:
+                if "429" in str(e) and attempt < 3:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise
+        for r in rows or []:
+            if isinstance(r, dict):
+                fetched.append((sid, sname, r))
+
+    # Пустой ответ по всем складам — не повод стирать зеркало: скорее всего
+    # это сбой связи, а не опустевший журнал.
+    if not fetched:
+        return 0
+
+    db.query(models.SalesDocStoreLog).delete(synchronize_session=False)
+    for sid, sname, r in fetched:
+        pid = str(r.get("product_id") or "").lower() or None
+        raw = f"{sid}|{r.get('document')}|{r.get('document_id')}|{pid}|{r.get('date')}"
+        db.add(models.SalesDocStoreLog(
+            key=hashlib.sha256(raw.encode()).hexdigest()[:48],
+            store_sd_id=sid, store_name=sname,
+            document=str(r.get("document") or "") or None,
+            document_sd_id=str(r.get("document_id") or "") or None,
+            at=_stamp(r.get("date")),
+            product_sd_id=pid,
+            product_name=names.get(pid),
+            quantity=float(r.get("quantity") or 0),
+        ))
+    return len(fetched)
+
+
+def _stamp(value):
+    """Дата-время из ответа SalesDoc ('2026-07-27 05:47:24')."""
+    s = str(value or "").strip().replace("T", " ")[:19]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def sync_movements(db: Session, updated_since: str | None = None) -> int:
     """Перемещения между складами (getMovement) — в зеркало вместе со строками.
 
@@ -1093,12 +1167,14 @@ def sync(full: bool = False) -> dict:
                     ("agents", sync_agents, None, models.SalesDocAgent),
                     ("products", sync_products, None, models.SalesDocProduct),
                     ("movements", sync_movements, None, models.SalesDocMovement),
+                    ("store_log", sync_store_log, None, models.SalesDocStoreLog),
                     ("stock", sync_stock, None, models.SalesDocStock),
                     ("visits", sync_visits, None, models.SalesDocVisit)):
                 st = _state(db, kind)
                 # Визиты (~100 тыс. строк) — только при полной синхронизации:
                 # для минутной дельты набор слишком тяжёлый.
-                if kind == "visits" and not full and st.last_full_at is not None:
+                if kind in ("visits", "store_log") and not full \
+                        and st.last_full_at is not None:
                     result[kind] = {"skipped": "обновляется при полной синхронизации"}
                     continue
                 since = None

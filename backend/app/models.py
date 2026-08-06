@@ -552,6 +552,32 @@ class SalesDocClientAgent(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocStoreLog(Base):
+    """Строка журнала движений склада SalesDoc (getStoreLog).
+
+    Единственное место, где видны списания: отдельного метода для их чтения в
+    API нет (setExcretion умеет записать, getExcretion не существует). Здесь же
+    лежат поступления, обмены, корректировки и возвраты — то есть весь товарный
+    оборот построчно, с количеством и знаком: плюс приход, минус расход.
+
+    Своего идентификатора у строки нет, ключ синтетический: склад + документ +
+    товар + время."""
+
+    __tablename__ = "salesdoc_store_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    key: Mapped[str] = mapped_column(String(48), unique=True, nullable=False, index=True)
+    store_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    store_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    document: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    document_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    product_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    product_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    quantity: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class SalesDocProduct(Base):
     """Справочник номенклатуры SalesDoc (getProduct).
 

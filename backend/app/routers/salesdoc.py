@@ -1971,8 +1971,12 @@ ID_MATCH_KINDS = {
 # Виды, у которых одна из сторон в портал пока не заведена. Помечать их
 # «только в 1С» или «только в SalesDoc» нельзя: это утверждение об отсутствии
 # документа, а на деле мы во второй системе просто не искали.
-NO_SD_SIDE = {"purchases", "writeoffs"}
+NO_SD_SIDE: set[str] = set()
 NO_1C_SIDE = {"movements"}
+# Виды, которые считаются в штуках: сумм у них нет ни в 1С, ни в SalesDoc.
+QTY_KINDS = {"writeoffs", "purchases", "movements"}
+# Тип документа в журнале склада SalesDoc для каждого нашего вида.
+STORE_LOG_DOC = {"writeoffs": "Excretion", "purchases": "Purchase"}
 
 # Насколько далеко разрешаем расходиться датам при сопоставлении без
 # идентификатора: документ правят задним числом, и день-два разницы — норма.
@@ -2068,25 +2072,29 @@ def id_match(
                       0, {"qty": float(m.qty or 0), "lines": m.positions})
                   for m in db.query(models.SalesDocMovement).all()]
     else:
-        # Закупки и списания: где SalesDoc держит такие документы, пока не
-        # выяснено — метода в API мы не нашли. Поэтому сторона SD здесь не
-        # запрашивается вовсе, и помечать строки «только в 1С» нельзя: это
-        # означало бы «в SalesDoc документа нет», а на деле мы там не искали.
+        # Закупки и списания. Отдельных методов для них в API нет, но журнал
+        # склада отдаёт и то и другое построчно — Excretion и Purchase. Строки
+        # сворачиваем в документы: в 1С единица сверки тоже документ.
+        # Складские документы сверяем ПОСТРОЧНО, а не документами. В 1С одно
+        # списание на 11 штук двумя позициями, в SalesDoc — два документа на 6
+        # и 5: документы не совпадут никогда, а строки совпадают точно. Единица
+        # сверки должна быть та, в которой системы согласны.
+        L = models.SalesDocStoreLog
+        log = (db.query(L).filter(L.document == STORE_LOG_DOC[kind]).all()
+               if kind in STORE_LOG_DOC else [])
+        theirs = [doc(None, r.at.date() if r.at else None, r.document_sd_id,
+                      r.product_name or r.product_sd_id or "—", 0,
+                      # Расход приходит минусом; сверяем с 1С по модулю.
+                      {"qty": abs(round(float(r.quantity or 0), 1)),
+                       "note": r.store_name})
+                  for r in log]
+
         model = models.Purchase if kind == "purchases" else models.WriteOff
-        by_doc = {}
         for r in scope(model).all():
-            key = (r.doc_number, r.date)
-            d = by_doc.setdefault(key, {
-                "guid": r.doc_guid, "date": r.date, "number": r.doc_number,
-                "client": getattr(r, "supplier", None) or r.warehouse or "—",
-                "amount": 0.0, "lines": 0})
-            d["lines"] += 1
-            d["amount"] += float(getattr(r, "amount_kgs", None) or 0)
-            d["qty"] = d.get("qty", 0.0) + float(r.qty or 0)
-        for d in by_doc.values():
-            ours.append(doc(d["guid"], d["date"], d["number"], d["client"],
-                            d["amount"], {"lines": d["lines"],
-                                          "qty": round(d.get("qty", 0.0), 1)}))
+            ours.append(doc(r.doc_guid, r.date, r.doc_number,
+                            r.product or "—", 0,
+                            {"qty": round(float(r.qty or 0), 1),
+                             "note": getattr(r, "supplier", None) or r.warehouse}))
 
     # --- Связывание: сначала по идентификатору, потом по сумме и дате ---
     has_sd = bool(theirs)
@@ -2094,13 +2102,26 @@ def id_match(
     used: set[int] = set()
     rows: list[dict] = []
 
+    from .purchases import _norm_product
+
     def norm(name):
-        return salesdoc_mirror.match_key(name or "")
+        # У складских строк в поле «контрагент» лежит номенклатура: названия
+        # в системах пишутся по-разному («Подгузники StarKid размер L*4» против
+        # «Детские подгузники StarKid размер L»), поэтому ключ — тот же, что в
+        # расчёте остатков.
+        return (_norm_product(name) if kind in QTY_KINDS
+                else salesdoc_mirror.match_key(name or ""))
+
+    # Ключ сопоставления: сумма там, где деньги есть, иначе количество.
+    by_qty = kind in QTY_KINDS
+
+    def mval(d) -> float:
+        return round(float(d.get("qty") or 0), 1) if by_qty else d["amount"]
 
     # Индекс оставшихся документов SalesDoc для сопоставления по сумме.
     pool: dict[tuple, list] = {}
     for i, t in enumerate(theirs):
-        pool.setdefault((norm(t["client"]), round(t["amount"], 2)), []).append(i)
+        pool.setdefault((norm(t["client"]), mval(t)), []).append(i)
     idx_of = {id(t): i for i, t in enumerate(theirs)}
 
     def near(a, b) -> bool:
@@ -2118,7 +2139,7 @@ def id_match(
             continue
         # Идентификатора нет — пробуем по контрагенту, сумме и дате.
         found = None
-        for i in pool.get((norm(o["client"]), o["amount"]), []):
+        for i in pool.get((norm(o["client"]), mval(o)), []):
             if i in used or not near(o["date"], theirs[i]["date"]):
                 continue
             found = i
@@ -2162,7 +2183,7 @@ def id_match(
         "kind": kind, "label": ID_MATCH_KINDS[kind],
         # У списаний в выгрузке 1С суммы нет — только количество. Показывать
         # там «0 KGS» значит утверждать, что документ на ноль сомов.
-        "measure": "qty" if kind in ("writeoffs", "movements") else "money",
+        "measure": "qty" if kind in QTY_KINDS else "money",
         "has_1c": kind not in NO_1C_SIDE,
         # Сколько документов SalesDoc вообще несут идентификатор. У перемещений
         # code_1C пуст у всех до одного — значит связать их с 1С по ИД будет
