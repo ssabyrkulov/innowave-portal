@@ -1776,10 +1776,11 @@ function MovementsProbePanel() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [custom, setCustom] = useState('')
 
   function load() {
     setLoading(true); setError(null)
-    api.salesdocMovementsProbe()
+    api.salesdocMovementsProbe(custom.trim())
       .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
   }
   function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
@@ -1787,15 +1788,26 @@ function MovementsProbePanel() {
   return (
     <div className="chart-card store-map">
       <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
-        {open ? '▾' : '▸'} 📦 Что в getMovement: перемещения или списания?
+        {open ? '▾' : '▸'} 📦 Складские методы SalesDoc: что в них лежит
       </button>
       {open && (
         <div className="store-map-body">
-          <p className="muted">Зонд нашёл три складских метода — getMovement (91
-            запись), getConsumption и getInventory. По имени не понять, что в
-            них: если у записи два склада, «откуда» и «куда», — это перемещение;
-            если один склад и статья затрат — списание. Ниже поля и сырые
-            записи целиком.</p>
+          <p className="muted">Списания в интерфейсе SalesDoc живут по адресу
+            <code>/stock/excretion</code>, а имена методов в этом API повторяют
+            разделы (movement, inventory, consumption) — значит метод должен
+            называться <code>getExcretion</code>. Зонд проверяет его вместе с
+            остальными складскими и показывает поля с сырыми записями: два
+            склада «откуда/куда» — перемещение, один склад — списание. Можно
+            опросить и любой другой метод по имени.</p>
+          <div className="rc-period">
+            <input className="filter-select" value={custom}
+              placeholder="свой метод, напр. getExcretion"
+              onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && load()} />
+            <button className="btn btn-sm" onClick={load} disabled={loading}>
+              {loading ? 'Опрашиваю…' : 'Опросить'}
+            </button>
+          </div>
           {error && <div className="error">{error}</div>}
           {loading && <div className="muted">Опрашиваю SalesDoc…</div>}
           {data && Object.values(data).map((m) => (
@@ -1826,6 +1838,10 @@ function MovementsProbePanel() {
                     </tbody>
                   </table>
                 </div>
+              )}
+              {m.line_field && (
+                <p className="muted">Товарные строки в поле
+                  <code>{m.line_field}</code>: {m.line_fields.join(', ')}</p>
               )}
               {m.sample?.length > 0 && (
                 <details>

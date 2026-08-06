@@ -199,7 +199,8 @@ export const api = {
   salesdocAgentModel: () => request('/salesdoc/agent-model'),
   salesdocTxnTypes: () => request('/salesdoc/txn-types'),
   salesdocByGuid: () => request('/salesdoc/by-guid'),
-  salesdocMovementsProbe: () => request('/salesdoc/movements-probe'),
+  salesdocMovementsProbe: (method) =>
+    request(`/salesdoc/movements-probe${method ? `?method=${encodeURIComponent(method)}` : ''}`),
   salesdocIdMatch: (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v != null && v !== '')

@@ -2170,6 +2170,7 @@ def id_match(
 @router.get("/movements-probe")
 def movements_probe(
     _: models.User = Depends(can_view),
+    method: str = Query(default="", description="Опросить произвольный метод"),
 ):
     """Что такое getMovement: перемещения между складами или списания?
 
@@ -2184,9 +2185,21 @@ def movements_probe(
     _require_configured()
     out: dict = {}
 
-    for method, keys in (("getMovement", ("movement", "movements")),
-                         ("getConsumption", ("consumption", "consumptions")),
-                         ("getInventory", ("inventory", "inventories"))):
+    # Раздел списаний в интерфейсе SalesDoc живёт по адресу /stock/excretion —
+    # значит и метод, скорее всего, getExcretion. Имена методов в этом API
+    # повторяют разделы (movement, inventory, consumption), так что догадка
+    # дешёвая, а проверка — один запрос.
+    probes = [("getExcretion", ("excretion", "excretions")),
+              ("getStockExcretion", ("excretion", "excretions")),
+              ("getMovement", ("movement", "movements")),
+              ("getConsumption", ("consumption", "consumptions")),
+              ("getInventory", ("inventory", "inventories"))]
+    # Произвольный метод — чтобы следующая догадка не требовала выкладки.
+    if method.strip():
+        name = method.strip()
+        probes = [(name, (name.replace("get", "", 1).lower(), "data", "items"))]
+
+    for method, keys in probes:
         entry: dict = {"method": method}
         try:
             # Без фильтра и со всеми статусами: у SalesDoc метод может по
@@ -2210,6 +2223,16 @@ def movements_probe(
                         if f["example"] is None:
                             f["example"] = v
             entry["fields"] = sorted(fields.values(), key=lambda f: -f["filled"])
+
+            # Товарные строки: у складского документа они и есть суть.
+            for key in ("detail", "details", "items", "products", "lines"):
+                sample_lines = (rows[0].get(key) if rows and isinstance(rows[0], dict)
+                                else None)
+                if isinstance(sample_lines, list) and sample_lines:
+                    entry["line_field"] = key
+                    entry["line_fields"] = sorted(
+                        {k for r in sample_lines if isinstance(r, dict) for k in r})
+                    break
 
             # Признак перемещения — две ссылки на склад в одной записи.
             store_fields = [f["field"] for f in entry["fields"]
