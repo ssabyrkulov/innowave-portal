@@ -255,6 +255,8 @@ export default function SalesDocPage() {
 
       <JournalAnatomyPanel />
 
+      <AgentModelPanel />
+
       <VisitsSamplePanel />
 
       <OrderChangesPanel />
@@ -1538,6 +1540,99 @@ function StoreStats({ rows }) {
 // Анатомия журнала getOrder: по каким срезам выдача полна, а где дыры.
 // Агент или склад, у которого в журнале ноль заказов при живом справочнике, —
 // главный подозреваемый в пропаже документов.
+// Модель агента: к чему он привязан — к точке или к документу. От ответа
+// зависит, что делать при увольнении, поэтому зонд отвечает сырыми полями
+// справочников, а не пересказом документации.
+function AgentModelPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocAgentModel()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🧭 Модель агента: точка или документ?
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Агент в SalesDoc может быть реквизитом карточки
+            точки (тогда при увольнении точку надо переназначить) либо
+            реквизитом заказа (тогда «закрепления» нет вообще — есть только след
+            «кто последний продал»). Зонд смотрит сырые поля справочников и
+            историю заказов и отвечает фактами.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Опрашиваю справочники SalesDoc…</div>}
+          {data && (
+            <>
+              {(data.verdicts || []).map((v, i) => (
+                <div key={i} className="why-verdict">{v}</div>
+              ))}
+
+              <div className="rc-col-title">Поля карточки точки (getClient)</div>
+              <p>
+                {data.client_agent_fields?.length > 0
+                  ? <>Поля агента/территории: <b>{data.client_agent_fields.join(', ')}</b></>
+                  : <>Полей агента в карточке точки нет.</>}
+              </p>
+              <pre className="order-raw-json">{JSON.stringify(data.client_sample, null, 1)}</pre>
+
+              <div className="rc-col-title">Справочники</div>
+              <p className="muted">
+                Агентов: {data.agents_total} (неактивных {data.agents_inactive})
+                {data.getTerritory_total != null && <> · территорий: {data.getTerritory_total}</>}
+              </p>
+              <pre className="order-raw-json">{JSON.stringify(
+                { getAgent: data.getAgent_sample, getTerritory: data.getTerritory_sample },
+                null, 1)}</pre>
+
+              <div className="rc-col-title">История заказов</div>
+              <p>
+                Точек с заказами: <b>{data.clients_with_orders}</b> · из них
+                сменили агента: <b>{data.clients_multi_agent}</b> · заказов с
+                агентом: {data.orders_with_agent} из {data.orders_total}
+              </p>
+
+              {data.orphan_count > 0 && (
+                <>
+                  <div className="note-readonly sd-warn">
+                    Точек только за уволенными: <b>{data.orphan_count}</b>. Их
+                    заказы API больше не отдаёт.
+                  </div>
+                  <div className="table-wrap rc-table">
+                    <table>
+                      <thead>
+                        <tr><th>Точка</th><th>Агент</th><th className="num">Заказов</th><th>Последний</th></tr>
+                      </thead>
+                      <tbody>
+                        {data.orphan_clients.map((o) => (
+                          <tr key={o.client_sd_id}>
+                            <td>{o.client}</td>
+                            <td>{o.agents.map((a) => a.agent).join(', ')}</td>
+                            <td className="num">{o.agents.reduce((s, a) => s + a.orders, 0)}</td>
+                            <td>{o.agents[0]?.last}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function JournalAnatomyPanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)

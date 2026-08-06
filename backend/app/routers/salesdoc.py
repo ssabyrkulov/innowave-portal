@@ -1744,6 +1744,135 @@ def method_probe(
     return {"found": found, "results": out}
 
 
+@router.get("/agent-model")
+def agent_model(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+):
+    """К чему привязан агент в SalesDoc: к точке или к документу?
+
+    Вопрос не праздный: от ответа зависит, что делать при увольнении. Если
+    агент — реквизит ТОЧКИ, увольнение оставляет её без хозяина, и точку надо
+    переназначить. Если реквизит ДОКУМЕНТА — «закрепления» нет вообще, есть
+    только след «кто последний продал», и переназначать нечего: следующий заказ
+    выпишет другой агент, а вся прошлая история уедет из выгрузки вместе с
+    уволенным.
+
+    Зонд отвечает фактами, а не догадками:
+      • сырые поля getClient и getAgent — есть ли у точки вообще поле агента;
+      • сколько точек за свою историю сменили агента (если много — привязка
+        документная, а не карточная);
+      • что стало с точками деактивированных агентов.
+    """
+    from sqlalchemy import func
+
+    _require_configured()
+    out: dict = {}
+
+    # --- 1. Сырая карточка точки: есть ли в ней агент/территория вообще ---
+    try:
+        result, _pag = salesdoc.call("getClient", {"limit": 1, "page": 1})
+        sample = None
+        if isinstance(result, dict):
+            for v in result.values():
+                if isinstance(v, list) and v:
+                    sample = v[0]
+                    break
+        out["client_sample"] = sample
+        keys = sorted(sample.keys()) if isinstance(sample, dict) else []
+        out["client_keys"] = keys
+        # Поле агента у точки — главный признак «карточной» привязки.
+        hits = [k for k in keys
+                if any(t in k.lower() for t in ("agent", "manager", "territor",
+                                                "supervisor", "route"))]
+        out["client_agent_fields"] = hits
+    except salesdoc.SalesDocError as e:
+        out["client_error"] = str(e)[:200]
+
+    for method in ("getAgent", "getTerritory", "getSupervisor"):
+        try:
+            result, pag = salesdoc.call(method, {"limit": 1, "page": 1})
+            sample = None
+            if isinstance(result, dict):
+                for v in result.values():
+                    if isinstance(v, list) and v:
+                        sample = v[0]
+                        break
+            out[f"{method}_sample"] = sample
+            out[f"{method}_total"] = (pag or {}).get("total")
+        except salesdoc.SalesDocError as e:
+            out[f"{method}_error"] = str(e)[:200]
+
+    # --- 2. Меняется ли агент у точки от документа к документу ---
+    # Считаем по зеркалу заказов: агент в каждом заказе свой реквизит, и если
+    # у точки за историю встречается больше одного агента, «закрепления» в
+    # документах нет — есть только последовательность.
+    O = models.SalesDocOrder
+    rows = (db.query(O.client_sd_id, O.agent_sd_id, O.agent_name,
+                     func.count(O.id), func.max(O.date))
+            .filter(O.client_sd_id.isnot(None), O.agent_name.isnot(None))
+            .group_by(O.client_sd_id, O.agent_sd_id, O.agent_name)
+            .all())
+    per_client: dict[str, list] = {}
+    for cli, ag_id, ag_name, cnt, last in rows:
+        per_client.setdefault(cli, []).append(
+            {"agent": ag_name, "agent_sd_id": ag_id, "orders": cnt,
+             "last": last.isoformat() if last else None})
+    multi = {c: v for c, v in per_client.items() if len(v) > 1}
+    out["clients_with_orders"] = len(per_client)
+    out["clients_multi_agent"] = len(multi)
+    out["orders_with_agent"] = sum(
+        a["orders"] for v in per_client.values() for a in v)
+    out["orders_total"] = db.query(func.count(O.id)).scalar() or 0
+
+    # --- 3. Что с точками уволенных ---
+    agents = {a.sd_id: a for a in db.query(models.SalesDocAgent).all()}
+    names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+    inactive = {sid for sid, a in agents.items() if not a.active}
+    orphans = []
+    for cli, v in per_client.items():
+        active_part = [a for a in v if a["agent_sd_id"] not in inactive]
+        if active_part:
+            continue
+        v.sort(key=lambda a: a["last"] or "", reverse=True)
+        orphans.append({"client_sd_id": cli, "client": names.get(cli) or cli,
+                        "agents": v})
+    out["agents_total"] = len(agents)
+    out["agents_inactive"] = len(inactive)
+    out["orphan_clients"] = sorted(orphans, key=lambda o: o["client"])[:100]
+    out["orphan_count"] = len(orphans)
+
+    # --- 4. Вердикт ---
+    verdicts = []
+    if out.get("client_agent_fields"):
+        verdicts.append(
+            "У карточки точки есть поля " + ", ".join(out["client_agent_fields"])
+            + " — значит агент (или территория) закрепляется за ТОЧКОЙ, и при "
+            "увольнении точку надо переназначить в справочнике SalesDoc.")
+    elif "client_keys" in out:
+        verdicts.append(
+            "В карточке точки (getClient) поля агента нет — только "
+            + ", ".join(out["client_keys"][:12])
+            + ". Значит через API «закрепления» не видно: агент известен только "
+            "как реквизит документа.")
+    if out["clients_with_orders"]:
+        share = round(100 * out["clients_multi_agent"] / out["clients_with_orders"])
+        verdicts.append(
+            f"У {out['clients_multi_agent']} из {out['clients_with_orders']} точек "
+            f"({share}%) в истории заказов больше одного агента. "
+            + ("Агент меняется от документа к документу — это реквизит заказа, "
+               "а не постоянная привязка." if share >= 20 else
+               "Агент у точки почти всегда один — на практике привязка "
+               "постоянная, даже если формально это реквизит документа."))
+    if out["orphan_count"]:
+        verdicts.append(
+            f"{out['orphan_count']} точек остались только за деактивированными "
+            "агентами: их заказы API больше не отдаёт, и в портале эти точки "
+            "выглядят как «без агента» либо с завышенным долгом.")
+    out["verdicts"] = verdicts
+    return out
+
+
 @router.get("/visit-debt")
 def visit_debt(
     db: Session = Depends(get_db),
