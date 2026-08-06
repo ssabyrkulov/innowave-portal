@@ -2160,6 +2160,11 @@ def id_match(
         # там «0 KGS» значит утверждать, что документ на ноль сомов.
         "measure": "qty" if kind in ("writeoffs", "movements") else "money",
         "has_1c": kind not in NO_1C_SIDE,
+        # Сколько документов SalesDoc вообще несут идентификатор. У перемещений
+        # code_1C пуст у всех до одного — значит связать их с 1С по ИД будет
+        # нечем даже после того, как появится выгрузка из 1С.
+        "sd_docs": len(theirs),
+        "sd_with_guid": sum(1 for t in theirs if t["guid"]),
         "counts": counts, "total": total,
         "page": page, "page_size": page_size,
         "has_sd": bool(theirs),
