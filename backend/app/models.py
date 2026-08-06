@@ -552,6 +552,34 @@ class SalesDocClientAgent(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocProduct(Base):
+    """Справочник номенклатуры SalesDoc (getProduct).
+
+    Нужен по двум причинам. Первая: строки перемещений и остатков приходят
+    только с идентификатором товара — без справочника это набор кодов вида
+    d0_15 вместо названий. Вторая важнее: code_1C здесь — GUID номенклатуры
+    1С, то есть точный ключ вместо нынешнего сопоставления по нормализованному
+    названию, где «Подгузники StarKid размер L*4» и «Детские подгузники
+    StarKid размер L» склеиваются лишь потому, что мы срезаем фасовку."""
+
+    __tablename__ = "salesdoc_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    code_1c: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String, default="", index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    barcode: Mapped[str | None] = mapped_column(String, nullable=True)
+    pack_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight: Mapped[float | None] = mapped_column(Numeric(12, 3), nullable=True)
+    volume: Mapped[float | None] = mapped_column(Numeric(12, 3), nullable=True)
+    category_sd_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    group_sd_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    brand_sd_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class SalesDocMovement(Base):
     """Перемещение товара между складами SalesDoc (getMovement).
 

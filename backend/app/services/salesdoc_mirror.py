@@ -745,14 +745,48 @@ def sync_warehouses(db: Session, updated_since: str | None = None) -> int:
     return len(rows)
 
 
+def sync_products(db: Session, updated_since: str | None = None) -> int:
+    """Справочник номенклатуры SalesDoc (getProduct) — в зеркало.
+
+    Справочник маленький, дельты нет — читаем целиком. Неактивные позиции не
+    удаляем: они встречаются в старых документах, и без них строка перемещения
+    осталась бы безымянной."""
+    rows = salesdoc.call_all("getProduct", ("product", "products"))
+    for p in rows:
+        sid = str(p.get("SD_id") or "").lower()
+        if not sid:
+            continue
+        act = p.get("active")
+        _upsert(db, models.SalesDocProduct, sid, {
+            "code_1c": str(p.get("code_1C") or "") or None,
+            "name": p.get("name") or "",
+            "active": not (act in ("N", "n", False, 0, "0")),
+            # unit.code_1C у этого API — сама единица («шт»), а не код.
+            "unit": (p.get("unit") or {}).get("code_1C")
+            if isinstance(p.get("unit"), dict) else None,
+            "barcode": p.get("barCode") or None,
+            "pack_quantity": p.get("packQuantity") or None,
+            "weight": p.get("weight") or None,
+            "volume": p.get("volume") or None,
+            "category_sd_id": _ref_id(p.get("category")),
+            "group_sd_id": _ref_id(p.get("group")),
+            "brand_sd_id": _ref_id(p.get("brand")),
+        })
+    return len(rows)
+
+
 def sync_movements(db: Session, updated_since: str | None = None) -> int:
     """Перемещения между складами (getMovement) — в зеркало вместе со строками.
 
     Дельты у метода нет, документов немного (десятки), поэтому перекладываем
     целиком: так же уходят и удалённые в SalesDoc."""
     rows = salesdoc.call_all("getMovement", ("movement", "movements"))
-    names = {r.product_sd_id: r.product_name
-             for r in db.query(models.SalesDocStock).all() if r.product_sd_id}
+    names = {p.sd_id: p.name for p in db.query(models.SalesDocProduct).all()}
+    # Запасной источник имён: позиции, которых нет в справочнике, но которые
+    # лежат на складах.
+    for r in db.query(models.SalesDocStock).all():
+        if r.product_sd_id:
+            names.setdefault(r.product_sd_id, r.product_name)
     db.query(models.SalesDocMovementLine).delete(synchronize_session=False)
     seen: set = set()
     for m in rows:
@@ -1057,6 +1091,7 @@ def sync(full: bool = False) -> dict:
                     ("clients", sync_clients, None, models.SalesDocClient),
                     ("warehouses", sync_warehouses, None, models.SalesDocStore),
                     ("agents", sync_agents, None, models.SalesDocAgent),
+                    ("products", sync_products, None, models.SalesDocProduct),
                     ("movements", sync_movements, None, models.SalesDocMovement),
                     ("stock", sync_stock, None, models.SalesDocStock),
                     ("visits", sync_visits, None, models.SalesDocVisit)):
