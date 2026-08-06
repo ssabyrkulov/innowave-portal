@@ -1716,27 +1716,30 @@ def method_probe(
     данные), есть но пустой, или сервер его не знает. Интересуют прежде всего
     визиты, маршруты и задачи агентов — для работы с дебиторкой."""
     _require_configured()
+    # Полный список GET-методов из документации SalesDoc API V2 (разделы
+    # 9.1–9.47). Раньше здесь были догадки по-английски, и из-за этого мы
+    # раз за разом не знали про getStoreLog, getPurchase и getStockForDate.
+    # getExcretion в списке нет намеренно: списание можно записать
+    # (setExcretion), но не прочитать — оно видно только в журнале склада.
     candidates = [
-        # Визиты и маршруты агентов
-        "getVisit", "getVisits", "getAgentVisit", "getCheckin", "getCheckIn",
-        "getRoute", "getRoutes", "getRouteSheet", "getPlan", "getPlanVisit",
-        # Задачи и планы
-        "getTask", "getTasks", "getTodo", "getEvent", "getNote",
-        # Агенты и команда
-        "getAgent", "getAgents", "getUser", "getUsers", "getEmployee",
-        # Долги и прочее полезное
-        "getDebt", "getClientDebt", "getSupervisor", "getTerritory",
-        "getCategory", "getProduct", "getPriceType",
-        # Складские документы: списание, перемещение, оприходование,
-        # инвентаризация. Где SalesDoc их держит — не выяснено, а списания в
-        # нём есть, поэтому перебираем правдоподобные имена.
-        "getWriteOff", "getWriteOffs", "getWriteoff", "getStockWriteOff",
-        "getStockMovement", "getMovement", "getMovements", "getTransfer",
-        "getInventory", "getInventarization", "getRevision", "getRecount",
-        "getStockDocument", "getStockDocuments", "getStockOperation",
-        "getDocument", "getDocuments", "getAct", "getWaybill",
-        "getIncome", "getExpense", "getConsumption", "getSupply",
-        "getOrderDefect", "getDefect", "getDefects", "getReturn", "getReturns",
+        # Справочники (9.1–9.20)
+        "getValyutaType", "getUnit", "getClientCategory", "getProduct",
+        "getProductCategory", "getProductSubCategory", "getProductGroup",
+        "getPriceType", "getPrice", "getClient", "getAgent", "getExpeditor",
+        "getSupervisor", "getPaymentType", "getPayment", "getTerritory",
+        "getBrand", "getTradeDirection", "getClientChannel", "getClientType",
+        # Визиты, склады, остатки (9.21–9.25)
+        "getVisit", "getWarehouse", "getDefectWarehouse", "getStock",
+        "getStockForDate",
+        # Заказы (9.26–9.28)
+        "getOrder", "getOrderDefect", "getOrderReplace",
+        # Финансы (9.29–9.31)
+        "getBalance", "getConsumption", "getCashbox",
+        # Дополнительные (9.32–9.47)
+        "getInventory", "getShipper", "getPaymentConfirmation", "getBonus",
+        "getPRCategory", "getPhotoReport", "getFilials", "getStoreLog",
+        "getClientPending", "getCorrection", "getPurchase", "getMovement",
+        "getVsExchange", "getMovementBetweenFilial", "getTag",
     ]
     out = []
     for m in candidates:
@@ -2169,6 +2172,95 @@ def id_match(
         "page": page, "page_size": page_size,
         "has_sd": bool(theirs),
         "rows": rows[start:start + page_size],
+    }
+
+
+@router.get("/store-log")
+def store_log(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    days: int = Query(default=1200, ge=1, le=3000),
+    document: str = Query(default="", description="Тип документа, напр. Excretion"),
+    store_id: str = Query(default="", description="Один склад; пусто — все"),
+):
+    """Журнал движений склада (getStoreLog) — здесь и лежат списания.
+
+    Отдельного метода getExcretion в API нет: списание можно ЗАПИСАТЬ
+    (setExcretion), но не прочитать. Зато в журнале склада тип документа
+    Excretion присутствует наравне с приходами и перемещениями — значит
+    списания через API всё-таки видны, просто не там, где я их искал.
+
+    Метод устроен иначе прочих: параметры идут напрямую (storeId, from, to,
+    documents), а не внутри filter, и склад обязателен — поэтому обходим
+    склады по очереди."""
+    _require_configured()
+    today = date.today()
+    frm = (today - timedelta(days=days)).isoformat()
+    to = (today + timedelta(days=1)).isoformat()
+
+    stores = [(s.store_id, s.name or s.store_id)
+              for s in db.query(models.SalesDocStore).all() if s.store_id]
+    if store_id:
+        stores = [s for s in stores if s[0] == store_id.lower()]
+    if not stores:
+        raise HTTPException(status_code=400,
+                            detail="Склады ещё не в зеркале — обновите его")
+
+    by_doc: dict[str, dict] = {}
+    by_store: list[dict] = []
+    rows_out: list[dict] = []
+    errors: list[dict] = []
+    names = {p.sd_id: p.name for p in db.query(models.SalesDocProduct).all()}
+
+    for sid, sname in stores:
+        params: dict = {"storeId": sid, "from": frm, "to": to}
+        if document:
+            params["documents"] = [document]
+        try:
+            rows = salesdoc.call_all("getStoreLog", ("storeLog", "log", "store_log",
+                                                     "rows", "data"), params)
+        except salesdoc.SalesDocError as e:
+            errors.append({"store": sname, "error": str(e)[:160]})
+            continue
+        by_store.append({"store_id": sid, "store": sname, "rows": len(rows)})
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            kind = str(r.get("document") or "—")
+            d = by_doc.setdefault(kind, {"document": kind, "rows": 0,
+                                         "qty_in": 0.0, "qty_out": 0.0,
+                                         "docs": set()})
+            qty = float(r.get("quantity") or 0)
+            d["rows"] += 1
+            # Знак количества и есть направление: плюс — приход, минус — расход.
+            (d.__setitem__("qty_in", d["qty_in"] + qty) if qty > 0
+             else d.__setitem__("qty_out", d["qty_out"] + qty))
+            if r.get("document_id"):
+                d["docs"].add(str(r["document_id"]))
+            if not document or kind.lower() == document.lower():
+                pid = str(r.get("product_id") or "").lower()
+                rows_out.append({
+                    "store": sname, "document": kind,
+                    "document_id": r.get("document_id"),
+                    "date": str(r.get("date") or "")[:19],
+                    "product": names.get(pid) or pid,
+                    "quantity": qty,
+                })
+
+    rows_out.sort(key=lambda r: r["date"], reverse=True)
+    return {
+        "period": {"from": frm, "to": to},
+        "stores_asked": len(stores),
+        "errors": errors,
+        "by_store": sorted(by_store, key=lambda s: -s["rows"]),
+        "by_document": sorted(
+            ({"document": v["document"], "rows": v["rows"],
+              "docs": len(v["docs"]),
+              "qty_in": round(v["qty_in"], 1), "qty_out": round(v["qty_out"], 1)}
+             for v in by_doc.values()),
+            key=lambda v: -v["rows"]),
+        "rows": rows_out[:500],
+        "rows_total": len(rows_out),
     }
 
 

@@ -259,6 +259,8 @@ export default function SalesDocPage() {
 
       <ByGuidPanel />
 
+      <StoreLogPanel />
+
       <MovementsProbePanel />
 
       <TxnTypesPanel />
@@ -1771,6 +1773,119 @@ function ByGuidPanel() {
 // getMovement нашёлся зондом (91 запись), но по имени не понять, перемещения
 // это или списания. Отвечают поля: два склада — перемещение, один склад со
 // статьёй затрат — списание. Смотрим сырые записи, а не гадаем.
+// Журнал движений склада. Отдельного getExcretion в API нет — списание можно
+// записать (setExcretion), но не прочитать. Зато в журнале склада тип
+// документа Excretion есть наравне с приходами и перемещениями.
+function StoreLogPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [doc, setDoc] = useState('')
+
+  function load(kind = doc) {
+    setLoading(true); setError(null)
+    api.salesdocStoreLog({ document: kind })
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load('') }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 📚 Журнал движений склада (здесь списания)
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Отдельного метода для чтения списаний в API нет:
+            <code>setExcretion</code> умеет записать, а <code>getExcretion</code>
+            не существует. Зато <code>getStoreLog</code> отдаёт все движения
+            склада, и <code>Excretion</code> — один из типов документа наравне
+            с приходом и перемещением. Журнал запрашивается по каждому складу
+            отдельно: этот метод требует склад обязательным параметром.</p>
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Читаю журнал по складам…</div>}
+          {data && (
+            <>
+              <p className="muted">
+                Период {fdateShort(data.period.from)} — {fdateShort(data.period.to)} ·
+                складов опрошено {data.stores_asked} · строк {data.rows_total}
+              </p>
+              {data.errors?.length > 0 && (
+                <div className="note-readonly sd-warn">
+                  {data.errors.map((e, i) => (
+                    <div key={i}>{e.store}: {e.error}</div>
+                  ))}
+                </div>
+              )}
+              <div className="rc-col-title">Типы документов в журнале</div>
+              <div className="table-wrap rc-table">
+                <table>
+                  <thead>
+                    <tr><th>Тип</th><th className="num">Строк</th>
+                      <th className="num">Документов</th>
+                      <th className="num">Приход</th><th className="num">Расход</th>
+                      <th></th></tr>
+                  </thead>
+                  <tbody>
+                    {data.by_document.map((d) => (
+                      <tr key={d.document}>
+                        <td><b>{d.document}</b></td>
+                        <td className="num">{d.rows}</td>
+                        <td className="num">{d.docs}</td>
+                        <td className="num">{d.qty_in ? `+${d.qty_in}` : '—'}</td>
+                        <td className="num">{d.qty_out || '—'}</td>
+                        <td>
+                          <button className="btn btn-sm"
+                            onClick={() => { setDoc(d.document); load(d.document) }}>
+                            показать
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {data.rows.length > 0 && (
+                <>
+                  <div className="rc-col-title">
+                    Строки{doc ? ` · ${doc}` : ''} · показано {data.rows.length}
+                    {data.rows_total > data.rows.length && ` из ${data.rows_total}`}
+                  </div>
+                  <div className="table-wrap rc-table">
+                    <table>
+                      <thead>
+                        <tr><th>Дата</th><th>Тип</th><th>Документ</th>
+                          <th>Склад</th><th>Номенклатура</th>
+                          <th className="num">Кол-во</th></tr>
+                      </thead>
+                      <tbody>
+                        {data.rows.map((r, i) => (
+                          <tr key={i}>
+                            <td>{r.date}</td>
+                            <td>{r.document}</td>
+                            <td className="sd-doc-id">{r.document_id || '—'}</td>
+                            <td>{r.store}</td>
+                            <td>{r.product}</td>
+                            <td className={`num ${r.quantity < 0 ? 'sc-diff' : ''}`}>
+                              {r.quantity}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MovementsProbePanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)
