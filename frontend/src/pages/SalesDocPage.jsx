@@ -1837,6 +1837,47 @@ function StoreLogDebug() {
   )
 }
 
+// Что означает каждый тип документа в журнале склада. Названия в ответе
+// английские и без пояснений, а половина из них к нашим выгрузкам 1С
+// отношения не имеет — без расшифровки таблица читается как шифр.
+const LOG_DOCS = {
+  Order: {
+    what: 'Отгрузка по заказу клиента',
+    src: '1С: Реализация товаров и услуг',
+    sign: 'расход',
+  },
+  Purchase: {
+    what: 'Поступление от поставщика',
+    src: '1С: Поступление товаров и услуг',
+    sign: 'приход',
+  },
+  Excretion: {
+    what: 'Списание со склада',
+    src: '1С: Списание товаров',
+    sign: 'расход',
+  },
+  OrderDefect: {
+    what: 'Возврат от клиента (брак, недовоз)',
+    src: '1С: Возврат товаров от покупателя',
+    sign: 'приход',
+  },
+  PurchaseRefund: {
+    what: 'Возврат поставщику',
+    src: '1С: Возврат товаров поставщику — портал не ведёт',
+    sign: 'расход',
+  },
+  StoreCorrector: {
+    what: 'Ручная корректировка остатков',
+    src: 'Пары в 1С нет: правка делается прямо в SalesDoc',
+    sign: 'в обе стороны',
+  },
+  Exchange: {
+    what: 'Обмен при выездной торговле: выдача агенту в машину и возврат',
+    src: 'Пары в 1С нет',
+    sign: 'в обе стороны',
+  },
+}
+
 function StoreLogPanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)
@@ -1905,7 +1946,8 @@ function StoreLogPanel() {
               <div className="table-wrap rc-table">
                 <table>
                   <thead>
-                    <tr><th>Тип</th><th className="num">Строк</th>
+                    <tr><th>Тип</th><th>Что это</th>
+                      <th className="num">Строк</th>
                       <th className="num">Документов</th>
                       <th className="num">Приход</th><th className="num">Расход</th>
                       <th></th></tr>
@@ -1914,6 +1956,12 @@ function StoreLogPanel() {
                     {data.by_document.map((d) => (
                       <tr key={d.document}>
                         <td><b>{d.document}</b></td>
+                        <td>
+                          {LOG_DOCS[d.document]?.what || '—'}
+                          {LOG_DOCS[d.document] && (
+                            <div className="rc-note">{LOG_DOCS[d.document].src}</div>
+                          )}
+                        </td>
                         <td className="num">{d.rows}</td>
                         <td className="num">{d.docs}</td>
                         <td className="num">{d.qty_in ? `+${d.qty_in}` : '—'}</td>
@@ -1930,6 +1978,16 @@ function StoreLogPanel() {
                 </table>
               </div>
 
+              {data.by_document.length > 0
+                && !data.by_document.some((d) => /movement/i.test(d.document)) && (
+                <div className="note-readonly sd-warn">
+                  Перемещений между складами (getMovement — 91 документ) в
+                  журнале нет ни одной строкой. Значит остаток склада, собранный
+                  только по журналу, на них не сойдётся: товар уезжает с одного
+                  склада на другой мимо этого учёта. Для общего остатка это
+                  безразлично, для склада — нет.
+                </div>
+              )}
               {data.rows.length > 0 && (
                 <>
                   <div className="rc-col-title">
