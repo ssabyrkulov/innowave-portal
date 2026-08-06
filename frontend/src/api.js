@@ -205,6 +205,7 @@ export const api = {
     ).toString()
     return request(`/salesdoc/store-log${qs ? `?${qs}` : ''}`)
   },
+  salesdocStoreLogDebug: () => request('/salesdoc/store-log-debug'),
   salesdocMovementsProbe: (method) =>
     request(`/salesdoc/movements-probe${method ? `?method=${encodeURIComponent(method)}` : ''}`),
   salesdocIdMatch: (params = {}) => {

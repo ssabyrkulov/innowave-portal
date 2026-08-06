@@ -2176,6 +2176,86 @@ def id_match(
     }
 
 
+@router.get("/store-log-debug")
+def store_log_debug(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    store_id: str = Query(default=""),
+):
+    """Почему getStoreLog отдаёт пустоту: перебор форм запроса с сырым ответом.
+
+    Восемь складов ответили без единого массива. Значит либо журнал правда
+    пуст, либо метод ждёт параметр, которого мы не шлём. Гадать по одному
+    предположению за круг дорого — перебираем формы разом и показываем сырой
+    result целиком: в нём видно и структуру, и сообщение сервера, если оно
+    есть. Берём ОДИН склад, чтобы не выесть лимит запросов."""
+    from sqlalchemy import func
+
+    _require_configured()
+    store = store_id.lower()
+    if not store:
+        # Склад с наибольшим числом заказов: если журнал где-то и не пуст, то
+        # там.
+        top = (db.query(models.SalesDocOrder.store_sd_id,
+                        func.count(models.SalesDocOrder.id).label("n"))
+               .filter(models.SalesDocOrder.store_sd_id.isnot(None))
+               .group_by(models.SalesDocOrder.store_sd_id)
+               .order_by(func.count(models.SalesDocOrder.id).desc()).first())
+        store = top[0] if top else None
+    if not store:
+        raise HTTPException(status_code=400, detail="Не удалось выбрать склад")
+
+    today = date.today()
+    d90 = (today - timedelta(days=90)).isoformat()
+    d3y = (today - timedelta(days=1100)).isoformat()
+    tod = today.isoformat()
+    DOCS = ["Excretion", "excretion", "Purchase", "Movement", "Order"]
+
+    shapes = [
+        ("storeId + даты", {"storeId": store, "from": d90, "to": tod}),
+        ("storeId + даты со временем",
+         {"storeId": store, "from": f"{d90} 00:00:00", "to": f"{tod} 23:59:59"}),
+        ("storeId + ISO-8601",
+         {"storeId": store, "from": f"{d90}T00:00:00", "to": f"{tod}T23:59:59"}),
+        ("+ documents: все известные типы",
+         {"storeId": store, "from": d90, "to": tod, "documents": DOCS}),
+        ("+ documents: Excretion",
+         {"storeId": store, "from": d3y, "to": tod, "documents": ["Excretion"]}),
+        ("store вместо storeId", {"store": store, "from": d90, "to": tod}),
+        ("внутри filter",
+         {"filter": {"storeId": store, "period": {"date": {"from": d90, "to": tod}}}}),
+        ("без периода", {"storeId": store}),
+    ]
+
+    out = []
+    for i, (name, params) in enumerate(shapes):
+        if i:
+            time.sleep(1.5)  # лимит частоты: 429 иначе прилетает на третьей
+        entry: dict = {"shape": name, "params": params}
+        try:
+            result, pag = salesdoc.call("getStoreLog", {**params, "limit": 50,
+                                                        "page": 1})
+            entry["pagination"] = pag
+            entry["result"] = result
+            entry["arrays"] = {k: len(v) for k, v in (result or {}).items()
+                               if isinstance(v, list)}
+            entry["rows"] = sum(entry["arrays"].values())
+        except salesdoc.SalesDocError as e:
+            entry["error"] = str(e)[:200]
+        out.append(entry)
+
+    worked = [e["shape"] for e in out if e.get("rows")]
+    return {
+        "store_id": store,
+        "attempts": out,
+        "worked": worked,
+        "verdict": (f"Сработали формы: {', '.join(worked)}" if worked else
+                    "Ни одна форма запроса не вернула строк. Если в интерфейсе "
+                    "SalesDoc журнал по этому складу не пуст — метод не отдаёт "
+                    "данные, и это вопрос в поддержку, а не к параметрам."),
+    }
+
+
 @router.get("/store-log")
 def store_log(
     db: Session = Depends(get_db),

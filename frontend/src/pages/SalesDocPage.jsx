@@ -1776,6 +1776,67 @@ function ByGuidPanel() {
 // Журнал движений склада. Отдельного getExcretion в API нет — списание можно
 // записать (setExcretion), но не прочитать. Зато в журнале склада тип
 // документа Excretion есть наравне с приходами и перемещениями.
+// Пустой журнал по всем складам — это либо «журнал пуст», либо «метод ждёт
+// параметр, которого мы не шлём». Перебираем формы запроса разом и показываем
+// сырой ответ: гадать по одному предположению за круг слишком дорого.
+function StoreLogDebug() {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function run() {
+    setLoading(true); setError(null)
+    api.salesdocStoreLogDebug()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+
+  return (
+    <div className="cd-section">
+      <p className="muted">Журнал пуст по всем складам. Прежде чем считать это
+        фактом, стоит проверить, не ждёт ли метод другого набора параметров:
+        формат даты, обязательный <code>documents</code>, иное имя поля склада.
+        Перебор идёт по одному складу, чтобы не упереться в лимит запросов —
+        занимает около 15 секунд.</p>
+      <button className="btn btn-sm" onClick={run} disabled={loading}>
+        {loading ? 'Перебираю формы запроса…' : 'Разобраться, почему пусто'}
+      </button>
+      {error && <div className="error">{error}</div>}
+      {data && (
+        <>
+          <div className="why-verdict">{data.verdict}</div>
+          <p className="muted">Склад: <code>{data.store_id}</code></p>
+          <div className="table-wrap rc-table">
+            <table>
+              <thead>
+                <tr><th>Форма запроса</th><th className="num">Строк</th><th>Массивы в ответе</th></tr>
+              </thead>
+              <tbody>
+                {data.attempts.map((a, i) => (
+                  <tr key={i} className={a.rows ? '' : 'rc-row-warn'}>
+                    <td>{a.shape}</td>
+                    <td className="num">{a.error ? '—' : a.rows}</td>
+                    <td className="muted">
+                      {a.error
+                        ? a.error
+                        : (Object.keys(a.arrays || {}).length
+                          ? JSON.stringify(a.arrays)
+                          : 'массивов нет')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <details>
+            <summary className="muted">сырые ответы целиком</summary>
+            <pre className="order-raw-json">{JSON.stringify(data.attempts, null, 2)}</pre>
+          </details>
+        </>
+      )}
+    </div>
+  )
+}
+
 function StoreLogPanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)
@@ -1839,6 +1900,7 @@ function StoreLogPanel() {
               {data.result_keys?.length > 0 && (
                 <p className="muted">Массив в ответе: <code>{data.result_keys.join(', ')}</code></p>
               )}
+              {data.rows_total === 0 && <StoreLogDebug />}
               <div className="rc-col-title">Типы документов в журнале</div>
               <div className="table-wrap rc-table">
                 <table>
