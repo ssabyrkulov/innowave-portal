@@ -550,9 +550,20 @@ def receivables(
     paid: dict[str, float] = defaultdict(float)
     last_payment: dict[str, date] = {}
     unmatched: dict[str, dict] = {}
+    # Банк и касса раздельно: пока 1С не выгружает ПКО, наличные оплаты в
+    # портал не попадают и долги выглядят завышенными. Предупреждать об этом
+    # надо по факту, а не текстом в вёрстке: как только касса поедет, плашка
+    # должна погаснуть сама, иначе она начнёт врать.
+    by_kind: dict[str, dict] = {
+        "bank": {"paid": 0.0, "count": 0},
+        "cash": {"paid": 0.0, "count": 0},
+    }
     for r in receipts:
         if not r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
             continue
+        k = by_kind.setdefault(r.kind or "bank", {"paid": 0.0, "count": 0})
+        k["paid"] += float(r.amount_kgs)
+        k["count"] += 1
         client = aliases.get(r.payer)
         if client is None:
             if r.payer in shipped:
@@ -626,6 +637,10 @@ def receivables(
         "flags": flags,
         "flag_notes": flag_notes,
         "has_receipts": len(receipts) > 0,
+        "payment_kinds": {
+            k: {"paid": round(v["paid"], 2), "count": v["count"]}
+            for k, v in by_kind.items()
+        },
         # Для фильтра: только те агенты, за кем реально числится хоть одна
         # точка — справочник целиком в выпадающем списке не нужен.
         "agents": agent_list,

@@ -161,6 +161,9 @@ export default function DebtPage() {
     }
   }
 
+  const kinds = data?.payment_kinds || {}
+  const cash = kinds.cash || { paid: 0, count: 0 }
+  const bank = kinds.bank || { paid: 0, count: 0 }
   const flags = data?.flags || {}
   const flaggedSet = new Set(Object.keys(flags))
   const allDebtors = data ? data.clients.filter((c) => c.debt > 0.01) : []
@@ -196,11 +199,21 @@ export default function DebtPage() {
         <h1>Дебиторка</h1>
       </div>
 
-      <div className="note-readonly">
-        Учитываются только безналичные оплаты (выгрузка «Поступление денежных
-        средств»). Наличные платежи пока не загружаются — реальные долги могут
-        быть ниже показанных.
-      </div>
+      {cash.count > 0 ? (
+        <div className="note-readonly">
+          Учитываются оплаты и по банку ({bank.count} шт. на{' '}
+          {formatMoney(bank.paid)}), и по кассе ({cash.count} шт. на{' '}
+          {formatMoney(cash.paid)}).
+        </div>
+      ) : (
+        <div className="note-readonly">
+          Учитываются только безналичные оплаты — «Платёжное поручение
+          входящее». Наличные (приходный кассовый ордер) 1С пока не выгружает,
+          поэтому реальные долги могут быть ниже показанных. Портал такой файл
+          уже принимает: как только он появится в папке выгрузок, касса
+          подхватится сама и это предупреждение исчезнет.
+        </div>
+      )}
 
       {error && <div className="error">{error}</div>}
 
