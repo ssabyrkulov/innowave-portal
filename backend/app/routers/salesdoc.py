@@ -2237,8 +2237,12 @@ def store_log_debug(
                                                         "page": 1})
             entry["pagination"] = pag
             entry["result"] = result
-            entry["arrays"] = {k: len(v) for k, v in (result or {}).items()
-                               if isinstance(v, list)}
+            if isinstance(result, list):
+                # getStoreLog отдаёт массив напрямую, без обёртки объектом.
+                entry["arrays"] = {"(массив в корне)": len(result)}
+            else:
+                entry["arrays"] = {k: len(v) for k, v in (result or {}).items()
+                                   if isinstance(v, list)}
             entry["rows"] = sum(entry["arrays"].values())
         except salesdoc.SalesDocError as e:
             entry["error"] = str(e)[:200]
@@ -2316,7 +2320,10 @@ def store_log(
                     time.sleep(2 * (attempt + 1))
                     continue
                 raise
-            if isinstance(result, dict):
+            if isinstance(result, list):
+                result_keys.add("(массив в корне)")
+                out.extend(result)
+            elif isinstance(result, dict):
                 for k, v in result.items():
                     if isinstance(v, list):
                         result_keys.add(k)

@@ -210,15 +210,25 @@ def call(method: str, params: dict | None = None, _retry: bool = True,
     return (resp.get("result") or {}), resp.get("pagination")
 
 
-def _pick(result: dict, keys: tuple[str, ...]) -> list:
-    """Первый непустой список из result по одному из возможных имён ключа."""
+def _pick(result, keys: tuple[str, ...]) -> list:
+    """Список записей из result: по имени ключа либо сам result.
+
+    Большинство методов кладут массив в result под своим именем, но не все:
+    getStoreLog отдаёт массив напрямую, без обёртки. Раньше такой ответ
+    молча превращался в ноль записей — и выглядело это как «журнал пуст»,
+    а не как «мы не разобрали ответ»."""
+    if isinstance(result, list):
+        return result
     if not isinstance(result, dict):
         return []
     for k in keys:
         v = result.get(k)
         if isinstance(v, list):
             return v
-    return []
+    # Имя массива могли не угадать: если в ответе ровно один список, он и есть
+    # выдача. Лучше взять его, чем отдать пустоту и соврать про пустой журнал.
+    lists = [v for v in result.values() if isinstance(v, list)]
+    return lists[0] if len(lists) == 1 else []
 
 
 def call_all(method: str, key, params: dict | None = None, page_limit: int = 1000,
