@@ -199,8 +199,14 @@ export const api = {
   salesdocVisitDebt: () => request('/salesdoc/visit-debt'),
   salesdocApiProbe: (params) =>
     request('/salesdoc/api-probe?' + new URLSearchParams(params).toString()),
-  salesdocFindDoc: (amount, query) =>
-    request(`/salesdoc/find-doc?amount=${encodeURIComponent(amount)}&query=${encodeURIComponent(query || '')}`),
+  // Любое сочетание условий: сумма, точка, период. Пустые не отправляем —
+  // сервер отличает «не задано» от «задано пустым».
+  salesdocFindDoc: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString()
+    return request(`/salesdoc/find-doc${qs ? `?${qs}` : ''}`)
+  },
   salesdocPaymentRaw: (sdId) =>
     request(`/salesdoc/payment-raw?sd_id=${encodeURIComponent(sdId)}`),
   salesdocOrderRaw: (sdId) =>

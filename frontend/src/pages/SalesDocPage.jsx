@@ -2104,15 +2104,25 @@ function FindDocPanel() {
   const [open, setOpen] = useState(false)
   const [amount, setAmount] = useState('')
   const [q, setQ] = useState('')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
+  function today() {
+    const d = toISODate(new Date())
+    setFrom(d); setTo(d)
+  }
+
   function load() {
     const a = parseFloat(String(amount).replace(',', '.').replace(/\s/g, ''))
-    if (!a) return
+    // Сумма не обязательна: искать можно и по точке с датой — тогда ответом
+    // будут идентификаторы документов, а их-то обычно и надо назвать.
+    if (!a && !q.trim() && !from && !to) return
     setLoading(true); setError(null); setData(null)
-    api.salesdocFindDoc(a, q.trim())
+    api.salesdocFindDoc({ amount: a || undefined, query: q.trim() || undefined,
+                          date_from: from || undefined, date_to: to || undefined })
       .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
   }
 
@@ -2128,22 +2138,28 @@ function FindDocPanel() {
   return (
     <div className="chart-card store-map">
       <button className="btn btn-ghost store-map-toggle" onClick={() => setOpen(!open)}>
-        {open ? '▾' : '▸'} 🧭 Найти документ по сумме
+        {open ? '▾' : '▸'} 🧭 Найти документ
       </button>
       {open && (
         <div className="store-map-body">
-          <p className="muted">Введите сумму документа (и, по желанию, часть
-            имени точки) — портал поищет её в 1С, в своём зеркале и напрямую в
-            SalesDoc, и скажет, на каком шаге документ теряется: не проведён,
+          <p className="muted">Любое сочетание условий: сумма, точка (имя или
+            ИД вида <code>t5_388</code>), период. Портал ищет в 1С, в своём
+            зеркале и напрямую в SalesDoc, показывает идентификаторы найденных
+            документов и говорит, на каком шаге документ теряется: не проведён,
             не доехал до зеркала, скрыт фильтром по складу или не в том статусе.
             Прямой запрос в SalesDoc занимает несколько секунд.</p>
           <div className="rc-period">
-            <input className="filter-select" value={amount} placeholder="3499,2"
+            <input className="filter-select" value={amount} placeholder="сумма (не обяз.)"
               onChange={(e) => setAmount(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && load()} />
-            <input className="filter-select" value={q} placeholder="точка (не обязательно)"
+            <input className="filter-select" value={q} placeholder="точка или ИД"
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && load()} />
+            <input className="filter-select" type="date" value={from}
+              onChange={(e) => setFrom(e.target.value)} />
+            <input className="filter-select" type="date" value={to}
+              onChange={(e) => setTo(e.target.value)} />
+            <button className="btn btn-sm" onClick={today}>сегодня</button>
             <button className="btn btn-sm" onClick={load} disabled={loading}>
               {loading ? 'Ищу…' : 'Найти'}
             </button>
@@ -2166,11 +2182,18 @@ function FindDocPanel() {
                 render={(r) => <>{fdateShort(r.date)} · {r.client} ·{' '}
                   {r.doc_number || 'без номера'} · {r.warehouse || '—'} · {money(r.amount)}</>} />
               <Section title="В зеркале портала" rows={data.in_mirror}
-                render={(r) => <>{fdateShort(r.date)} · {r.client} · {r.store || '—'} ·{' '}
-                  {r.status_label} · {money(r.amount)}</>} />
+                render={(r) => <>
+                  <b className="sd-doc-id">{r.sd_id}</b> · {fdateShort(r.date)} ·{' '}
+                  {r.client} · {r.store || '—'} · {r.status_label} ·{' '}
+                  {money(r.amount)}{r.agent ? ` · ${r.agent}` : ''}
+                </>} />
               <Section title="В SalesDoc (живой запрос)" rows={data.in_salesdoc}
-                render={(r) => <>{fdateShort(r.date)} · {r.client} · {r.store || '—'} ·{' '}
-                  {r.status_label} · {money(r.amount)}</>} />
+                render={(r) => <>
+                  <b className="sd-doc-id">{r.sd_id}</b>
+                  {r.number ? ` · №${r.number}` : ''} · {fdateShort(r.date)} ·{' '}
+                  {r.client} · {r.store || '—'} · {r.status_label} ·{' '}
+                  {money(r.amount)}{r.agent ? ` · ${r.agent}` : ''}
+                </>} />
               {data.nearby_client && (
                 <Section
                   title={`Заказы «${data.nearby_client}» рядом с датой 1С`}

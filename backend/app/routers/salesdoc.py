@@ -2035,17 +2035,36 @@ def visits_sample(
 def find_doc(
     db: Session = Depends(get_db),
     _: models.User = Depends(can_view),
-    amount: float = Query(..., description="Сумма документа"),
-    query: str = Query(default="", description="Часть имени точки (необязательно)"),
+    amount: float | None = Query(default=None, description="Сумма документа"),
+    query: str = Query(default="", description="Часть имени точки или её ИД"),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
 ):
-    """Где документ с такой суммой: в 1С, в зеркале, в живом SalesDoc.
+    """Где документ: в 1С, в зеркале, в живом SalesDoc.
 
     Вопрос «почему на портале не видно реализацию на N» повторяется, а ответ
     каждый раз разный: документ не доехал до зеркала, скрыт фильтром по складу,
-    не в том статусе или его просто нет. Ищем сумму во всех трёх местах и
-    говорим, на каком шаге она потерялась."""
+    не в том статусе или его просто нет. Ищем во всех трёх местах и говорим, на
+    каком шаге документ потерялся.
+
+    Искать можно и без суммы — по точке и дате: «какие реализации сегодня по
+    t5_388» отвечает идентификаторами, а их-то и надо назвать, когда сумму
+    вспоминать неоткуда. Но без единого условия поиск бессмыслен: пустой запрос
+    вернул бы весь журнал."""
     tol = 0.01
     qq = (query or "").strip().lower()
+    if amount is None and not qq and date_from is None and date_to is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Укажите хотя бы одно условие: сумму, точку или дату")
+
+    def amount_ok(value: float) -> bool:
+        return amount is None or abs(value - amount) <= tol
+
+    def date_ok(d: date) -> bool:
+        if date_from and d < date_from:
+            return False
+        return not (date_to and d > date_to)
     names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
     stores = {s.store_id.lower(): s
               for s in db.query(models.SalesDocStore).all() if s.store_id}
@@ -2058,9 +2077,15 @@ def find_doc(
 
     # --- Зеркало ---
     mirror_hits = []
-    for r in db.query(models.SalesDocOrder).filter(
-            models.SalesDocOrder.amount >= amount - tol,
-            models.SalesDocOrder.amount <= amount + tol).all():
+    mirror_q = db.query(models.SalesDocOrder)
+    if amount is not None:
+        mirror_q = mirror_q.filter(models.SalesDocOrder.amount >= amount - tol,
+                                   models.SalesDocOrder.amount <= amount + tol)
+    if date_from:
+        mirror_q = mirror_q.filter(models.SalesDocOrder.date >= date_from)
+    if date_to:
+        mirror_q = mirror_q.filter(models.SalesDocOrder.date <= date_to)
+    for r in mirror_q.limit(500).all():
         if not match_client(r.client_sd_id, r.client_code_1c):
             continue
         st = stores.get(r.store_sd_id or "")
@@ -2080,14 +2105,22 @@ def find_doc(
             "status_label": salesdoc.ORDER_STATUS.get(r.status, str(r.status)),
             "amount": float(r.amount or 0),
             "code_1C": r.code_1c,
+            "agent": r.agent_name,
             "notes": notes,
         })
+    mirror_hits.sort(key=lambda h: h["date"] or "", reverse=True)
 
     # --- 1С: итог документа продаж ---
     sales_hits, seen_docs = [], set()
-    for s in db.query(models.Sale).filter(
-            models.Sale.doc_total >= amount - tol,
-            models.Sale.doc_total <= amount + tol).all():
+    sales_q = db.query(models.Sale).filter(models.Sale.doc_total.isnot(None))
+    if amount is not None:
+        sales_q = sales_q.filter(models.Sale.doc_total >= amount - tol,
+                                 models.Sale.doc_total <= amount + tol)
+    if date_from:
+        sales_q = sales_q.filter(models.Sale.date >= date_from)
+    if date_to:
+        sales_q = sales_q.filter(models.Sale.date <= date_to)
+    for s in sales_q.limit(5000).all():
         key = (s.doc_number, s.date, s.client)
         if key in seen_docs:
             continue
@@ -2106,26 +2139,43 @@ def find_doc(
     live_hits, live_error = [], None
     try:
         df, dt = salesdoc.reason_window()
+        # Когда ищут по дате, окно берём заданное: реализация «сегодня» может
+        # оказаться за пределами стандартного окна причин расхождений.
+        if date_from:
+            df = date_from.isoformat()
+        if date_to:
+            dt = date_to.isoformat()
         for o in salesdoc.call_all("getOrder", ("orders", "order"), {"filter": {
                 "include": "all", "status": [1, 2, 3, 4, 5],
                 "period": {"date": {"from": df, "to": dt}}}}):
             amt = float(o.get("totalSummaAfterDiscount") or o.get("totalSumma") or 0)
-            if abs(amt - amount) > tol:
+            if not amount_ok(amt):
                 continue
             cli = o.get("client") or {}
             cli_sd = str(cli.get("SD_id") or "").lower() or None
             if not match_client(cli_sd, cli.get("code_1C")):
                 continue
+            odate = (o.get("dateDocument") or o.get("dateCreate") or "")[:10]
+            if (date_from or date_to) and odate:
+                try:
+                    if not date_ok(date.fromisoformat(odate)):
+                        continue
+                except ValueError:
+                    pass
             live_hits.append({
                 "sd_id": str(o.get("SD_id") or o.get("CS_id") or "").strip(),
-                "date": (o.get("dateDocument") or o.get("dateCreate") or "")[:10],
+                "date": odate,
                 "client": names.get(cli_sd or "", cli_sd or ""),
                 "store": (o.get("store") or {}).get("name")
                          or (o.get("store") or {}).get("SD_id"),
                 "status_label": salesdoc.ORDER_STATUS.get(o.get("status"),
                                                           str(o.get("status"))),
                 "amount": round(amt, 2),
+                "number": o.get("number") or o.get("code_1C"),
+                "agent": (o.get("agent") or {}).get("name")
+                         if isinstance(o.get("agent"), dict) else None,
             })
+        live_hits.sort(key=lambda h: h["date"] or "", reverse=True)
     except salesdoc.SalesDocError as e:
         live_error = str(e)
 
@@ -2190,11 +2240,15 @@ def find_doc(
         for n in h["notes"]:
             verdicts.append(f"«{h['client']}» {h['date']}: {n}")
     if not live_hits and not mirror_hits and live_error is None:
-        verdicts.append("В SalesDoc документа с такой суммой нет — если он есть "
+        what = "с такой суммой" if amount is not None else "по этим условиям"
+        verdicts.append(f"В SalesDoc документа {what} нет — если он есть "
                         "в 1С, отгрузка в SalesDoc не проведена")
 
     return {
         "amount": amount,
+        "query": query,
+        "date_from": date_from and date_from.isoformat(),
+        "date_to": date_to and date_to.isoformat(),
         "in_1c": sales_hits,
         "in_mirror": mirror_hits,
         "in_salesdoc": live_hits,
