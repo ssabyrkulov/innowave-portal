@@ -44,6 +44,9 @@ HEADER_MAP = {
     "ОтветственныйНаименование": "responsible",
     # Новый вариант выгрузки: ФИО того, кто оформил документ
     "ОтветственныйФИО": "responsible",
+    # GUID документа: появился в обновлённых выгрузках 1С. Колонка
+    # необязательная — файлы без неё грузятся как раньше.
+    "ДокументGUID": "doc_guid",
 }
 
 REQUIRED_FIELDS = {"date", "client", "product", "qty", "price", "amount"}
@@ -169,6 +172,7 @@ def parse_sales_workbook(content: bytes) -> tuple[list[dict], list[str]]:
             "discount_pct": _parse_float(data.get("discount_pct")),
             "account": str(data.get("account") or "").strip() or None,
             "responsible": str(data.get("responsible") or "").strip() or None,
+            "doc_guid": str(data.get("doc_guid") or "").strip() or None,
         }
         missing = [f for f in REQUIRED_FIELDS if parsed.get(f) is None]
         if missing:
@@ -247,7 +251,8 @@ def import_sales_workbook(
 
 
 # Документная реализация (Innowave): Дата / Сумма / Валюта / Контрагент.
-DOC_HEADERS = {"Дата": "date", "Сумма": "amount", "Валюта": "currency", "Контрагент": "client"}
+DOC_HEADERS = {"Дата": "date", "Сумма": "amount", "Валюта": "currency",
+               "Контрагент": "client", "ДокументGUID": "doc_guid"}
 
 
 def import_sales_docs_workbook(

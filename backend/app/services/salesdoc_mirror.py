@@ -340,6 +340,7 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
             "order_ids": _payment_orders(p),
             "trade_sd_id": str((p.get("trade") or {}).get("SD_id") or "").lower() or None
             if isinstance(p.get("trade"), dict) else None,
+            "code_1c": str(p.get("code_1C") or "") or None,
         })
     if updated_since is None:  # полная выгрузка — вычищаем удалённое в SalesDoc
         db.flush()

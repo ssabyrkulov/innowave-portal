@@ -1752,6 +1752,156 @@ def method_probe(
     return {"found": found, "results": out}
 
 
+@router.get("/by-guid")
+def reconcile_by_guid(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    org: str = Query(default="all"),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    """Сверка операций 1С ↔ SalesDoc по GUID документа.
+
+    Идентификатор — единственная связка, которая не врёт: поиск по сумме и
+    дате с допуском рвётся от любой правки документа, а GUID переживает и
+    правку, и переоформление. 1С отдаёт его в колонке ДокументGUID, SalesDoc —
+    в поле code_1C.
+
+    Обе стороны несут его не везде, поэтому ручка сначала честно отвечает, по
+    каким видам операций сверка вообще возможна: если в выгрузке 1С колонки
+    нет, так и написано — вместе с тем, что для этого нужно. Как только колонка
+    появится, вид сам перейдёт в рабочее состояние."""
+    O, P = models.SalesDocOrder, models.SalesDocPayment
+
+    def ours(model, *filters):
+        """Документы 1С: GUID и как их назвать в списке расхождений."""
+        q = models.org_scope(db.query(model), model, org)
+        for f in filters:
+            q = q.filter(f)
+        return q.all()
+
+    def index(rows, key, label, amount):
+        """GUID → карточка документа. Построчные выгрузки дают на документ
+        несколько строк — сворачиваем в один документ и складываем суммы."""
+        out: dict[str, dict] = {}
+        for r in rows:
+            g = (key(r) or "").strip().lower()
+            if not g:
+                continue
+            e = out.setdefault(g, {"guid": g, "label": label(r), "amount": 0.0,
+                                   "date": None, "lines": 0})
+            e["amount"] += float(amount(r) or 0)
+            e["lines"] += 1
+            d = getattr(r, "date", None)
+            if d and (e["date"] is None or d.isoformat() < e["date"]):
+                e["date"] = d.isoformat()
+        return out
+
+    sd_names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+
+    def sd_client(row):
+        return (sd_names.get((row.client_sd_id or "").lower())
+                or row.client_sd_id or row.client_code_1c or "—")
+
+    kinds = []
+
+    def add(kind, label, our_rows, our_key, our_label, our_amount,
+            their_rows, their_key, their_label, their_amount,
+            our_source, their_source, note=None):
+        ours_idx = index(our_rows, our_key, our_label, our_amount)
+        theirs_idx = index(their_rows, their_key, their_label, their_amount)
+        our_total = len(our_rows)
+        their_total = len(their_rows)
+        matched, only_1c, only_sd = [], [], []
+        for g, e in ours_idx.items():
+            t = theirs_idx.get(g)
+            if t is None:
+                only_1c.append(e)
+            else:
+                matched.append({**e, "sd_amount": round(t["amount"], 2),
+                                "delta": round(e["amount"] - t["amount"], 2),
+                                "sd_label": t["label"], "sd_date": t["date"]})
+        for g, e in theirs_idx.items():
+            if g not in ours_idx:
+                only_sd.append(e)
+
+        # Состояние вида: сверять можно только там, где GUID есть с обеих
+        # сторон. Иначе честно называем, какой половины не хватает.
+        if not ours_idx and not theirs_idx:
+            status, hint = "no_guid_both", "идентификатора нет ни в 1С, ни в SalesDoc"
+        elif not ours_idx:
+            status, hint = "no_guid_1c", f"нет колонки ДокументGUID в выгрузке «{our_source}»"
+        elif not theirs_idx:
+            status, hint = "no_guid_sd", f"SalesDoc не отдаёт code_1C в {their_source}"
+        else:
+            status, hint = "ready", None
+
+        kinds.append({
+            "kind": kind, "label": label, "status": status, "hint": hint,
+            "note": note,
+            "ours": {"source": our_source, "rows": our_total,
+                     "docs_with_guid": len(ours_idx)},
+            "theirs": {"source": their_source, "rows": their_total,
+                       "docs_with_guid": len(theirs_idx)},
+            "matched": len(matched),
+            "diff_count": sum(1 for m in matched if abs(m["delta"]) >= 1),
+            "only_1c_count": len(only_1c),
+            "only_sd_count": len(only_sd),
+            "diffs": sorted((m for m in matched if abs(m["delta"]) >= 1),
+                            key=lambda m: -abs(m["delta"]))[:limit],
+            "only_1c": sorted(only_1c, key=lambda e: -abs(e["amount"]))[:limit],
+            "only_sd": sorted(only_sd, key=lambda e: -abs(e["amount"]))[:limit],
+        })
+
+    # --- Реализации: строки 1С против заказов SalesDoc ---
+    add("sales", "Реализации",
+        ours(models.Sale), lambda s: s.doc_guid,
+        lambda s: s.client, lambda s: s.amount,
+        db.query(O).filter(O.status != salesdoc.CANCELLED_STATUS).all(),
+        lambda o: o.code_1c, sd_client, lambda o: o.amount,
+        "Реализация товаров и услуг", "getOrder")
+
+    # --- Возвраты: документы 1С против операции «Возврат с полки» ---
+    add("returns", "Возвраты",
+        ours(models.ReturnDoc), lambda r: r.doc_guid,
+        lambda r: r.client, lambda r: r.amount,
+        db.query(P).filter(P.txn == salesdoc.SHELF_RETURN_TXN).all(),
+        lambda p: p.code_1c, sd_client, lambda p: p.amount,
+        "Возврат товаров от покупателя", "getPayment · возврат с полки")
+
+    # --- Оплаты покупателей ---
+    add("payments", "Оплаты покупателей",
+        ours(models.Receipt,
+             models.Receipt.operation.like(f"{CUSTOMER_PAYMENT_PREFIX}%")),
+        lambda r: r.doc_guid, lambda r: r.payer, lambda r: r.amount_kgs,
+        db.query(P).filter(P.txn == salesdoc.PAYMENT_TXN).all(),
+        lambda p: p.code_1c, sd_client, lambda p: p.amount,
+        "Платёжное поручение входящее / ПКО", "getPayment · оплата")
+
+    # --- Закупки и списания: пары в SalesDoc нет вовсе ---
+    for kind, label, model, source in (
+            ("purchases", "Поступления товаров", models.Purchase,
+             "Поступление товаров и услуг"),
+            ("writeoffs", "Списания товаров", models.WriteOff,
+             "Списание товаров")):
+        rows = ours(model)
+        idx = index(rows, lambda r: r.doc_guid, lambda r: r.doc_number or "—",
+                    lambda r: getattr(r, "amount_kgs", None) or r.qty)
+        kinds.append({
+            "kind": kind, "label": label, "status": "no_counterpart",
+            "hint": "в SalesDoc таких документов нет — сверять не с чем",
+            "note": "Идентификаторы в 1С есть и хранятся: они делают импорт "
+                    "идемпотентным и пригодятся, если SalesDoc заведёт "
+                    "складские документы.",
+            "ours": {"source": source, "rows": len(rows),
+                     "docs_with_guid": len(idx)},
+            "theirs": {"source": "—", "rows": 0, "docs_with_guid": 0},
+            "matched": 0, "diff_count": 0, "only_1c_count": 0, "only_sd_count": 0,
+            "diffs": [], "only_1c": [], "only_sd": [],
+        })
+
+    return {"org": (org or "all"), "kinds": kinds}
+
+
 @router.get("/txn-types")
 def txn_types(
     db: Session = Depends(get_db),

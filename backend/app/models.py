@@ -99,7 +99,10 @@ class Sale(Base):
     agent: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     discount_pct: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     account: Mapped[str | None] = mapped_column(String, nullable=True)
-    responsible: Mapped[str | None] = mapped_column(String, nullable=True)
+    # GUID документа 1С. SalesDoc отдаёт его же в поле code_1C, поэтому
+    # связка документов по нему точная — в отличие от поиска по сумме и
+    # дате с допуском, который рвётся от любой правки документа.
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     # Хэш строки для идемпотентного импорта: повторная загрузка того же
     # файла не создаёт дублей.
     row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
@@ -179,6 +182,10 @@ class Receipt(Base):
     # Источник денег: банк (ВыгрузкаБанкВх) или касса (ВыгрузкаПКО). Старые
     # записи без вида считаем банком (историю до разделения не пере-размечаем).
     kind: Mapped[str | None] = mapped_column(String, default="bank", nullable=True)  # bank|cash
+    # GUID документа 1С. SalesDoc отдаёт его же в поле code_1C, поэтому
+    # связка документов по нему точная — в отличие от поиска по сумме и
+    # дате с допуском, который рвётся от любой правки документа.
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -199,6 +206,10 @@ class ReturnLine(Base):
     product: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
     amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # GUID документа 1С. SalesDoc отдаёт его же в поле code_1C, поэтому
+    # связка документов по нему точная — в отличие от поиска по сумме и
+    # дате с допуском, который рвётся от любой правки документа.
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -233,6 +244,10 @@ class ReturnDoc(Base):
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
     client: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # GUID документа 1С. SalesDoc отдаёт его же в поле code_1C, поэтому
+    # связка документов по нему точная — в отличие от поиска по сумме и
+    # дате с допуском, который рвётся от любой правки документа.
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -423,6 +438,9 @@ class SalesDocPayment(Base):
     # знает, но заказ знает — а у заказа склад есть.
     order_ids: Mapped[str | None] = mapped_column(String, nullable=True)
     trade_sd_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # GUID документа 1С на стороне SalesDoc — вторая половина связки по
+    # идентификатору (у заказов это code_1c).
+    code_1c: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

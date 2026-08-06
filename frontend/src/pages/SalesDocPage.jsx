@@ -257,6 +257,8 @@ export default function SalesDocPage() {
 
       <AgentModelPanel />
 
+      <ByGuidPanel />
+
       <TxnTypesPanel />
 
       <VisitsSamplePanel />
@@ -1549,6 +1551,162 @@ function StoreStats({ rows }) {
 // с полки, списание долга, выплата клиенту. Первые два портал считает, третий
 // и четвёртый баланс SalesDoc меняют, а в 1С пары не имеют — и пока это не
 // показано, точка со списанным долгом выглядит необъяснимым расхождением.
+// Сверка по GUID документа — единственная связка, которая не врёт: поиск по
+// сумме и дате с допуском рвётся от любой правки документа. Но GUID нужен с
+// обеих сторон, поэтому панель сначала честно говорит, где сверка возможна.
+const GUID_STATUS = {
+  ready: { icon: '✅', text: 'сверка работает' },
+  no_guid_1c: { icon: '⛔', text: 'нет идентификатора в 1С' },
+  no_guid_sd: { icon: '⛔', text: 'нет идентификатора в SalesDoc' },
+  no_guid_both: { icon: '⛔', text: 'нет идентификатора с обеих сторон' },
+  no_counterpart: { icon: '➖', text: 'пары в SalesDoc нет' },
+}
+
+function GuidKind({ k }) {
+  const [open, setOpen] = useState(false)
+  const st = GUID_STATUS[k.status] || GUID_STATUS.no_guid_both
+  const clickable = k.status === 'ready'
+  return (
+    <>
+      <tr className={clickable ? 'doc-row' : ''}
+        onClick={() => clickable && setOpen((v) => !v)}>
+        <td>
+          {clickable && <span className="muted">{open ? '▾ ' : '▸ '}</span>}
+          <b>{k.label}</b>
+          <div className="rc-note">
+            1С: {k.ours.source} · SalesDoc: {k.theirs.source}
+          </div>
+        </td>
+        <td>
+          {st.icon} {st.text}
+          {k.hint && <div className="rc-note">{k.hint}</div>}
+        </td>
+        <td className="num">
+          {k.ours.docs_with_guid} / {k.ours.rows}
+        </td>
+        <td className="num">
+          {k.theirs.docs_with_guid} / {k.theirs.rows}
+        </td>
+        <td className="num">{k.status === 'ready' ? k.matched : '—'}</td>
+        <td className={`num ${k.only_1c_count ? 'sc-diff' : ''}`}>
+          {k.status === 'ready' ? k.only_1c_count : '—'}
+        </td>
+        <td className={`num ${k.only_sd_count ? 'sc-diff' : ''}`}>
+          {k.status === 'ready' ? k.only_sd_count : '—'}
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td className="doc-lines" colSpan={7}>
+            <GuidList title="Есть в 1С, нет в SalesDoc" rows={k.only_1c} />
+            <GuidList title="Есть в SalesDoc, нет в 1С" rows={k.only_sd} />
+            <GuidList title="Совпали по идентификатору, но суммы разные"
+              rows={k.diffs} withDelta />
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+function GuidList({ title, rows, withDelta }) {
+  if (!rows || rows.length === 0) return null
+  return (
+    <>
+      <div className="rc-col-title">{title} · {rows.length}</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Дата</th><th>Контрагент</th>
+            <th className="num">Сумма</th>
+            {withDelta && <><th className="num">В SalesDoc</th><th className="num">Δ</th></>}
+            <th>Идентификатор</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.guid}>
+              <td>{fdateShort(r.date)}</td>
+              <td>{r.label}</td>
+              <td className="num">{money(r.amount)}</td>
+              {withDelta && (
+                <>
+                  <td className="num">{money(r.sd_amount)}</td>
+                  <td className="num sc-diff">{money(r.delta)}</td>
+                </>
+              )}
+              <td><span className="sd-doc-id">{r.guid}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  )
+}
+
+function ByGuidPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+
+  function load() {
+    api.salesdocByGuid().then(setData).catch((e) => setError(e.message))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  const ready = (data?.kinds || []).filter((k) => k.status === 'ready')
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🔗 Сверка операций по идентификатору 1С ↔ SalesDoc
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">GUID документа — единственная связка, которая не
+            врёт: поиск по сумме и дате с допуском рвётся от любой правки
+            документа, а идентификатор переживает и правку, и переоформление.
+            1С отдаёт его в колонке <code>ДокументGUID</code>, SalesDoc — в поле{' '}
+            <code>code_1C</code>. Сверка возможна там, где он есть с обеих
+            сторон; где нет — написано, чего не хватает.</p>
+          {error && <div className="error">{error}</div>}
+          {data && (
+            <>
+              {ready.length === 0 && (
+                <div className="note-readonly sd-warn">
+                  Пока ни по одному виду операций сверка по идентификатору
+                  невозможна: в выгрузках 1С нет колонки{' '}
+                  <code>ДокументGUID</code> — она есть только в поступлениях и
+                  списаниях, а им нет пары в SalesDoc. Портал уже готов её
+                  читать: как только колонка появится в выгрузке реализаций,
+                  строка «Реализации» станет рабочей сама.
+                </div>
+              )}
+              <div className="table-wrap rc-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Вид операции</th>
+                      <th>Состояние</th>
+                      <th className="num">1С: с ИД / всего</th>
+                      <th className="num">SD: с ИД / всего</th>
+                      <th className="num">Совпало</th>
+                      <th className="num">Только 1С</th>
+                      <th className="num">Только SD</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.kinds.map((k) => <GuidKind key={k.kind} k={k} />)}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function TxnTypesPanel() {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState(null)

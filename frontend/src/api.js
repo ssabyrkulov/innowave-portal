@@ -198,6 +198,7 @@ export const api = {
   salesdocJournalAnatomy: () => request('/salesdoc/journal-anatomy'),
   salesdocAgentModel: () => request('/salesdoc/agent-model'),
   salesdocTxnTypes: () => request('/salesdoc/txn-types'),
+  salesdocByGuid: () => request('/salesdoc/by-guid'),
   salesdocVisitsSample: () => request('/salesdoc/visits-sample'),
   salesdocVisitDebt: () => request('/salesdoc/visit-debt'),
   salesdocApiProbe: (params) =>

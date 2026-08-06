@@ -31,7 +31,9 @@ admin_only = require_roles(models.Role.admin)
 DEFAULT_RATES = {"KGS": 1.0, "USD": 87.0, "EUR": 95.0, "RUB": 1.1, "KZT": 0.17}
 
 HEADERS = {"Дата": "date", "Сумма": "amount", "Валюта": "currency",
-           "Контрагент": "payer", "ВидОперации": "operation"}
+           "Контрагент": "payer", "ВидОперации": "operation",
+           # Необязательная колонка обновлённых выгрузок 1С: GUID документа.
+           "ДокументGUID": "doc_guid"}
 
 # Дебиторку формируют только оплаты покупателей.
 CUSTOMER_PAYMENT_PREFIX = "Оплата от покупателя"
@@ -152,6 +154,7 @@ def import_receipts_workbook(
             "amount_kgs": round(amount * rate, 2),
             "payer": payer,
             "operation": str(data.get("operation") or "").strip() or "Не указан",
+            "doc_guid": str(data.get("doc_guid") or "").strip() or None,
         })
 
     line_no = header_idx + 1
