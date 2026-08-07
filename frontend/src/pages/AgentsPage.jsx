@@ -305,6 +305,12 @@ function TodayPanel() {
       )}
       {data && data.agents.length > 0 && (
         <>
+          {!data.has_times && (
+            <p className="muted">SalesDoc отдаёт по визиту только дату, без
+              времени, — поэтому колонки «во сколько» нет. Если в интерфейсе
+              SalesDoc время посещения видно, значит API его просто не отдаёт
+              этим методом.</p>
+          )}
           <div className="summary-bar">
             <div className="summary-card">
               <span className="summary-label">Точек посещено</span>
@@ -364,12 +370,15 @@ function TodayPanel() {
                         <td className="doc-lines" colSpan={7}>
                           <table>
                             <thead>
-                              <tr><th>Время</th><th>Точка</th><th>Итог визита</th></tr>
+                              <tr>
+                                {data.has_times && <th>Время</th>}
+                                <th>Точка</th><th>Итог визита</th>
+                              </tr>
                             </thead>
                             <tbody>
                               {a.points.map((pt, i) => (
                                 <tr key={i}>
-                                  <td>{pt.time}</td>
+                                  {data.has_times && <td>{pt.time || '—'}</td>}
                                   <td>{pt.client}</td>
                                   <td>
                                     {pt.has_order

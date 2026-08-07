@@ -695,6 +695,18 @@ def sync_visits(db: Session, updated_since: str | None = None) -> int:
                 break
         if at is None:
             continue
+        # Время визита. Поле date приходит без времени (полночь у всех
+        # записей), но если время лежит отдельным полем — подбираем его.
+        # Не найдётся — панель честно покажет «—», а не фиктивные 00:00.
+        if at.time() == datetime.min.time():
+            for k in ("time", "start_time", "time_start", "timeStart",
+                      "visit_time", "check_in", "checkin"):
+                m = re.match(r"^(\d{1,2}):(\d{2})",
+                             str(v.get(k) or "").strip())
+                if m:
+                    at = at.replace(hour=int(m.group(1)) % 24,
+                                    minute=int(m.group(2)) % 60)
+                    break
         key = _h.sha1(
             f"{v.get('agent_id')}|{v.get('client_id')}|{v.get('date')}".encode()
         ).hexdigest()

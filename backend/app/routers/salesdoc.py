@@ -2781,8 +2781,11 @@ def agents_today(
             a["planned"] += 1
         if v.visited:
             a["visited"] += 1
+            # Полночь — это «времени нет», а не визит в 00:00: getVisit отдаёт
+            # поле date без времени. Показывать честнее прочерк, чем 00:00.
+            has_time = v.at.time() != datetime.min.time()
             a["points"].append({
-                "time": v.at.strftime("%H:%M"),
+                "time": v.at.strftime("%H:%M") if has_time else None,
                 "client": v.client_name or v.client_sd_id or "—",
                 "has_order": bool(v.has_order),
                 "reject": v.reject or None,
@@ -2805,8 +2808,9 @@ def agents_today(
         a["orders"] = int(cnt or 0)
         a["orders_amount"] = float(amount or 0)
 
+    has_times = any(p["time"] for a in agents.values() for p in a["points"])
     for a in agents.values():
-        a["points"].sort(key=lambda p: p["time"])
+        a["points"].sort(key=lambda p: (p["time"] or "", p["client"]))
         a["order_summa"] = round(a["order_summa"], 2)
         a["orders_amount"] = round(a["orders_amount"], 2)
 
@@ -2825,6 +2829,9 @@ def agents_today(
         },
         "visits_synced_at": (st.last_full_at.isoformat()
                              if st and st.last_full_at else None),
+        # Есть ли у визитов время вообще. Если нет — интерфейс объясняет
+        # почему, вместо колонки бессмысленных полуночей.
+        "has_times": has_times,
     }
 
 
