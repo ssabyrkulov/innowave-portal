@@ -261,6 +261,10 @@ def stock_compare(
     # а «выгрузки ещё не было»: эти состояния различаем флагом has_onec.
     onec: dict[str, dict] = {}
     onec_names: dict[str, str] = {}
+    # GUID номенклатуры из плоской выгрузки: по нему строка SalesDoc позже
+    # склеится с этой же позицией через getProduct.code_1C — точнее, чем по
+    # названию, которое в системах пишется по-разному.
+    guid_to_key: dict[str, str] = {}
     for r in models.org_scope(db.query(models.StockBalance),
                               models.StockBalance, org).all():
         key = _norm_product(r.product)
@@ -268,6 +272,8 @@ def stock_compare(
         e["qty"] += float(r.qty or 0)
         e["amount"] += float(r.amount or 0)
         onec_names.setdefault(key, r.product)
+        if r.product_guid:
+            guid_to_key.setdefault(r.product_guid.lower(), key)
 
     # SalesDoc: склады выбранной фирмы плюс не привязанные к фирме — их
     # исключать нельзя, иначе товар «пропадёт» из сверки только из-за того,
@@ -277,6 +283,10 @@ def stock_compare(
     if o:
         allowed = {s.store_id for s in db.query(models.SalesDocStore).all()
                    if s.store_id and (s.organization or None) in (o, None)}
+    # Товар SalesDoc несёт GUID номенклатуры 1С (getProduct.code_1C) — если
+    # этот GUID пришёл и в выгрузке остатков, ключом становится он.
+    sd_guid = {p.sd_id: (p.code_1c or "").lower()
+               for p in db.query(models.SalesDocProduct).all() if p.code_1c}
     sd: dict[str, float] = {}
     sd_names: dict[str, str] = {}
     sd_rows = 0
@@ -284,7 +294,8 @@ def stock_compare(
         if allowed is not None and r.store_sd_id not in allowed:
             continue
         sd_rows += 1
-        key = _norm_product(r.product_name)
+        key = (guid_to_key.get(sd_guid.get(r.product_sd_id or "", ""))
+               or _norm_product(r.product_name))
         sd[key] = sd.get(key, 0.0) + float(r.quantity or 0)
         sd_names.setdefault(key, r.product_name)
 

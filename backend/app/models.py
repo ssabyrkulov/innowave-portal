@@ -273,6 +273,10 @@ class StockBalance(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     product: Mapped[str] = mapped_column(String, nullable=False)
+    # GUID номенклатуры 1С (из плоской выгрузки нашей обработки). SalesDoc
+    # отдаёт его же в getProduct.code_1C — точный ключ вместо сопоставления по
+    # названию, которое рвётся от переименования позиции.
+    product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)

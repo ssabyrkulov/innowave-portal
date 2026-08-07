@@ -104,6 +104,64 @@ def import_cash_balances_workbook(
     return {"added": len(parsed), "snapshot": True}
 
 
+def _import_stock_flat(db: Session, data_rows, header_cells: dict,
+                       col_product: int, col_store: int,
+                       filename: str, user_id: int, org: str) -> dict:
+    """Плоская выгрузка остатков (наша обработка 1С): строка = товар на складе.
+
+    Колонки ищутся по именам, лишние не мешают. НоменклатураGUID — по желанию:
+    с ним товар связывается с SalesDoc по идентификатору, а не по названию."""
+    col_qty = header_cells.get("КоличествоОстаток")
+    col_amount = header_cells.get("СуммаОстаток")
+    col_guid = header_cells.get("НоменклатураGUID")
+
+    def cell(row, j):
+        return row[j] if j is not None and j < len(row) else None
+
+    parsed = []
+    for row in data_rows:
+        if not row:
+            continue
+        product = str(cell(row, col_product) or "").strip()
+        if not product or product == "Итог":
+            continue
+        qty = _num(cell(row, col_qty))
+        amount = _num(cell(row, col_amount))
+        if qty is None and amount is None:
+            continue
+        parsed.append(models.StockBalance(
+            organization=org,
+            product=product,
+            product_guid=str(cell(row, col_guid) or "").strip() or None,
+            warehouse=str(cell(row, col_store) or "").strip() or None,
+            qty=qty or 0,
+            amount=amount or 0,
+        ))
+
+    if not parsed:
+        db.add(models.ImportLog(
+            filename=f"[остатки товаров, пусто] {filename}", user_id=user_id,
+            added=0, skipped=0, errors_count=0,
+        ))
+        db.commit()
+        return {"added": 0, "snapshot": True, "empty": True,
+                "detail": "В файле нет строк остатков — прежние данные сохранены."}
+
+    # Снимок: замена целиком в рамках организации (как у иерархического).
+    db.query(models.StockBalance).filter(
+        models.StockBalance.organization == org).delete(synchronize_session=False)
+    now = datetime.utcnow()
+    for p in parsed:
+        p.updated_at = now
+        db.add(p)
+    db.add(models.ImportLog(
+        filename=f"[остатки товаров] {filename}", user_id=user_id,
+        added=len(parsed), skipped=0, errors_count=0,
+    ))
+    db.commit()
+    return {"added": len(parsed), "snapshot": True, "flat": True}
+
+
 def import_stock_balances_workbook(
     db: Session, content: bytes, filename: str, user_id: int,
     org: str = models.DEFAULT_ORG,
@@ -118,6 +176,20 @@ def import_stock_balances_workbook(
             break
     if header_idx is None:
         raise HTTPException(status_code=400, detail="Не найдены колонки остатков товаров")
+
+    # Плоский формат нашей обработки: склад и номенклатура — отдельными
+    # колонками, одна строка = товар на складе. Надёжнее иерархического
+    # отчёта: не нужно угадывать, что в первой колонке — товар или склад.
+    header_cells = {str(c).strip(): j for j, c in enumerate(rows[header_idx])
+                    if c is not None}
+    flat_product = next((header_cells[k] for k in
+                         ("НоменклатураНаименование", "Номенклатура")
+                         if k in header_cells), None)
+    flat_store = next((header_cells[k] for k in
+                       ("СкладНаименование", "Склад") if k in header_cells), None)
+    if flat_product is not None and flat_store is not None:
+        return _import_stock_flat(db, rows[header_idx + 1:], header_cells,
+                                  flat_product, flat_store, filename, user_id, org)
 
     # Файл иерархический: строка товара, затем строки его складов.
     # Склад узнаём по справочнику складов из продаж этой организации.
