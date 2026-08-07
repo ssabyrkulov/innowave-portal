@@ -255,6 +255,9 @@ def sniff_kind(content: bytes) -> str:
             return "cash_balances"
         if "СуммаОстаток" in cells and "КоличествоОстаток" in cells:
             return "stock_balances"
+        # Матричный отчёт остатков: «Номенклатура» + колонка «ИТОГО …»
+        if "Номенклатура" in cells and any("ИТОГО" in str(c) for c in cells):
+            return "stock_balances"
         if {"Дата", "Сумма", "Валюта", "Контрагент"} <= cells:
             return "return_docs"
     return "unknown"

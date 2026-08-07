@@ -154,8 +154,11 @@ function CalcStockCard() {
   return (
     <div className="chart-card">
       <div className="sd-card-title">
-        📦 Расчётные остатки товаров
-        <span className="muted"> · поступило − продано + возвраты − списано</span>
+        📦 Остатки товаров: наша математика ↔ отчёт 1С
+        <span className="muted"> · слева расчёт из движений, справа снапшот
+          {data.onec_updated_at && ` от ${new Date(data.onec_updated_at + 'Z')
+            .toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`}
+        </span>
       </div>
       <div className="table-wrap rc-table">
         <table>
@@ -167,6 +170,8 @@ function CalcStockCard() {
               <th className="num">Возвраты</th>
               <th className="num">Списано</th>
               <th className="num">Расчётный остаток</th>
+              {data.has_onec && <th className="num">Остаток 1С</th>}
+              {data.has_onec && <th className="num">Δ</th>}
             </tr>
           </thead>
           <tbody>
@@ -177,9 +182,20 @@ function CalcStockCard() {
                 <td className="num">{fmt(r.sold)}</td>
                 <td className="num">{fmt(r.returned)}</td>
                 <td className="num">{r.written_off ? `−${fmt(r.written_off)}` : '—'}</td>
-                <td className={`num ${r.calc_qty < 0 ? 'neg' : ''}`}>
-                  <b>{fmt(r.calc_qty)}</b>
+                <td className={`num ${(r.calc_qty ?? 0) < 0 ? 'neg' : ''}`}>
+                  <b>{r.calc_qty == null ? '—' : fmt(r.calc_qty)}</b>
                 </td>
+                {data.has_onec && (
+                  <td className={`num ${(r.onec_qty ?? 0) < 0 ? 'neg' : ''}`}>
+                    {r.onec_qty == null ? '—' : fmt(r.onec_qty)}
+                  </td>
+                )}
+                {data.has_onec && (
+                  <td className={`num ${r.diff_onec == null ? 'muted'
+                    : Math.abs(r.diff_onec) < 1 ? 'sc-ok' : 'sc-diff'}`}>
+                    {r.diff_onec == null ? '—' : fmt(r.diff_onec)}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -191,6 +207,12 @@ function CalcStockCard() {
               <td className="num"><b>{fmt(data.totals.returned)}</b></td>
               <td className="num"><b>{fmt(data.totals.written_off)}</b></td>
               <td className="num"><b>{fmt(data.totals.calc_qty)}</b></td>
+              {data.has_onec && <td className="num"><b>{fmt(data.totals.onec_qty)}</b></td>}
+              {data.has_onec && (
+                <td className={`num ${Math.abs(data.totals.diff_onec) < 1 ? 'sc-ok' : 'sc-diff'}`}>
+                  <b>{fmt(data.totals.diff_onec)}</b>
+                </td>
+              )}
             </tr>
           </tfoot>
         </table>

@@ -208,32 +208,64 @@ def stock_calc(
     товарных строк — расчёт работает там, где продажи построчные."""
     agg = _calc_stock(db, org)
 
+    # Правая сторона сверки — отчёт 1С по остаткам (снапшот ВыгрузкаОст).
+    # Слева наша математика из движений, справа то, что говорит учёт.
+    onec: dict[str, dict] = {}
+    onec_at = None
+    for r in models.org_scope(db.query(models.StockBalance),
+                              models.StockBalance, org).all():
+        e = onec.setdefault(_norm_product(r.product),
+                            {"qty": 0.0, "amount": 0.0, "name": r.product})
+        e["qty"] += float(r.qty or 0)
+        e["amount"] += float(r.amount or 0)
+        if onec_at is None or (r.updated_at and r.updated_at > onec_at):
+            onec_at = r.updated_at
+
     rows = []
-    for e in agg.values():
+    for key, e in agg.items():
         calc = e["purchased"] - e["sold"] + e["returned"] - e["written_off"]
+        o = onec.pop(key, None)
         rows.append({
             "product": e["name"],
             "purchased": round(e["purchased"], 1),
             "sold": round(e["sold"], 1),
             "returned": round(e["returned"], 1),
             "written_off": round(e["written_off"], 1),
+            "onec_qty": round(o["qty"], 1) if o else None,
+            "onec_amount": round(o["amount"], 2) if o else None,
+            "diff_onec": round(calc - o["qty"], 1) if o else None,
             "calc_qty": round(calc, 1),
             # Продано то, чего не закупали (по имени) — почти всегда значит,
             # что имена не склеились; честно помечаем вместо тихого минуса.
             "unmatched": not e["has_purchase"] and e["sold"] > 0,
+        })
+    # Позиции, которые есть в отчёте 1С, но не встречались в движениях
+    # (например, канцтовары до первой закупки в выгрузке) — тоже показываем:
+    # «в учёте есть, в математике нет» — это находка, а не мусор.
+    for o in onec.values():
+        rows.append({
+            "product": o["name"], "purchased": 0, "sold": 0, "returned": 0,
+            "written_off": 0, "calc_qty": None,
+            "onec_qty": round(o["qty"], 1), "onec_amount": round(o["amount"], 2),
+            "diff_onec": None, "unmatched": False,
         })
     rows.sort(key=lambda x: (_group_of(x["product"]),
                              _size_of(x["product"]),
                              x["product"] or ""))
     return {
         "org": (org or "all"),
+        "has_onec": onec_at is not None,
+        "onec_updated_at": onec_at.isoformat() if onec_at else None,
         "rows": rows,
         "totals": {
             "purchased": round(sum(r["purchased"] for r in rows), 1),
             "sold": round(sum(r["sold"] for r in rows), 1),
             "returned": round(sum(r["returned"] for r in rows), 1),
             "written_off": round(sum(r["written_off"] for r in rows), 1),
-            "calc_qty": round(sum(r["calc_qty"] for r in rows), 1),
+            "calc_qty": round(sum(r["calc_qty"] or 0 for r in rows), 1),
+            "onec_qty": round(sum(r["onec_qty"] or 0 for r in rows), 1),
+            "onec_amount": round(sum(r["onec_amount"] or 0 for r in rows), 2),
+            "diff_onec": round(sum(r["diff_onec"] or 0 for r in rows), 1),
         },
         "unmatched_count": sum(1 for r in rows if r["unmatched"]),
     }

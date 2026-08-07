@@ -104,6 +104,76 @@ def import_cash_balances_workbook(
     return {"added": len(parsed), "snapshot": True}
 
 
+def _import_stock_matrix(db: Session, rows, header_idx: int,
+                         filename: str, user_id: int, org: str) -> dict:
+    """Матричный отчёт остатков: номенклатура × склады.
+
+    Суммы в файле даны только итогом по номенклатуре — раскладываем их по
+    складам пропорционально количеству, чтобы сумма складов сходилась с
+    файлом копейка в копейку (через цену×количество сходилась бы только
+    примерно: цена в файле округлена)."""
+    header = [str(c).strip() if c is not None else "" for c in rows[header_idx]]
+    itogo_idx = next((j for j, c in enumerate(header) if "ИТОГО" in c), None)
+    price_idx = next((j for j, c in enumerate(header) if "Цена" in c), None)
+    sum_idx = next((j for j, c in enumerate(header) if c == "Сумма"), None)
+    if itogo_idx is None:
+        raise HTTPException(status_code=400,
+                            detail="В матричном отчёте не нашлась колонка ИТОГО")
+    warehouses = [(j, header[j]) for j in range(1, itogo_idx) if header[j]]
+
+    parsed: list[models.StockBalance] = []
+    for row in rows[header_idx + 1:]:
+        if not row or row[0] is None:
+            continue
+        name = str(row[0]).strip()
+        if not name or name == "ИТОГО":
+            continue
+
+        def cell(j):
+            return row[j] if j is not None and j < len(row) else None
+
+        total_qty = _num(cell(itogo_idx))
+        total_sum = _num(cell(sum_idx))
+        price = _num(cell(price_idx))
+        per_wh = [(wh, _num(cell(j))) for j, wh in warehouses]
+        per_wh = [(wh, q) for wh, q in per_wh if q]
+        if not per_wh:
+            continue  # позиция без остатков ни на одном складе
+        for wh, q in per_wh:
+            if total_sum is not None and total_qty:
+                amount = total_sum * q / total_qty
+            elif price is not None:
+                amount = q * price
+            else:
+                amount = 0.0
+            parsed.append(models.StockBalance(
+                organization=org, product=name, warehouse=wh,
+                qty=q, amount=round(amount, 2),
+            ))
+
+    if not parsed:
+        db.add(models.ImportLog(
+            filename=f"[остатки товаров, пусто] {filename}", user_id=user_id,
+            added=0, skipped=0, errors_count=0,
+        ))
+        db.commit()
+        return {"added": 0, "snapshot": True, "empty": True,
+                "detail": "В файле нет строк остатков — прежние данные сохранены."}
+
+    db.query(models.StockBalance).filter(
+        models.StockBalance.organization == org).delete(synchronize_session=False)
+    now = datetime.utcnow()
+    for p in parsed:
+        p.updated_at = now
+        db.add(p)
+    db.add(models.ImportLog(
+        filename=f"[остатки товаров] {filename}", user_id=user_id,
+        added=len(parsed), skipped=0, errors_count=0,
+    ))
+    db.commit()
+    return {"added": len(parsed), "snapshot": True, "matrix": True}
+
+
 def _import_stock_flat(db: Session, data_rows, header_cells: dict,
                        col_product: int, col_store: int,
                        filename: str, user_id: int, org: str) -> dict:
@@ -175,6 +245,14 @@ def import_stock_balances_workbook(
             header_idx = i
             break
     if header_idx is None:
+        # Матричный отчёт по остаткам запасов (ВыгрузкаОстНью): строка —
+        # номенклатура, колонки — склады, затем «ИТОГО кол», «Цена за ед»,
+        # «Сумма». Третий формат остатков, который принимает портал.
+        for i, row in enumerate(rows[:20]):
+            cells = [str(c).strip() if c is not None else "" for c in row]
+            if cells and cells[0] == "Номенклатура" \
+                    and any("ИТОГО" in c for c in cells[1:]):
+                return _import_stock_matrix(db, rows, i, filename, user_id, org)
         raise HTTPException(status_code=400, detail="Не найдены колонки остатков товаров")
 
     # Плоский формат нашей обработки: склад и номенклатура — отдельными
