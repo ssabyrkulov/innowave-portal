@@ -141,6 +141,8 @@ export default function StockPage() {
         </>
       )}
 
+      <StockComparePanel />
+
       <PurchasesPanel />
 
       <WriteoffsPanel />
@@ -561,6 +563,88 @@ export function WriteoffsPanel() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// Сверка остатков «как должно быть ↔ как на самом деле»: расчёт из движений
+// против факта 1С и остатков SalesDoc. Знак расхождения — диагноз: расчёт
+// больше факта — недостача или неучтённое списание; меньше — неоприходованный
+// приход или пересорт.
+export function StockComparePanel() {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [hideOk, setHideOk] = useState(false)
+
+  useEffect(() => {
+    api.stockCompare().then(setData).catch((e) => setError(e.message))
+  }, [])
+
+  if (error) return <div className="error">{error}</div>
+  if (!data || data.rows.length === 0) return null
+  const rows = hideOk
+    ? data.rows.filter((r) => Math.abs(r.diff_sd ?? 0) >= 1 || Math.abs(r.diff_onec ?? 0) >= 1)
+    : data.rows
+  const dcls = (v) => (v == null ? 'muted' : Math.abs(v) < 1 ? 'sc-ok' : 'sc-diff')
+  const num = (v) => (v == null ? '—' : fmtQty(v))
+  return (
+    <div className="chart-card">
+      <div className="sd-card-title">
+        ⚖️ Сверка остатков: расчёт · 1С · SalesDoc
+      </div>
+      <p className="muted">Расчёт — из движений (закупки − продажи + возвраты −
+        списания), по всем складам фирмы сразу: перемещения между складами на
+        итог не влияют. Δ считается только там, где есть обе стороны. Знак
+        подсказывает причину: расчёт больше факта — недостача или неучтённое
+        списание; меньше — неоприходованный приход или пересорт.</p>
+      {!data.has_onec && (
+        <div className="note-readonly sd-warn">
+          Фактических остатков 1С пока нет: ВыгрузкаОст приходит без строк
+          (в файле только шапка и «Итог») — колонка «1С» заполнится сама, как
+          только выгрузка отдаст данные. Пока расчёт сверяется с SalesDoc.
+        </div>
+      )}
+      <label className="debt-filter-check">
+        <input type="checkbox" checked={hideOk}
+          onChange={(e) => setHideOk(e.target.checked)} />
+        Только расхождения
+      </label>
+      <div className="table-wrap rc-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Номенклатура</th>
+              <th className="num">Расчёт</th>
+              <th className="num">SalesDoc</th>
+              <th className="num">Δ расчёт−SD</th>
+              <th className="num">1С</th>
+              <th className="num">Δ расчёт−1С</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td>{r.product}</td>
+                <td className="num"><b>{num(r.calc_qty)}</b></td>
+                <td className="num">{num(r.sd_qty)}</td>
+                <td className={`num ${dcls(r.diff_sd)}`}>{num(r.diff_sd)}</td>
+                <td className="num">{num(r.onec_qty)}</td>
+                <td className={`num ${dcls(r.diff_onec)}`}>{num(r.diff_onec)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td>Итого</td>
+              <td className="num"><b>{num(data.totals.calc_qty)}</b></td>
+              <td className="num">{num(data.totals.sd_qty)}</td>
+              <td className={`num ${dcls(data.totals.diff_sd)}`}>{num(data.totals.diff_sd)}</td>
+              <td className="num">{num(data.totals.onec_qty)}</td>
+              <td className={`num ${dcls(data.totals.diff_onec)}`}>{num(data.totals.diff_onec)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </div>
   )
 }

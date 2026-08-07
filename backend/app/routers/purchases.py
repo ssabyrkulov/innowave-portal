@@ -157,20 +157,13 @@ def _size_of(name: str) -> int:
     return 99  # без размера — после размерных
 
 
-@router.get("/stock-calc")
-def stock_calc(
-    db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
-    org: str = "all",
-):
-    """Расчётные остатки: поступило − продано + возвраты − списано.
+def _calc_stock(db: Session, org: str) -> dict[str, dict]:
+    """Расчётные остатки по нормализованной номенклатуре — «как должно быть».
 
-    Списания теперь выгружаются (ВыгрузкаСпис) и вычитаются наравне с
-    продажами — раньше их приходилось считать невидимой погрешностью, и
-    расчёт был заведомо верхней оценкой. Инвентаризации и пересорт всё ещё
-    не выгружаются, так что расхождение с фактическими остатками теперь
-    показывает именно их. Продажи Innowave выгружаются документами без
-    товарных строк — расчёт работает там, где продажи построчные."""
+    Считается по фирме ЦЕЛИКОМ, по всем складам сразу: перемещения между
+    складами внутри фирмы взаимно сокращаются и на итог не влияют. Разрез по
+    отдельному складу потребовал бы склада во всех движениях, а возвраты
+    покупателей приходят без него."""
     def scope(q, model):
         return models.org_scope(q, model, org)
 
@@ -196,6 +189,24 @@ def stock_calc(
         entry(r.product)["returned"] += float(r.qty or 0)
     for w in scope(db.query(models.WriteOff), models.WriteOff).all():
         entry(w.product)["written_off"] += float(w.qty or 0)
+    return agg
+
+
+@router.get("/stock-calc")
+def stock_calc(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "all",
+):
+    """Расчётные остатки: поступило − продано + возвраты − списано.
+
+    Списания теперь выгружаются (ВыгрузкаСпис) и вычитаются наравне с
+    продажами — раньше их приходилось считать невидимой погрешностью, и
+    расчёт был заведомо верхней оценкой. Инвентаризации и пересорт всё ещё
+    не выгружаются, так что расхождение с фактическими остатками теперь
+    показывает именно их. Продажи Innowave выгружаются документами без
+    товарных строк — расчёт работает там, где продажи построчные."""
+    agg = _calc_stock(db, org)
 
     rows = []
     for e in agg.values():
@@ -225,6 +236,93 @@ def stock_calc(
             "calc_qty": round(sum(r["calc_qty"] for r in rows), 1),
         },
         "unmatched_count": sum(1 for r in rows if r["unmatched"]),
+    }
+
+
+@router.get("/stock-compare")
+def stock_compare(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "all",
+):
+    """Остатки тремя путями рядом: расчёт из движений · факт 1С · SalesDoc.
+
+    Это сверка «как должно быть ↔ как на самом деле» для товара. Расчёт —
+    из загруженных движений (закупки − продажи + возвраты − списания), факт
+    1С — из ВыгрузкаОст, SalesDoc — из зеркала остатков. Все три считаются по
+    фирме целиком, по всем складам: перемещения внутри фирмы на итог не
+    влияют.
+
+    Знак расхождения — диагноз: расчёт больше факта — недостача или
+    неучтённое списание; меньше — неоприходованный приход или пересорт."""
+    calc = _calc_stock(db, org)
+
+    # Факт 1С (снапшот ВыгрузкаОст). Пустая таблица — не «нулевые остатки»,
+    # а «выгрузки ещё не было»: эти состояния различаем флагом has_onec.
+    onec: dict[str, dict] = {}
+    onec_names: dict[str, str] = {}
+    for r in models.org_scope(db.query(models.StockBalance),
+                              models.StockBalance, org).all():
+        key = _norm_product(r.product)
+        e = onec.setdefault(key, {"qty": 0.0, "amount": 0.0})
+        e["qty"] += float(r.qty or 0)
+        e["amount"] += float(r.amount or 0)
+        onec_names.setdefault(key, r.product)
+
+    # SalesDoc: склады выбранной фирмы плюс не привязанные к фирме — их
+    # исключать нельзя, иначе товар «пропадёт» из сверки только из-за того,
+    # что складу не назначили организацию.
+    o = models.normalize_org(org) if (org or "").lower() in models.ORGS else None
+    allowed = None
+    if o:
+        allowed = {s.store_id for s in db.query(models.SalesDocStore).all()
+                   if s.store_id and (s.organization or None) in (o, None)}
+    sd: dict[str, float] = {}
+    sd_names: dict[str, str] = {}
+    sd_rows = 0
+    for r in db.query(models.SalesDocStock).all():
+        if allowed is not None and r.store_sd_id not in allowed:
+            continue
+        sd_rows += 1
+        key = _norm_product(r.product_name)
+        sd[key] = sd.get(key, 0.0) + float(r.quantity or 0)
+        sd_names.setdefault(key, r.product_name)
+
+    rows = []
+    for key in set(calc) | set(onec) | set(sd):
+        c = calc.get(key)
+        calc_qty = (round(c["purchased"] - c["sold"] + c["returned"]
+                          - c["written_off"], 1) if c else None)
+        name = (c and c["name"]) or onec_names.get(key) or sd_names.get(key) or "—"
+        onec_qty = round(onec[key]["qty"], 1) if key in onec else None
+        sd_qty = round(sd[key], 1) if key in sd else None
+        rows.append({
+            "product": name,
+            "calc_qty": calc_qty,
+            "onec_qty": onec_qty,
+            "onec_amount": round(onec[key]["amount"], 2) if key in onec else None,
+            "sd_qty": sd_qty,
+            # Разница считается только там, где есть обе стороны: «нет данных»
+            # и «ноль» — разные вещи, и превращать первое во второе нельзя.
+            "diff_sd": (round(calc_qty - sd_qty, 1)
+                        if calc_qty is not None and sd_qty is not None else None),
+            "diff_onec": (round(calc_qty - onec_qty, 1)
+                          if calc_qty is not None and onec_qty is not None else None),
+        })
+    rows.sort(key=lambda x: (_group_of(x["product"]), _size_of(x["product"]),
+                             x["product"] or ""))
+
+    def total(field):
+        vals = [r[field] for r in rows if r[field] is not None]
+        return round(sum(vals), 1) if vals else None
+
+    return {
+        "org": (org or "all"),
+        "has_onec": bool(onec),
+        "has_sd": sd_rows > 0,
+        "rows": rows,
+        "totals": {f: total(f) for f in
+                   ("calc_qty", "onec_qty", "sd_qty", "diff_sd", "diff_onec")},
     }
 
 

@@ -178,6 +178,7 @@ export const api = {
   writeoffsLines: () => request('/writeoffs/lines'),
   purchasesLines: () => request('/purchases/lines'),
   stockCalc: () => request('/purchases/stock-calc'),
+  stockCompare: () => request('/purchases/stock-compare'),
   taxSummary: () => request('/tax/summary'),
   taxCompare: () => request('/tax/compare'),
   taxDocs: (kind) => request(`/tax/docs?kind=${encodeURIComponent(kind)}`),
