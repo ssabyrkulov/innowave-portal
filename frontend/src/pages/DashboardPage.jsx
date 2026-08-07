@@ -158,6 +158,9 @@ function CalcStockCard() {
         <span className="muted"> · слева расчёт из движений, справа снапшот
           {data.onec_updated_at && ` от ${new Date(data.onec_updated_at + 'Z')
             .toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`}
+          {Math.abs(data.future_excluded_qty || 0) >= 1 && ` · Δ считается на
+            дату снапшота: движения позже неё (${Math.abs(data.future_excluded_qty)
+              .toLocaleString('ru-RU')} шт) в Δ не входят`}
         </span>
       </div>
       <div className="table-wrap rc-table">

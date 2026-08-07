@@ -157,15 +157,22 @@ def _size_of(name: str) -> int:
     return 99  # без размера — после размерных
 
 
-def _calc_stock(db: Session, org: str) -> dict[str, dict]:
+def _calc_stock(db: Session, org: str, until: date | None = None) -> dict[str, dict]:
     """Расчётные остатки по нормализованной номенклатуре — «как должно быть».
 
     Считается по фирме ЦЕЛИКОМ, по всем складам сразу: перемещения между
     складами внутри фирмы взаимно сокращаются и на итог не влияют. Разрез по
     отдельному складу потребовал бы склада во всех движениях, а возвраты
-    покупателей приходят без него."""
+    покупателей приходят без него.
+
+    until — считать остаток НА ДАТУ, отбросив более поздние движения. Нужно
+    для честной сверки со снапшотом: в выгрузках встречаются документы,
+    датированные завтрашним днём, и без отсечки они выглядят расхождением."""
     def scope(q, model):
-        return models.org_scope(q, model, org)
+        q = models.org_scope(q, model, org)
+        if until is not None:
+            q = q.filter(model.date <= until)
+        return q
 
     agg: dict[str, dict] = {}
 
@@ -221,9 +228,23 @@ def stock_calc(
         if onec_at is None or (r.updated_at and r.updated_at > onec_at):
             onec_at = r.updated_at
 
+    # Δ против 1С считаем НА ДАТУ снапшота: движения позже него (в т.ч.
+    # документы завтрашней датой) — не расхождение, а разные даты среза.
+    cut = onec_at.date() if onec_at else None
+    agg_at = _calc_stock(db, org, until=cut) if cut else agg
+
+    def qty_of(e):
+        return e["purchased"] - e["sold"] + e["returned"] - e["written_off"]
+
+    future_excluded = round(sum(qty_of(e) for e in agg.values())
+                            - sum(qty_of(e) for e in agg_at.values()), 1) \
+        if cut else 0.0
+
     rows = []
     for key, e in agg.items():
-        calc = e["purchased"] - e["sold"] + e["returned"] - e["written_off"]
+        calc = qty_of(e)
+        at = agg_at.get(key)
+        calc_at = round(qty_of(at), 1) if at is not None else None
         o = onec.pop(key, None)
         rows.append({
             "product": e["name"],
@@ -233,7 +254,8 @@ def stock_calc(
             "written_off": round(e["written_off"], 1),
             "onec_qty": round(o["qty"], 1) if o else None,
             "onec_amount": round(o["amount"], 2) if o else None,
-            "diff_onec": round(calc - o["qty"], 1) if o else None,
+            "diff_onec": (round(calc_at - o["qty"], 1)
+                          if o and calc_at is not None else None),
             "calc_qty": round(calc, 1),
             # Продано то, чего не закупали (по имени) — почти всегда значит,
             # что имена не склеились; честно помечаем вместо тихого минуса.
@@ -256,6 +278,9 @@ def stock_calc(
         "org": (org or "all"),
         "has_onec": onec_at is not None,
         "onec_updated_at": onec_at.isoformat() if onec_at else None,
+        # Сколько штук движений позже снапшота исключено из Δ — чтобы человек
+        # видел, почему «расчётный остаток» и Δ могут не биться напрямую.
+        "future_excluded_qty": future_excluded,
         "rows": rows,
         "totals": {
             "purchased": round(sum(r["purchased"] for r in rows), 1),
