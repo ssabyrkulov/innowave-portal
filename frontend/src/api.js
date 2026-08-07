@@ -217,6 +217,8 @@ export const api = {
   },
   salesdocVisitsSample: () => request('/salesdoc/visits-sample'),
   salesdocVisitDebt: () => request('/salesdoc/visit-debt'),
+  salesdocAgentsToday: (day) =>
+    request(`/salesdoc/agents-today${day ? `?day=${day}` : ''}`),
   salesdocApiProbe: (params) =>
     request('/salesdoc/api-probe?' + new URLSearchParams(params).toString()),
   // Любое сочетание условий: сумма, точка, период. Пустые не отправляем —

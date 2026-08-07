@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { formatMoney } from '../utils'
@@ -74,6 +74,8 @@ export default function AgentsPage() {
         <h1>Агенты</h1>
         <span className="muted">текущий месяц: {monthLabel(data.current_month)}</span>
       </div>
+
+      <TodayPanel />
 
       <div className="summary-bar">
         <div className="summary-card">
@@ -259,5 +261,137 @@ function AgentRow({ agent, canEdit, open, onToggle, onSaveTarget }) {
         </tr>
       )}
     </>
+  )
+}
+
+// Сегодня в полях: визиты и заказы дня из зеркала SalesDoc. Рядом с цифрами —
+// момент актуальности: зеркало визитов обновляется раз в час, и «0 визитов»
+// в 9 утра значит «данные ещё едут», а не «никто не работает».
+function TodayPanel() {
+  const [day, setDay] = useState(() => new Date().toISOString().slice(0, 10))
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [open, setOpen] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    setData(null); setError(null)
+    api.salesdocAgentsToday(day)
+      .then((d) => alive && setData(d))
+      .catch((e) => alive && setError(e.message))
+    return () => { alive = false }
+  }, [day])
+
+  if (error) return null // без SalesDoc страница агентов живёт как раньше
+  const t = data?.totals
+  return (
+    <div className="chart-card">
+      <div className="sd-card-title">
+        🚶 Сегодня в полях
+        <input type="date" className="filter-select" value={day}
+          style={{ marginLeft: 12 }}
+          onChange={(e) => setDay(e.target.value)} />
+        {data?.visits_synced_at && (
+          <span className="muted"> · визиты на {
+            new Date(data.visits_synced_at + 'Z').toLocaleTimeString('ru-RU',
+              { hour: '2-digit', minute: '2-digit' })}</span>
+        )}
+      </div>
+      {!data && <div className="muted">Загрузка…</div>}
+      {data && data.agents.length === 0 && (
+        <div className="muted">За этот день в зеркале пока нет ни визитов, ни
+          заказов. Если день только начался — данные приедут с ближайшей
+          синхронизацией (раз в час).</div>
+      )}
+      {data && data.agents.length > 0 && (
+        <>
+          <div className="summary-bar">
+            <div className="summary-card">
+              <span className="summary-label">Точек посещено</span>
+              <span className="summary-value">{t.visited}
+                {t.planned > 0 && <span className="muted"> / {t.planned} план</span>}
+              </span>
+            </div>
+            <div className="summary-card">
+              <span className="summary-label">С заказом</span>
+              <span className="summary-value">{t.with_order}</span>
+            </div>
+            <div className="summary-card">
+              <span className="summary-label">Отказы</span>
+              <span className="summary-value">{t.rejected}</span>
+            </div>
+            <div className="summary-card summary-in">
+              <span className="summary-label">Заказов на</span>
+              <span className="summary-value">{formatMoney(t.orders_amount)}
+                <span className="muted"> · {t.orders} шт</span>
+              </span>
+            </div>
+          </div>
+          <div className="table-wrap rc-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Агент</th>
+                  <th className="num">Посещено</th>
+                  <th className="num">План</th>
+                  <th className="num">С заказом</th>
+                  <th className="num">Отказы</th>
+                  <th className="num">Заказов</th>
+                  <th className="num">Сумма заказов</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.agents.map((a) => (
+                  <Fragment key={a.agent}>
+                    <tr className={a.points.length ? 'doc-row' : ''}
+                      onClick={() => a.points.length &&
+                        setOpen(open === a.agent ? null : a.agent)}>
+                      <td>
+                        {a.points.length > 0 && (
+                          <span className="muted">{open === a.agent ? '▾ ' : '▸ '}</span>
+                        )}
+                        {a.agent}
+                      </td>
+                      <td className="num"><b>{a.visited}</b></td>
+                      <td className="num">{a.planned || '—'}</td>
+                      <td className="num">{a.with_order || '—'}</td>
+                      <td className="num">{a.rejected || '—'}</td>
+                      <td className="num">{a.orders || '—'}</td>
+                      <td className="num">{a.orders_amount ? formatMoney(a.orders_amount) : '—'}</td>
+                    </tr>
+                    {open === a.agent && (
+                      <tr>
+                        <td className="doc-lines" colSpan={7}>
+                          <table>
+                            <thead>
+                              <tr><th>Время</th><th>Точка</th><th>Итог визита</th></tr>
+                            </thead>
+                            <tbody>
+                              {a.points.map((pt, i) => (
+                                <tr key={i}>
+                                  <td>{pt.time}</td>
+                                  <td>{pt.client}</td>
+                                  <td>
+                                    {pt.has_order
+                                      ? `заказ${pt.summa ? ` на ${formatMoney(pt.summa)}` : ''}`
+                                      : pt.reject
+                                        ? `отказ: ${pt.reject}`
+                                        : 'без заказа'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
   )
 }

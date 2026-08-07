@@ -2744,6 +2744,90 @@ def agent_model(
     return out
 
 
+@router.get("/agents-today")
+def agents_today(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    day: date | None = Query(default=None, description="День; пусто — сегодня"),
+):
+    """Что агенты сделали за день: визиты, отказы, заказы — из зеркала.
+
+    Отвечает на вопрос «сколько точек посетили сегодня и что ещё делали» без
+    похода в SalesDoc. Одна оговорка честности: зеркало визитов обновляется
+    при полной синхронизации (раз в час), поэтому рядом с цифрами показываем,
+    на какой момент они актуальны, — иначе «за сегодня 0» в 9 утра читался бы
+    как «никто не работает», а не как «данные ещё едут»."""
+    from sqlalchemy import func
+
+    d = day or date.today()
+    start = datetime.combine(d, datetime.min.time())
+    end = start + timedelta(days=1)
+
+    V = models.SalesDocVisit
+    agents: dict[str, dict] = {}
+
+    def bucket(name):
+        return agents.setdefault(name or "(без агента)", {
+            "agent": name or "(без агента)",
+            "planned": 0, "visited": 0, "rejected": 0,
+            "with_order": 0, "order_summa": 0.0,
+            "orders": 0, "orders_amount": 0.0,
+            "points": [],
+        })
+
+    for v in db.query(V).filter(V.at >= start, V.at < end).all():
+        a = bucket(v.agent_name)
+        if v.planned:
+            a["planned"] += 1
+        if v.visited:
+            a["visited"] += 1
+            a["points"].append({
+                "time": v.at.strftime("%H:%M"),
+                "client": v.client_name or v.client_sd_id or "—",
+                "has_order": bool(v.has_order),
+                "reject": v.reject or None,
+                "summa": float(v.order_summa or 0),
+            })
+        if v.reject:
+            a["rejected"] += 1
+        if v.has_order:
+            a["with_order"] += 1
+            a["order_summa"] += float(v.order_summa or 0)
+
+    # Заказы дня — вторая половина ответа «что ещё делали». Отменённые не
+    # считаем: отменённый заказ — не работа, а её отсутствие.
+    O = models.SalesDocOrder
+    for name, cnt, amount in (
+            db.query(O.agent_name, func.count(O.id), func.sum(O.amount))
+            .filter(O.date == d, O.status != salesdoc.CANCELLED_STATUS)
+            .group_by(O.agent_name).all()):
+        a = bucket(name)
+        a["orders"] = int(cnt or 0)
+        a["orders_amount"] = float(amount or 0)
+
+    for a in agents.values():
+        a["points"].sort(key=lambda p: p["time"])
+        a["order_summa"] = round(a["order_summa"], 2)
+        a["orders_amount"] = round(a["orders_amount"], 2)
+
+    st = db.query(models.SalesDocSyncState).filter_by(kind="visits").first()
+    return {
+        "day": d.isoformat(),
+        "agents": sorted(agents.values(), key=lambda a: -a["visited"]),
+        "totals": {
+            "visited": sum(a["visited"] for a in agents.values()),
+            "planned": sum(a["planned"] for a in agents.values()),
+            "rejected": sum(a["rejected"] for a in agents.values()),
+            "with_order": sum(a["with_order"] for a in agents.values()),
+            "orders": sum(a["orders"] for a in agents.values()),
+            "orders_amount": round(sum(a["orders_amount"]
+                                       for a in agents.values()), 2),
+        },
+        "visits_synced_at": (st.last_full_at.isoformat()
+                             if st and st.last_full_at else None),
+    }
+
+
 @router.get("/visit-debt")
 def visit_debt(
     db: Session = Depends(get_db),
