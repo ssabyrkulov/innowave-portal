@@ -16,7 +16,11 @@ services:
     branch: claude/innowave-group-calendar-81tcby
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: free
+    # ВНИМАНИЕ: сервис в Render переведён на платный план вручную, а здесь до
+    # сих пор стояло `free`. Повторное применение blueprint вернуло бы сервис
+    # на бесплатный план (сон после простоя, 0.1 CPU). Значение ниже должно
+    # совпадать с фактическим планом в панели Render (starter / standard / …).
+    plan: starter
     healthCheckPath: /healthz
     envVars:
       - key: SECRET_KEY

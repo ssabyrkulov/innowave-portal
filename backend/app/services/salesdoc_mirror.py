@@ -38,7 +38,26 @@ from . import salesdoc
 # и данные выгружаются, только если счётчик изменений больше нуля. Токену это
 # не вредит — его гасит лишь повторный вход, а мы работаем на постоянном.
 FULL_EVERY = 3600  # 1 час
-DELTA_EVERY = 60   # 1 минута
+DELTA_EVERY = 60   # 1 минута — как часто просыпается фоновый цикл
+
+# Как часто обновлять КАЖДЫЙ вид данных. Раньше цикл раз в минуту дёргал всё
+# подряд, и это было дорого не по трафику, а по базе: у справочников нет дельты,
+# поэтому клиенты (≈1300 точек), товары, агенты, склады, перемещения и остатки
+# перекладывались целиком каждую минуту — тысячи SQL-запросов в минуту на
+# небольшой Postgres, да ещё и в одном процессе с веб-сервером (GIL), из-за
+# чего страницы заметно тормозили. Меняются эти справочники редко, поэтому у
+# каждого вида теперь своя частота: движение документов — часто, справочники —
+# редко. Отсчёт ведём по last_delta_at, он переживает перезапуск сервиса.
+KIND_EVERY = {
+    "orders": 60,        # документы меняются постоянно
+    "payments": 60,
+    "clients": 300,      # долги точек — раз в 5 минут достаточно
+    "stock": 900,        # остатки складов
+    "warehouses": 3600,  # справочники — раз в час
+    "agents": 3600,
+    "products": 3600,
+    "movements": 3600,
+}
 # С каким запасом берём дельту: перекрываем прошлую синхронизацию, чтобы не
 # потерять записи, попавшие на границу окна.
 DELTA_OVERLAP = timedelta(hours=6)
@@ -150,15 +169,37 @@ def _log_order_change(db: Session, sd_id: str, store_sd_id) -> None:
     ))
 
 
-def _upsert(db: Session, model, sd_id: str, values: dict) -> None:
-    """Обновляем запись зеркала по SD_id либо создаём новую."""
-    row = db.query(model).filter_by(sd_id=sd_id).first()
+def _existing(db: Session, model) -> dict:
+    """Все записи зеркала этого вида по sd_id — одним запросом.
+
+    Нужен для пакетной перекладки: раньше _upsert на каждую запись делал
+    отдельный SELECT, и выгрузка 1300 точек стоила 1300 запросов к базе."""
+    return {row.sd_id: row for row in db.query(model).all()}
+
+
+def _upsert(db: Session, model, sd_id: str, values: dict,
+            cache: dict | None = None) -> None:
+    """Обновляем запись зеркала по SD_id либо создаём новую.
+
+    cache — заранее прочитанные записи (см. _existing). Без него делается
+    точечный SELECT: так остаются работать редкие одиночные вызовы."""
+    row = cache.get(sd_id) if cache is not None else \
+        db.query(model).filter_by(sd_id=sd_id).first()
     if row is None:
         row = model(sd_id=sd_id)
         db.add(row)
+        if cache is not None:
+            cache[sd_id] = row
+    changed = False
     for k, v in values.items():
-        setattr(row, k, v)
-    row.synced_at = datetime.utcnow()
+        if getattr(row, k) != v:
+            setattr(row, k, v)
+            changed = True
+    # synced_at трогаем только у изменившихся строк: иначе каждая выгрузка
+    # переписывала бы всю таблицу целиком, даже когда в SalesDoc ничего не
+    # поменялось.
+    if changed or row.synced_at is None:
+        row.synced_at = datetime.utcnow()
 
 
 def _order_filter(date_from: str, date_to: str, updated_since: str | None) -> dict:
@@ -282,6 +323,7 @@ def sync_orders(db: Session, updated_since: str | None = None) -> int:
     df, dt = _window()
     rows = salesdoc.call_all("getOrder", ("orders", "order"),
                              _order_filter(df, dt, updated_since))
+    cache = _existing(db, models.SalesDocOrder)
     seen: set = set()
     for o in rows:
         sd_id = str(o.get("SD_id") or o.get("CS_id") or "").strip()
@@ -291,7 +333,7 @@ def sync_orders(db: Session, updated_since: str | None = None) -> int:
         cli_sd, cli_code = _client_keys(o.get("client"))
         store_sd_id = str((o.get("store") or {}).get("SD_id") or "").lower() or None
         _log_order_change(db, sd_id, store_sd_id)
-        _upsert(db, models.SalesDocOrder, sd_id, {
+        _upsert(db, models.SalesDocOrder, sd_id, cache=cache, values={
             "client_sd_id": cli_sd,
             "client_code_1c": cli_code,
             "store_sd_id": store_sd_id,
@@ -315,6 +357,7 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
     rows = salesdoc.call_all("getPayment", ("payments", "payment"),
                              _payment_filter(df, dt, updated_since))
     ptypes = salesdoc.fetch_payment_types()
+    cache = _existing(db, models.SalesDocPayment)
     seen: set = set()
     for p in rows:
         sd_id = str(p.get("SD_id") or p.get("CS_id") or "").strip()
@@ -324,7 +367,7 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
         cli_sd, cli_code = _client_keys(p.get("client"))
         pt = p.get("paymentType") or {}
         box = _cashbox(p)
-        _upsert(db, models.SalesDocPayment, sd_id, {
+        _upsert(db, models.SalesDocPayment, sd_id, cache=cache, values={
             "client_sd_id": cli_sd,
             "client_code_1c": cli_code,
             "date": _day(p.get("paymentDate")),
@@ -364,26 +407,36 @@ def sync_clients(db: Session, updated_since: str | None = None) -> int:
             debt_by_id[sid] = debt_by_id.get(sid, 0.0) + b["debt"]
 
     seen: set = set()
-    # Закрепление точек за агентами перекладываем целиком: снятие агента с
-    # точки в SalesDoc — это исчезновение записи, а не флаг, и добавочная
-    # синхронизация его бы не заметила.
-    db.query(models.SalesDocClientAgent).delete(synchronize_session=False)
+    cache = _existing(db, models.SalesDocClient)
+    # Закрепление точек за агентами: снятие агента с точки в SalesDoc — это
+    # исчезновение записи, а не флаг, поэтому набор сравниваем целиком. Но
+    # переписывать таблицу вслепую каждый раз нельзя — раньше она полностью
+    # удалялась и создавалась заново при каждой синхронизации. Теперь считаем
+    # желаемый набор и трогаем базу, только если он изменился.
+    want: set = set()
     for c in clients:
         sid = (c["sd_id"] or "").lower()
         if not sid:
             continue
         seen.add(sid)
-        _upsert(db, models.SalesDocClient, sid, {
+        _upsert(db, models.SalesDocClient, sid, cache=cache, values={
             "code_1c": str(c["code_1C"]) if c["code_1C"] else None,
             "name": c["name"] or "",
             "debt": round(debt_by_id.get(sid, 0.0), 2),
             "in_balance": sid in debt_by_id,
         })
         for a in c.get("agents") or []:
+            want.add((sid, a["sd_id"],
+                      ",".join(str(d) for d in a.get("days") or []) or None))
+
+    have = {(r.client_sd_id, r.agent_sd_id, r.days)
+            for r in db.query(models.SalesDocClientAgent).all()}
+    if have != want:
+        db.query(models.SalesDocClientAgent).delete(synchronize_session=False)
+        db.flush()
+        for cli, agent, days in want:
             db.add(models.SalesDocClientAgent(
-                client_sd_id=sid, agent_sd_id=a["sd_id"],
-                days=",".join(str(d) for d in a.get("days") or []) or None,
-            ))
+                client_sd_id=cli, agent_sd_id=agent, days=days))
     db.flush()
     # Точки, которых больше нет в SalesDoc, убираем из зеркала.
     stale = [row.id for row in db.query(models.SalesDocClient.id,
@@ -764,12 +817,13 @@ def sync_products(db: Session, updated_since: str | None = None) -> int:
     удаляем: они встречаются в старых документах, и без них строка перемещения
     осталась бы безымянной."""
     rows = salesdoc.call_all("getProduct", ("product", "products"))
+    cache = _existing(db, models.SalesDocProduct)
     for p in rows:
         sid = str(p.get("SD_id") or "").lower()
         if not sid:
             continue
         act = p.get("active")
-        _upsert(db, models.SalesDocProduct, sid, {
+        _upsert(db, models.SalesDocProduct, sid, cache=cache, values={
             "code_1c": str(p.get("code_1C") or "") or None,
             "name": p.get("name") or "",
             "active": not (act in ("N", "n", False, 0, "0")),
@@ -874,6 +928,7 @@ def sync_movements(db: Session, updated_since: str | None = None) -> int:
         if r.product_sd_id:
             names.setdefault(r.product_sd_id, r.product_name)
     db.query(models.SalesDocMovementLine).delete(synchronize_session=False)
+    cache = _existing(db, models.SalesDocMovement)
     seen: set = set()
     for m in rows:
         sd_id = str(m.get("SD_id") or m.get("CS_id") or "").strip()
@@ -883,7 +938,7 @@ def sync_movements(db: Session, updated_since: str | None = None) -> int:
         detail = [d for d in (m.get("detail") or []) if isinstance(d, dict)]
         qty = sum(float(d.get("quantity") or 0) for d in detail)
         frm, to = m.get("from_store") or {}, m.get("to_store") or {}
-        _upsert(db, models.SalesDocMovement, sd_id, {
+        _upsert(db, models.SalesDocMovement, sd_id, cache=cache, values={
             "date": _day(m.get("date")),
             "from_store_sd_id": _ref_id(frm),
             "from_store_name": _ref_name(frm),
@@ -1078,6 +1133,7 @@ def sync_stock(db: Session, updated_since: str | None = None) -> int:
     getStock отдаёт срез целиком (склады → товары → количество), дельты у него
     нет, поэтому выгружаем полностью и вычищаем пропавшие позиции."""
     rows = salesdoc.call_all("getStock", ("warehouse", "warehouses"))
+    cache = _existing(db, models.SalesDocStock)
     seen: set = set()
     n = 0
     for w in rows:
@@ -1091,7 +1147,7 @@ def sync_stock(db: Session, updated_since: str | None = None) -> int:
             key = f"{store}:{pid}"
             seen.add(key)
             n += 1
-            _upsert(db, models.SalesDocStock, key, {
+            _upsert(db, models.SalesDocStock, key, cache=cache, values={
                 "store_sd_id": store,
                 "store_name": w.get("name") or None,
                 "product_sd_id": str(p.get("SD_id") or "") or None,
@@ -1189,6 +1245,14 @@ def sync(full: bool = False) -> dict:
                         and st.last_full_at is not None:
                     result[kind] = {"skipped": "обновляется при полной синхронизации"}
                     continue
+                # Своя частота у каждого вида (см. KIND_EVERY): справочники не
+                # трогаем каждую минуту — это и была главная причина тормозов.
+                every = KIND_EVERY.get(kind)
+                if every and not full and st.last_delta_at is not None:
+                    waited = (datetime.utcnow() - st.last_delta_at).total_seconds()
+                    if waited < every:
+                        result[kind] = {"skipped": f"обновляется раз в {every} с"}
+                        continue
                 since = None
                 if method is not None and not full and st.last_full_at:
                     base = st.last_delta_at or st.last_full_at

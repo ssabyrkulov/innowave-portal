@@ -601,23 +601,14 @@ function ReconcileDetailModal({ row, onClose }) {
       row.in_1c && !oneC
         ? api.clientDetail(row.name).then((d) => alive && setOneC(d)).catch(() => {})
         : Promise.resolve(),
+      // Данные читаются из зеркала — они уже свежие (фоновая синхронизация
+      // идёт сама). Раньше открытие карточки дополнительно запускало
+      // синхронизацию и ждало зашитые 2,5 секунды, чтобы перечитать всё
+      // заново: карточка «думала» лишние пару секунд на каждом открытии и
+      // нагружала базу. Обновить вручную можно кнопкой ниже.
       (row.sd_id || row.code_1C)
-        ? loadSd().then((d) => {
-            if (!alive) return
-            setSd(d)
-            // Данные показаны мгновенно (из зеркала). Просим сервер догрузить
-            // изменения — он делает это в фоне и отвечает сразу, — а через
-            // пару секунд перечитываем и обновляем цифры на месте.
-            if (d.source === 'mirror') {
-              setRefreshing(true)
-              api.salesdocMirrorSync(false).catch(() => {})
-              setTimeout(() => {
-                if (!alive) return
-                loadSd().then((fresh) => alive && setSd(fresh)).catch(() => {})
-                  .finally(() => alive && setRefreshing(false))
-              }, 2500)
-            }
-          }).catch((e) => alive && setErr(e.message))
+        ? loadSd().then((d) => alive && setSd(d))
+            .catch((e) => alive && setErr(e.message))
         : Promise.resolve(),
     ]
     Promise.all(jobs).finally(() => alive && setLoading(false))
@@ -679,10 +670,19 @@ function ReconcileDetailModal({ row, onClose }) {
           <input type="date" className="filter-select" value={dr.to}
             onChange={(e) => setDr((d) => ({ ...d, to: e.target.value }))} />
           <span className="muted rc-period-hint">по умолчанию — вся история</span>
-          {refreshing && <span className="muted rc-refreshing">проверяю обновления…</span>}
+          {refreshing && <span className="muted rc-refreshing">обновляю…</span>}
           {!refreshing && sd?.synced_at && (
             <span className="muted rc-refreshing">данные на {fmtClock(Date.parse(sd.synced_at) / 1000)}</span>
           )}
+          {/* Обновление — по кнопке, а не само при каждом открытии карточки. */}
+          <button className="btn btn-ghost btn-sm" disabled={refreshing}
+            onClick={() => {
+              setRefreshing(true)
+              api.salesdocMirrorSync(false).catch(() => {})
+              setTimeout(() => {
+                loadSd().then(setSd).catch(() => {}).finally(() => setRefreshing(false))
+              }, 2500)
+            }}>Обновить</button>
         </div>
         {loading && <div className="center muted">Загрузка…</div>}
         {err && <div className="error">SalesDoc: {err}</div>}
