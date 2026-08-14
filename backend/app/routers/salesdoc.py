@@ -3326,3 +3326,122 @@ def mirror_sync(
     доезжают сами, страницу это не задерживает."""
     _require_configured()
     return salesdoc_mirror.sync_async(full=full)
+
+
+@router.get("/hidden-orders-probe")
+def hidden_orders_probe(
+    _: models.User = Depends(can_view),
+    sd_id: str = Query(default="", description="SD_id клиента, например y8_96"),
+    code_1c: str = Query(default="", description="код 1С клиента"),
+    number: str = Query(default="", description="номер заведомо скрытого документа"),
+):
+    """Почему SalesDoc не отдаёт часть реализаций (см. docs/SD_НЕВИДИМЫЕ_ДОКУМЕНТЫ.md).
+
+    Доказано арифметикой: по клиенту y8_96 баланс SalesDoc сходится с 1С до
+    сома, значит документы у него ЕСТЬ — но getOrder их не возвращает. Причина
+    неизвестна, поэтому зонд перебирает подозреваемых по одному:
+
+    1. статусы — просим по одному 0…9 и вовсе без ключа `status` (у
+       getOrderDefect ровно такая ловушка уже ловилась: без списка сервер
+       отдаёт только статус 1);
+    2. филиал — тот же запрос с подстановкой filial и без неё;
+    3. поиск по номеру документа — если заведомо скрытый документ находится
+       по номеру, дело в фильтрах запроса, а не в видимости;
+    4. возвраты — сырые записи getOrderDefect: в них может лежать ссылка на
+       родительскую реализацию, то есть идентификатор скрытого документа.
+
+    Только чтение: ни одного set-метода.
+    """
+    _require_configured()
+    if not sd_id and not code_1c:
+        raise HTTPException(status_code=400, detail="Нужен sd_id или code_1c клиента")
+    df, dt = salesdoc.reason_window()
+    period = {"period": {"date": {"from": df, "to": dt}}}
+    out: dict = {"sd_id": sd_id, "code_1c": code_1c,
+                 "date_from": df, "date_to": dt}
+
+    def count_orders(params: dict, with_filial: bool = True) -> dict:
+        """Сколько заказов вернул запрос всего и сколько из них этого клиента."""
+        try:
+            rows = salesdoc.call_all_ex("getOrder", ("orders", "order"), params,
+                                        with_filial=with_filial)
+        except salesdoc.SalesDocError as e:
+            return {"error": str(e)[:160]}
+        mine = [o for o in rows
+                if salesdoc.client_matches(o.get("client"), sd_id, code_1c)]
+        return {
+            "scanned": len(rows),
+            "client_rows": len(mine),
+            "client_sum": round(sum(float(o.get("totalSummaAfterDiscount")
+                                          or o.get("totalSumma") or 0) for o in mine), 2),
+            "statuses": sorted({o.get("status") for o in mine}),
+            "samples": [{"sd_id": o.get("SD_id") or o.get("CS_id"),
+                         "date": salesdoc.day(o.get("dateDocument") or o.get("dateCreate")),
+                         "status": o.get("status"),
+                         "store": (o.get("store") or {}).get("name"),
+                         "amount": o.get("totalSummaAfterDiscount") or o.get("totalSumma")}
+                        for o in mine[:8]],
+        }
+
+    # --- 1. Перебор статусов -------------------------------------------------
+    status_sweep = []
+    for st in list(range(0, 10)):
+        status_sweep.append({"status": st,
+                             **count_orders({"filter": {"include": "all",
+                                                        "status": [st], **period}})})
+    status_sweep.append({"status": "без ключа status",
+                         **count_orders({"filter": {"include": "all", **period}})})
+    status_sweep.append({"status": "наш обычный [1..5]",
+                         **count_orders({"filter": {"include": "all",
+                                                    "status": [1, 2, 3, 4, 5], **period}})})
+    out["status_sweep"] = status_sweep
+
+    # --- 2. Филиал -----------------------------------------------------------
+    base = {"filter": {"include": "all", "status": [1, 2, 3, 4, 5], **period}}
+    out["filial"] = {
+        "настроен": settings.salesdoc_filial or None,
+        "с филиалом": count_orders(base, with_filial=True),
+        "без филиала": count_orders(base, with_filial=False),
+    }
+
+    # --- 3. Поиск по номеру документа ---------------------------------------
+    if number.strip():
+        shapes = [
+            ("filter.number", {"filter": {"number": number, **period}}),
+            ("filter.docNumber", {"filter": {"docNumber": number, **period}}),
+            ("filter.number без периода", {"filter": {"number": number}}),
+            ("params.number", {"number": number}),
+        ]
+        by_number = []
+        for name, params in shapes:
+            try:
+                rows = salesdoc.call_all_ex("getOrder", ("orders", "order"), params)
+                by_number.append({"shape": name, "count": len(rows),
+                                  "samples": [{"sd_id": r.get("SD_id"),
+                                               "number": r.get("number"),
+                                               "date": r.get("dateDocument"),
+                                               "status": r.get("status")}
+                                              for r in rows[:5]]})
+            except salesdoc.SalesDocError as e:
+                by_number.append({"shape": name, "error": str(e)[:160]})
+        out["by_number"] = {"искали": number, "варианты": by_number}
+
+    # --- 4. Возвраты клиента: сырые записи ----------------------------------
+    try:
+        defects = salesdoc.call_all_ex(
+            "getOrderDefect",
+            ("defects", "orderDefects", "defect", "orderDefect", "orders"),
+            {"filter": {"status": salesdoc.ALL_DEFECT_STATUSES, **period}})
+        mine = [d for d in defects
+                if salesdoc.client_matches(d.get("client"), sd_id, code_1c)]
+        out["defects_raw"] = {
+            "всего в SalesDoc": len(defects),
+            "по клиенту": len(mine),
+            # Сырые записи целиком: ищем в них ссылку на родительский заказ —
+            # это и будет идентификатор скрытой реализации.
+            "записи": mine[:5],
+        }
+    except salesdoc.SalesDocError as e:
+        out["defects_raw"] = {"error": str(e)[:160]}
+
+    return out

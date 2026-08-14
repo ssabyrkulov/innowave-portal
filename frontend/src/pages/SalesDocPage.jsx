@@ -262,6 +262,7 @@ export default function SalesDocPage() {
       <StoreLogPanel />
 
       <MovementsProbePanel />
+      <HiddenOrdersProbePanel />
 
       <TxnTypesPanel />
 
@@ -2019,6 +2020,117 @@ function StoreLogPanel() {
                   </div>
                 </>
               )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HiddenOrdersProbePanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [sdId, setSdId] = useState('y8_96')
+  const [number, setNumber] = useState('161')
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocHiddenOrdersProbe({ sd_id: sdId.trim(), number: number.trim() })
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+
+  const sweep = data?.status_sweep || []
+  // Строка со «своим» статусом, дающая больше строк клиента, чем наш обычный
+  // набор [1..5], и есть ответ: значит документы прячет фильтр статусов.
+  const ours = sweep.find((r) => r.status === 'наш обычный [1..5]')
+  const best = sweep.reduce((a, r) => (r.client_rows > (a?.client_rows ?? -1) ? r : a), null)
+  const verdict = (() => {
+    if (!data) return null
+    if (best && ours && best.client_rows > ours.client_rows)
+      return `Нашлось: статус «${best.status}» отдаёт ${best.client_rows} реализаций вместо ${ours.client_rows}. Причина — фильтр статусов.`
+    const f = data.filial || {}
+    if ((f['без филиала']?.client_rows ?? 0) > (f['с филиалом']?.client_rows ?? 0))
+      return 'Нашлось: без подстановки филиала документов больше — причина в филиале.'
+    const found = (data.by_number?.варианты || []).find((v) => v.count > 0)
+    if (found) return `Документ нашёлся поиском по номеру (${found.shape}) — значит дело в фильтрах запроса, а не в видимости.`
+    return 'Ни один вариант не вернул скрытые документы: остаётся версия про видимость (права токена / деактивированный агент) — вопрос в поддержку SalesDoc.'
+  })()
+
+  function toggle() { const n = !open; setOpen(n) }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🕵 Почему SalesDoc не отдаёт часть реализаций
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">По клиенту <code>y8_96</code> баланс SalesDoc сходится
+            с 1С до сома — значит документы у него <b>есть</b>, но <code>getOrder</code>
+            их не возвращает (984 160 KGS, 6 реализаций). Зонд перебирает подозреваемых:
+            статусы по одному, филиал, поиск по номеру, сырые возвраты со ссылкой
+            на родительский заказ. Только чтение.</p>
+          <div className="rc-period">
+            <input className="filter-select" value={sdId}
+              placeholder="SD_id клиента" onChange={(e) => setSdId(e.target.value)} />
+            <input className="filter-select" value={number}
+              placeholder="номер скрытого документа" onChange={(e) => setNumber(e.target.value)} />
+            <button className="btn btn-sm" onClick={load} disabled={loading || !sdId.trim()}>
+              {loading ? 'Опрашиваю…' : 'Запустить'}
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+          {verdict && <div className="rc-note"><b>Вывод:</b> {verdict}</div>}
+          {data && (
+            <>
+              <h4>Перебор статусов</h4>
+              <table className="table">
+                <thead><tr><th>Статус</th><th>Всего в выдаче</th><th>Строк клиента</th><th>Сумма клиента</th></tr></thead>
+                <tbody>
+                  {sweep.map((r, i) => (
+                    <tr key={i} className={r.client_rows > (ours?.client_rows ?? 0) ? 'row-alert' : ''}>
+                      <td>{String(r.status)}</td>
+                      <td>{r.error ? <span className="error">{r.error}</span> : r.scanned}</td>
+                      <td>{r.client_rows}</td>
+                      <td>{r.client_sum ? formatMoney(r.client_sum) : ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <h4>Филиал (настроен: {data.filial?.['настроен'] || 'нет'})</h4>
+              <table className="table">
+                <tbody>
+                  {['с филиалом', 'без филиала'].map((k) => (
+                    <tr key={k}>
+                      <td>{k}</td>
+                      <td>{data.filial?.[k]?.client_rows ?? '—'} строк клиента</td>
+                      <td>{data.filial?.[k]?.scanned ?? '—'} всего</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {data.by_number && (
+                <>
+                  <h4>Поиск документа № {data.by_number['искали']}</h4>
+                  <table className="table">
+                    <tbody>
+                      {(data.by_number['варианты'] || []).map((v, i) => (
+                        <tr key={i}>
+                          <td><code>{v.shape}</code></td>
+                          <td>{v.error ? <span className="error">{v.error}</span> : `${v.count} записей`}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+              <h4>Сырые возвраты клиента</h4>
+              <p className="muted">Ищем в них ссылку на родительскую реализацию —
+                это и будет идентификатор скрытого документа.</p>
+              <pre className="order-raw-json">{JSON.stringify(data.defects_raw, null, 2)}</pre>
             </>
           )}
         </div>

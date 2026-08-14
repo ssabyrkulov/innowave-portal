@@ -278,9 +278,48 @@ def call_all(method: str, key, params: dict | None = None, page_limit: int = 100
     return out
 
 
+def call_all_ex(method: str, key, params: dict | None = None,
+                page_limit: int = 1000, with_filial: bool = True) -> list:
+    """То же, что call_all, но позволяет отключить подстановку филиала.
+
+    Нужно диагностике: если в настройках задан филиал, документы других
+    филиалов в выдачу не попадают — и это надо уметь отличить от «SalesDoc
+    вообще не отдаёт документ». Без кэша: зонд должен видеть свежий ответ.
+    """
+    keys = (key,) if isinstance(key, str) else tuple(key)
+    params = dict(params or {})
+    params.setdefault("limit", page_limit)
+    out: list = []
+    page = 1
+    while True:
+        params["page"] = page
+        result, pagination = call(method, params, with_filial=with_filial)
+        chunk = _pick(result, keys)
+        out.extend(chunk)
+        if not pagination or not chunk:
+            break
+        total = int(pagination.get("total") or 0)
+        if total and len(out) >= total:
+            break
+        page += 1
+        if page > 1000:
+            break
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Готовые выборки под сверку
 # ---------------------------------------------------------------------------
+def client_matches(cli: dict | None, sd_id, code_1c) -> bool:
+    """Публичная обёртка над _client_matches — для диагностических зондов."""
+    return _client_matches(cli, sd_id, code_1c)
+
+
+def day(value) -> str:
+    """Публичная обёртка над _day (дата без времени) — для зондов."""
+    return _day(value)
+
+
 def fetch_balance(use_cache: bool = False) -> list[dict]:
     """Текущая дебиторка по точкам: [{sd_id, code_1C, name, debt}]. В SalesDoc
     отрицательный баланс = клиент должен нам, поэтому долг = -balance."""

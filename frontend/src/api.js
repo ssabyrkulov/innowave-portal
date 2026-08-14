@@ -209,6 +209,13 @@ export const api = {
   salesdocStoreLogDebug: () => request('/salesdoc/store-log-debug'),
   salesdocMovementsProbe: (method) =>
     request(`/salesdoc/movements-probe${method ? `?method=${encodeURIComponent(method)}` : ''}`),
+  salesdocHiddenOrdersProbe: ({ sd_id, code_1c, number }) => {
+    const qs = new URLSearchParams()
+    if (sd_id) qs.set('sd_id', sd_id)
+    if (code_1c) qs.set('code_1c', code_1c)
+    if (number) qs.set('number', number)
+    return request(`/salesdoc/hidden-orders-probe?${qs.toString()}`)
+  },
   salesdocIdMatch: (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v != null && v !== '')
