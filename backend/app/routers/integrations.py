@@ -205,20 +205,42 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     return None
 
 
-def _is_line_sales(content: bytes) -> bool:
-    """True — реализация построчная (есть «НоменклатураНаименование»), False —
-    документная (Дата/Сумма/Контрагент). Определяет, каким импортёром грузить."""
+# Названия товарной колонки в разных поколениях выгрузок: старые файлы
+# (ВыгрузкаРеал2, ВыгрузкаТовВозв) пишут «НоменклатураНаименование», новый
+# пакет «Фирма_УПРАВЛЕНКА_*» — просто «Номенклатура».
+_PRODUCT_HEADERS = {"НоменклатураНаименование", "Номенклатура"}
+
+
+def _headers(content: bytes) -> set[str]:
+    """Заголовки колонок из первых 20 строк книги (шапка бывает не в 1-й)."""
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
     except Exception:
-        return True
+        return set()
     ws = wb[wb.sheetnames[0]]
+    out: set[str] = set()
     for i, row in enumerate(ws.iter_rows(values_only=True)):
         if i >= 20:
             break
-        if any(c is not None and str(c).strip() == "НоменклатураНаименование" for c in row):
-            return True
-    return False
+        out |= {str(c).strip() for c in row if c is not None}
+    return out
+
+
+def _is_line_doc(content: bytes) -> bool:
+    """True — выгрузка построчная (по товарам), False — документная (по шапкам).
+
+    Признак строки товара: колонка номенклатуры И количество. Одной
+    номенклатуры мало: она встречается и в документных отчётах как справочное
+    поле, а количество бывает только у товарных строк."""
+    heads = _headers(content)
+    if not heads:
+        return True  # не смогли прочитать — старое поведение (построчный)
+    return bool(heads & _PRODUCT_HEADERS) and "Количество" in heads
+
+
+def _is_line_sales(content: bytes) -> bool:
+    """Оставлено ради читаемости вызова в диспетчере продаж."""
+    return _is_line_doc(content)
 
 
 def sniff_kind(content: bytes) -> str:
@@ -372,7 +394,7 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
     elif kind == "writeoffs":
         from .writeoffs import import_writeoffs_workbook
         result = import_writeoffs_workbook(db, content, auto_name, robot.id, org=org)
-    elif kind == "return_docs":
+    elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":
         result = import_cash_balances_workbook(db, content, auto_name, robot.id, org=org)
@@ -384,8 +406,12 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         exp_kind = "cash" if any(
             t in low for t in ("рко", "rko", "касс", "kass")) else "bank"
         result = import_expenses_workbook(db, content, auto_name, robot.id, exp_kind, org=org)
-    elif kind == "return_lines":
-        # ТовВозв: очистка продаж + запись сумм возвратов по клиентам.
+    elif kind in ("return_lines", "return_docs"):
+        # Построчные возвраты: очистка продаж + запись сумм по клиентам.
+        # Сюда же попадает return_docs, если файл оказался построчным: формат
+        # зависит от выгрузки, а не от фирмы. У Innowave раньше был только
+        # документный формат, и классификатор решал по названию фирмы — с
+        # новым пакетом «Фирма_УПРАВЛЕНКА_*» обе фирмы шлют построчный.
         result = import_return_lines_workbook(db, content, auto_name, robot.id, org=org)
         log = db.query(models.ImportLog).order_by(models.ImportLog.id.desc()).first()
         if log and log.file_hash is None:
