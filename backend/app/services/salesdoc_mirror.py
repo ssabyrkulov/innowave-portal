@@ -501,6 +501,18 @@ def client_store_orgs(db: Session) -> dict[str, dict]:
             str(cli).lower(), {"orgs": set(), "stores": {}, "unmapped": []})
         store = stores.get(str(store_id or "").lower())
         if store is None:
+            # Склада нет в справочнике зеркала (новый, переименованный или
+            # удалённый в SalesDoc). Раньше такой заказ молча выбрасывался —
+            # и если ВСЕ заказы точки шли через такой склад, у неё оставался
+            # пустой набор фирм, а строка «только SD» пропадала из сверки при
+            # любой выбранной фирме: долг переставал быть виден вообще.
+            # Считаем это «складом без фирмы» и показываем с пояснением.
+            entry["unmapped"].append({
+                "name": f"склад {store_id or '—'} (нет в справочнике складов)",
+                "count": int(cnt or 0),
+                "first": first and first.isoformat(),
+                "last": last and last.isoformat(),
+            })
             continue
         name = store.name or store.store_id
         # Количество и период по каждому складу: «склад этой фирмы» без цифр
