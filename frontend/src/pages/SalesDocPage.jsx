@@ -166,6 +166,18 @@ export default function SalesDocPage() {
     setTimeout(() => loadAll(r, od).catch(() => {}), 4000)
   }
 
+  // Ручная привязка точки к фирме: перекрывает догадку по складам там, где
+  // SalesDoc не отдаёт реализации и вычислить фирму не из чего.
+  async function setFirm(row, value) {
+    if (!row.sd_id || !value) return
+    try {
+      await api.salesdocSetClientFirm(row.sd_id, value)
+      await loadAll(range, onlyDiff)
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   async function loadAll(r, od, refresh = false) {
     setLoading(true)
     setError(null)
@@ -426,6 +438,19 @@ export default function SalesDocPage() {
                     </td>
                     <td data-label="Фирма" className="muted">
                       {ORG_LABELS[r.organization] || '—'}
+                      {/* Точку без определённой фирмы можно привязать руками:
+                          SalesDoc отдаёт не все реализации, и автоматике
+                          иногда просто не на чём её вычислить. */}
+                      {!r.in_1c && (r.org_note_warn || r.firm_manual) && (
+                        <select className="filter-select rc-firm-pick"
+                          value={r.firm_manual || ''}
+                          onChange={(e) => setFirm(r, e.target.value)}>
+                          <option value="">задать фирму…</option>
+                          <option value="hygiene">Innowave Hygiene</option>
+                          <option value="innowave">Innowave</option>
+                          {r.firm_manual && <option value="clear">снять привязку</option>}
+                        </select>
+                      )}
                     </td>
                     <td className="num" data-label="Долг 1С">{money(r.our_debt)}</td>
                     <td className="num" data-label="Долг SD">{money(r.sd_debt)}</td>

@@ -194,6 +194,9 @@ export const api = {
   },
   salesdocCashboxes: () => request('/salesdoc/cashboxes'),
   salesdocOrderChanges: () => request('/salesdoc/order-changes'),
+  salesdocSetClientFirm: (sd_id, org) =>
+    request(`/salesdoc/client-firm?sd_id=${encodeURIComponent(sd_id)}&org=${encodeURIComponent(org)}`,
+      { method: 'POST' }),
   salesdocWhy: (query) => request(`/salesdoc/why?query=${encodeURIComponent(query)}`),
   salesdocMethodProbe: () => request('/salesdoc/method-probe'),
   salesdocJournalAnatomy: () => request('/salesdoc/journal-anatomy'),

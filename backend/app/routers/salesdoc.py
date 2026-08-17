@@ -364,6 +364,12 @@ def reconcile_debt(
     # Фирма клиента SalesDoc — по складам его заказов. Нужна, чтобы при выборе
     # одной фирмы показывать только её точки (в т.ч. «только SD»).
     o = (org or "").strip().lower()
+    # Ручная привязка точки к фирме перекрывает догадку по складам: у части
+    # точек SalesDoc не отдаёт реализации вовсе, и определить фирму нечем.
+    firm_override = {
+        f.sd_id.lower(): f.organization
+        for f in db.query(models.SalesDocClientFirm).all() if f.sd_id
+    }
     client_orgs = None  # sd_id → {"orgs": {фирмы}, "unmapped": [склады без фирмы]}
     if o in models.ORGS:
         if mirror_ready:
@@ -440,7 +446,13 @@ def reconcile_debt(
         # и тогда мы не прячем строку молча, а показываем и объясняем почему
         # (иначе «почему этот клиент здесь?» невозможно понять из интерфейса).
         org_note, org_note_warn = None, False
-        if o in models.ORGS and client_orgs is not None:
+        manual = firm_override.get(entry["sd_id"])
+        if o in models.ORGS and manual:
+            # Фирма задана человеком — она главнее любой автоматики.
+            if manual != o:
+                continue
+            org_note = "фирма задана вручную"
+        elif o in models.ORGS and client_orgs is not None:
             if o in entry_orgs:
                 # Пишем и когда всё в порядке: вопрос «почему эта точка здесь?»
                 # возникает именно к строкам без пары в 1С, и ответ должен быть
@@ -461,8 +473,9 @@ def reconcile_debt(
                 org_note_warn = True
             else:
                 continue  # точка другой фирмы
-        row_org = list(entry_orgs)[0] if len(entry_orgs) == 1 else None
+        row_org = manual or (list(entry_orgs)[0] if len(entry_orgs) == 1 else None)
         rows.append({
+            "firm_manual": manual,
             "org_note": org_note,
             "org_note_warn": org_note_warn,
             "name": entry["name"],
@@ -3445,3 +3458,39 @@ def hidden_orders_probe(
         out["defects_raw"] = {"error": str(e)[:160]}
 
     return out
+
+
+@router.post("/client-firm")
+def set_client_firm(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(can_edit),
+    sd_id: str = Query(..., description="SD_id точки"),
+    org: str = Query(..., description="hygiene / innowave / clear — снять"),
+):
+    """Привязать точку SalesDoc к фирме вручную (или снять привязку).
+
+    Нужно там, где автоматика бессильна: фирму точки портал выводит по складам
+    её реализаций, а SalesDoc отдаёт через API не все документы — у части точек
+    заказов не видно вовсе, и они показывались сразу в обеих фирмах.
+    """
+    sid = (sd_id or "").strip().lower()
+    if not sid:
+        raise HTTPException(status_code=400, detail="Нужен sd_id точки")
+    row = db.query(models.SalesDocClientFirm).filter_by(sd_id=sid).first()
+    o = (org or "").strip().lower()
+    if o in ("clear", "", "none"):
+        if row:
+            db.delete(row)
+            db.commit()
+        return {"sd_id": sid, "organization": None}
+    if o not in models.ORGS:
+        raise HTTPException(status_code=400,
+                            detail=f"Фирма должна быть одной из {models.ORGS}")
+    if row is None:
+        row = models.SalesDocClientFirm(sd_id=sid)
+        db.add(row)
+    row.organization = o
+    row.set_by = user.email
+    row.set_at = datetime.utcnow()
+    db.commit()
+    return {"sd_id": sid, "organization": o}

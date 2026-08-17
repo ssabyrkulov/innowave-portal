@@ -697,6 +697,26 @@ class SalesDocDiffSeen(Base):
     first_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SalesDocClientFirm(Base):
+    """Фирма точки SalesDoc, заданная вручную.
+
+    Обычно фирму точки портал выводит по складам её реализаций. Но SalesDoc
+    отдаёт через API не все документы (см. docs/SD_НЕВИДИМЫЕ_ДОКУМЕНТЫ.md): у
+    части точек заказов не видно вовсе, и тогда фирму вычислить нечем — такие
+    строки показывались в обеих фирмах сразу (вся клиентура Инновейв лезла в
+    список Хайджин). Ручная привязка перекрывает догадку и работает независимо
+    от того, починит ли SalesDoc выдачу.
+    """
+
+    __tablename__ = "salesdoc_client_firms"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    organization: Mapped[str] = mapped_column(String, nullable=False)
+    set_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    set_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class SalesDocClientLink(Base):
     """Ручная связка контрагента 1С с клиентом SalesDoc (по SD_id).
 
