@@ -2054,6 +2054,54 @@ function StoreLogPanel() {
   )
 }
 
+function PaymentTypesBlock() {
+  const [types, setTypes] = useState(null)
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  function load() {
+    setBusy(true); setErr(null)
+    api.salesdocPaymentTypes()
+      .then(setTypes).catch((e) => setErr(e.message)).finally(() => setBusy(false))
+  }
+
+  return (
+    <div className="rc-subblock">
+      <button className="btn btn-ghost btn-sm" onClick={load} disabled={busy}>
+        {busy ? 'Читаю…' : 'Показать справочник способов оплаты'}
+      </button>
+      {err && <div className="error">{err}</div>}
+      {types && (
+        <>
+          <p className="muted">
+            Всего {types.count}; без <code>code_1C</code>: {types.without_code_1c}.
+            Обмен из 1С выбирает тип именно по <code>code_1C</code> — у типов
+            без кода обмен их выбрать не сможет.
+          </p>
+          <table className="table">
+            <thead>
+              <tr><th>Название</th><th>CS_id</th><th>SD_id</th><th>code_1C</th><th>Активен</th></tr>
+            </thead>
+            <tbody>
+              {types.rows.map((t, i) => (
+                <tr key={i}>
+                  <td>{t.name}{t.short ? ` (${t.short})` : ''}</td>
+                  <td><code>{t.CS_id || '—'}</code></td>
+                  <td><code>{t.SD_id || '—'}</code></td>
+                  <td>{t.code_1C
+                    ? <code>{t.code_1C}</code>
+                    : <span className="error">нет</span>}</td>
+                  <td>{String(t.active ?? '')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  )
+}
+
 function PaymentsDayPanel() {
   const [open, setOpen] = useState(false)
   const [day, setDay] = useState(toISODate(new Date()))
@@ -2092,6 +2140,7 @@ function PaymentsDayPanel() {
             </button>
           </div>
           {error && <div className="error">{error}</div>}
+          <PaymentTypesBlock />
           {data && (
             <>
               <p className="muted">

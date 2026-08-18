@@ -2907,3 +2907,6 @@ button.summary-card {
 
 /* Выбор фирмы для точки без автоопределения (ветка «только SD»). */
 .rc-firm-pick { margin-top: 4px; font-size: 11px; padding: 2px 4px; }
+
+/* Вложенный блок внутри панели (справочник способов оплаты). */
+.rc-subblock { margin: 10px 0; padding: 8px 0; border-top: 1px dashed var(--border, #ddd); }

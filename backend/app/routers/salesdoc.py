@@ -3582,3 +3582,32 @@ def _to_int_safe(v):
         return int(v)
     except (TypeError, ValueError):
         return v
+
+
+@router.get("/payment-types")
+def payment_types(_: models.User = Depends(can_view)):
+    """Справочник способов оплаты SalesDoc целиком, с идентификаторами.
+
+    Нужен, чтобы завести фирму в способе оплаты: обмен из 1С выбирает тип по
+    `code_1C`, поэтому важно видеть, какие коды уже заняты и у каких типов их
+    нет вовсе. Отдаём сырые записи — в них видно и CS_id, и SD_id.
+    """
+    _require_configured()
+    rows = salesdoc.call_all_ex(
+        "getPaymentType", ("currency", "paymentType", "paymentTypes", "types"))
+    out = []
+    for r in rows:
+        out.append({
+            "CS_id": r.get("CS_id"),
+            "SD_id": r.get("SD_id"),
+            "code_1C": r.get("code_1C"),
+            "name": r.get("name"),
+            "short": r.get("short"),
+            "active": r.get("active"),
+            "raw": r,
+        })
+    return {
+        "count": len(out),
+        "without_code_1c": sum(1 for r in out if not r["code_1C"]),
+        "rows": out,
+    }
