@@ -2140,11 +2140,20 @@ function PaymentsByTypePanel() {
                   ))}
                 </tbody>
               </table>
+              {data.sides && (
+                <p className="muted">
+                  Пара в 1С найдена: {data.sides.in_1c_yes} · нет в 1С: {data.sides.in_1c_no} ·
+                  сопоставить нечем (без GUID): {data.sides.in_1c_unknown}
+                  {data.sides.amount_mismatch > 0 && (
+                    <span className="error"> · сумма расходится: {data.sides.amount_mismatch}</span>
+                  )}
+                </p>
+              )}
               <h4>Операции {data.rows.length < data.count ? `(первые ${data.rows.length})` : ''}</h4>
               <table className="table">
                 <thead>
                   <tr><th>Дата</th><th>Клиент</th><th>Вид</th><th>Способ</th>
-                    <th className="num">Сумма</th><th>Источник</th></tr>
+                    <th className="num">Сумма</th><th>SD</th><th>1С</th></tr>
                 </thead>
                 <tbody>
                   {(data.rows || []).map((r, i) => (
@@ -2154,9 +2163,22 @@ function PaymentsByTypePanel() {
                       <td>{r.txn_name}</td>
                       <td>{r.type_name || '—'}</td>
                       <td className="num">{formatMoney(r.amount)}</td>
-                      <td>{r.from_1c
-                        ? <span className="badge badge-paid" title={r.code_1c}>из 1С</span>
-                        : <span className="muted">в SD</span>}</td>
+                      {/* Операция взята из зеркала SalesDoc — в SD она есть всегда. */}
+                      <td><span className="badge badge-paid" title={r.sd_id}>есть</span></td>
+                      <td>
+                        {r.in_1c === 'yes' && (
+                          <span className="badge badge-paid"
+                            title={`${r.one_c?.payer || ''} · ${r.one_c?.date || ''} · ${r.one_c?.kind || ''}`}>
+                            есть{r.amount_diff ? ` (Δ ${formatMoney(r.amount_diff)})` : ''}
+                          </span>
+                        )}
+                        {r.in_1c === 'no' && (
+                          <span className="badge badge-overdue" title={r.code_1c}>нет</span>
+                        )}
+                        {r.in_1c === 'unknown' && (
+                          <span className="muted" title="у операции не заполнен code_1C — сопоставлять нечем">—</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

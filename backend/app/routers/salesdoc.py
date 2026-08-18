@@ -3668,6 +3668,14 @@ def payments_by_type(
         rows = [p for p in rows if hit(p)]
 
     names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+    # Сторона 1С: документы наших выгрузок по GUID. SalesDoc кладёт GUID
+    # документа 1С в code_1C, поэтому связка точная — без догадок по сумме и
+    # дате. Заодно тянем сумму и дату, чтобы показать расхождение, если оно есть.
+    one_c = {
+        str(r.doc_guid): r
+        for r in db.query(models.Receipt).filter(
+            models.Receipt.doc_guid.isnot(None)).all()
+    }
     by_type: dict = {}
     out = []
     for p in rows:
@@ -3686,6 +3694,7 @@ def payments_by_type(
             "client": names.get(p.client_sd_id) or p.client_sd_id,
             "code_1c": p.code_1c,
             "from_1c": bool(p.code_1c),
+            **_one_c_side(one_c, p),
         })
     # Сколько записей ещё без идентификатора способа: колонка появилась
     # недавно, старые строки заполнятся при ближайшей полной синхронизации.
@@ -3698,7 +3707,41 @@ def payments_by_type(
         "count": len(out),
         "total": round(sum(r["amount"] for r in out), 2),
         "without_type_id": no_type,
+        "sides": {
+            "in_1c_yes": sum(1 for r in out if r["in_1c"] == "yes"),
+            "in_1c_no": sum(1 for r in out if r["in_1c"] == "no"),
+            "in_1c_unknown": sum(1 for r in out if r["in_1c"] == "unknown"),
+            "amount_mismatch": sum(1 for r in out
+                                   if r.get("amount_diff") not in (None, 0)),
+        },
         "by_type": [{"type_id": k, **v} for k, v in
                     sorted(by_type.items(), key=lambda x: -x[1]["sum"])],
         "rows": out[:500],
+    }
+
+
+def _one_c_side(one_c: dict, p) -> dict:
+    """Есть ли у операции SalesDoc пара в наших выгрузках 1С.
+
+    Три честных состояния, а не «да/нет»: документ найден по GUID; GUID есть,
+    но документа у нас нет (оплата в SD проведена, в 1С — нет либо выгрузка
+    отстала); GUID не заполнен — сопоставлять нечем, и делать вид, что пары
+    нет, было бы неправдой.
+    """
+    if not p.code_1c:
+        return {"in_1c": "unknown", "one_c": None, "amount_diff": None}
+    r = one_c.get(str(p.code_1c))
+    if r is None:
+        return {"in_1c": "no", "one_c": None, "amount_diff": None}
+    amt_1c = float(r.amount_kgs or r.amount or 0)
+    return {
+        "in_1c": "yes",
+        "one_c": {
+            "date": r.date and r.date.isoformat(),
+            "amount": round(amt_1c, 2),
+            "payer": r.payer,
+            "kind": r.kind,
+            "organization": r.organization,
+        },
+        "amount_diff": round(float(p.amount or 0) - amt_1c, 2),
     }
