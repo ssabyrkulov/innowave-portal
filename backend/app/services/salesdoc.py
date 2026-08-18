@@ -311,8 +311,19 @@ def call_all_ex(method: str, key, params: dict | None = None,
 # Готовые выборки под сверку
 # ---------------------------------------------------------------------------
 def cashbox_of(payment: dict) -> tuple[str | None, str | None]:
-    """Касса операции (SD_id, название) — публичная обёртка над _cashbox."""
-    return _cashbox(payment)
+    """Касса операции: (SD_id, название).
+
+    Имя ключа в ответе SalesDoc не зафиксировано в документации — перебираем
+    известные написания, чтобы поле не потерялось молча. Та же логика есть в
+    зеркале; здесь она нужна для живых запросов, идущих мимо зеркала.
+    """
+    for key in ("cashbox", "cashBox", "cash_box", "cashdesk", "cashDesk", "kassa"):
+        box = payment.get(key)
+        if isinstance(box, dict) and (box.get("SD_id") or box.get("name")):
+            return str(box.get("SD_id") or "").lower() or None, box.get("name") or None
+        if isinstance(box, str) and box.strip():
+            return None, box.strip()
+    return None, None
 
 
 def client_matches(cli: dict | None, sd_id, code_1c) -> bool:
