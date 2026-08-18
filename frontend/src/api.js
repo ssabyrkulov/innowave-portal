@@ -65,6 +65,10 @@ export const api = {
     request('/auth/login', { method: 'POST', form: { username: email, password } }),
   me: () => request('/auth/me'),
 
+  // Какая версия портала развёрнута на сервере: короткий SHA коммита и имя
+  // собранного JS-бандла. По второму видно, ту ли сборку показывает браузер.
+  health: () => request('/healthz'),
+
   listUsers: () => request('/users'),
   createUser: (body) => request('/users', { method: 'POST', body }),
   updateUser: (id, body) => request(`/users/${id}`, { method: 'PATCH', body }),

@@ -9,6 +9,39 @@ const ORG_OPTIONS = [
   { value: 'innowave', label: 'Innowave' },
 ]
 
+/* Отпечаток версии. Дважды в неделю всплывает один и тот же вопрос —
+   «правку сделали, а изменений нет». Причин ровно две: сервер ещё не
+   пересобрался или браузер держит старый index.html. Здесь видно обе:
+   слева — что развёрнуто на сервере, и если загруженный в браузере бандл
+   не тот, что отдаёт сервер, показываем это прямо. */
+function VersionBadge() {
+  const [srv, setSrv] = useState(null)
+  useEffect(() => {
+    api.health().then(setSrv).catch(() => {})
+  }, [])
+  if (!srv) return null
+  // Имя файла модуля, который реально исполняется в браузере.
+  const loaded = (import.meta.url || '').split('/').pop() || ''
+  const served = srv.frontend?.bundle || ''
+  const stale = Boolean(served && loaded && served !== loaded)
+  const built = srv.frontend?.built_at
+    ? new Date(srv.frontend.built_at).toLocaleString('ru-RU',
+        { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : null
+  return (
+    <div className="version-badge nav-txt">
+      <span title={`бандл сервера: ${served || '—'}\nбандл в браузере: ${loaded || '—'}`}>
+        версия {srv.commit}{built ? ` · ${built}` : ''}
+      </span>
+      {stale && (
+        <button className="version-stale" onClick={() => window.location.reload(true)}>
+          Открыта старая версия — обновить
+        </button>
+      )}
+    </div>
+  )
+}
+
 function OrgSwitch() {
   const [org, setOrgState] = useState(getOrg())
   function change(v) {
@@ -165,6 +198,7 @@ export default function Layout() {
             <span className="nav-txt">Выйти</span>
             <span className="logout-ico">⎋</span>
           </button>
+          <VersionBadge />
         </div>
       </aside>
 

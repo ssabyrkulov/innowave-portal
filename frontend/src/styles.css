@@ -2910,3 +2910,24 @@ button.summary-card {
 
 /* Вложенный блок внутри панели (справочник способов оплаты). */
 .rc-subblock { margin: 10px 0; padding: 8px 0; border-top: 1px dashed var(--border, #ddd); }
+
+/* Отпечаток развёрнутой версии в подвале меню. Мелко и неярко: нужен
+   редко, но когда нужен — экономит полдня выяснений «а точно обновилось?». */
+.version-badge {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted, #8a94a6);
+  word-break: break-all;
+}
+.version-stale {
+  display: block;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border: 1px solid #e0b4b4;
+  border-radius: 6px;
+  background: #fff4f4;
+  color: #a33;
+  font-size: 11px;
+  cursor: pointer;
+}

@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -236,6 +237,21 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
+def _frontend_build() -> dict:
+    """Имя главного JS-бандла и время сборки статики — отпечаток версии."""
+    try:
+        assets = STATIC_DIR / "assets"
+        js = sorted(f.name for f in assets.glob("index-*.js"))
+        index = STATIC_DIR / "index.html"
+        return {
+            "bundle": js[0] if js else None,
+            "built_at": datetime.fromtimestamp(
+                index.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds"),
+        }
+    except Exception:  # статики нет — локальный запуск только API
+        return {"bundle": None, "built_at": None}
+
+
 @app.get("/healthz", tags=["health"])
 def health():
     # modules — быстрая проверка, какая версия развёрнута: если в списке
@@ -255,6 +271,12 @@ def health():
         "status": "ok",
         "service": "innowave-portal",
         "commit": commit,
+        # Отпечаток собранного фронтенда: имя главного бандла хешируется по
+        # содержимому, поэтому оно меняется от сборки к сборке. Если в браузере
+        # загружен другой файл — открыта старая версия из кэша, а не новый
+        # деплой. Это единственный способ отличить «не задеплоилось» от
+        # «задеплоилось, но браузер показывает старое».
+        "frontend": _frontend_build(),
         # Видно, поднялась ли база: при обслуживании сервис жив, db=false.
         "db": db_state["ready"],
         "db_error": db_state["error"],
@@ -292,6 +314,13 @@ if STATIC_DIR.is_dir():
         "/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets"
     )
 
+    # index.html имя не хеширует, поэтому браузер по умолчанию держит его в
+    # кэше и после нового деплоя открывает старую сборку — со ссылками на
+    # старые файлы /assets. Внешне это выглядит как «изменений нет».
+    # Ссылки внутри index.html хешированные, так что перепроверять его на
+    # каждый заход дёшево, а сами /assets остаются кэшируемыми навсегда.
+    _NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
+
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa(full_path: str):
         candidate = (STATIC_DIR / full_path).resolve()
@@ -301,7 +330,7 @@ if STATIC_DIR.is_dir():
             and candidate.is_relative_to(STATIC_DIR)
         ):
             return FileResponse(candidate)
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE)
 
 else:
 
