@@ -275,13 +275,25 @@ def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
     # не отдаёт (так ведут себя документы деактивированных агентов), и в учёте
     # всё в порядке. Если не знает — отгрузку в SalesDoc действительно не
     # провели.
-    sd_delivered = _sd_component(comp.get("delivered", empty),
+    # ВАЖНО: баланс SalesDoc (`sd_debt`) приходит из getBalance одной суммой
+    # на клиента и по фирмам не делится. Поэтому вычитать из него компоненты,
+    # отобранные по складам выбранной фирмы, нельзя: у точки, которая торгует
+    # через другую фирму, весь её оборот отфильтровывается прочь и всплывает
+    # как «скрыто от выгрузки» — при том что в SalesDoc никаких скрытых
+    # документов нет. Считаем только по неотфильтрованным суммам.
+    sd_delivered = _sd_component(comp.get("delivered_all") or comp.get("delivered", empty),
                                  row["sd_id"], row["code_1C"])
-    hidden = round(row["sd_debt"] - (sd_delivered - sd_ret - sd_pay), 2)
+    sd_pay_all = _sd_component(comp.get("payments_all") or comp["payments"],
+                               row["sd_id"], row["code_1C"])
+    hidden = round(row["sd_debt"] - (sd_delivered - sd_ret - sd_pay_all), 2)
     sales_gap = round(row["our_sales"] - sd_sales, 2)
     row["sd_hidden"] = hidden
     sales_label = "реализации"
-    if sales_gap >= 500 and abs(hidden - sales_gap) < 500:
+    # «Скрыто в SD» ставим только когда обе величины сравнимы: `hidden` считается
+    # по всем фирмам (баланс иначе не поделить), а `sales_gap` — по выбранной.
+    # При включённом отборе по фирме их сравнение ничего не значит.
+    if (not comp.get("_store_filtered")
+            and sales_gap >= 500 and abs(hidden - sales_gap) < 500):
         sales_label = "скрыто в SD"
 
     # Значимые расхождения по компонентам — коротким словом каждый.

@@ -1579,7 +1579,25 @@ def reconcile_components(db: Session, date_from: date, date_to: date,
                 by_code[cli_code] = by_code.get(cli_code, 0.0) + amount
         return {"sd": by_sd, "code": by_code}
 
+    def _collect_payments_all() -> dict:
+        """Оплаты клиента без деления по фирме — пара к delivered_all."""
+        by_sd: dict[str, float] = {}
+        by_code: dict[str, float] = {}
+        for cli_sd, cli_code, amount, _oids in db.query(
+                P.client_sd_id, P.client_code_1c, P.amount, P.order_ids).filter(
+                P.date >= date_from, P.date <= date_to,
+                P.txn == salesdoc.PAYMENT_TXN).all():
+            amount = float(amount or 0)
+            if cli_sd:
+                by_sd[cli_sd] = by_sd.get(cli_sd, 0.0) + amount
+            elif cli_code:
+                by_code[cli_code] = by_code.get(cli_code, 0.0) + amount
+        return {"sd": by_sd, "code": by_code}
+
     return {
+        # Отобраны ли компоненты по складам фирмы. От этого зависит, можно ли
+        # сравнивать их с балансом SalesDoc — он по фирмам не делится.
+        "_store_filtered": bool(store_ids),
         # Реализации — только отгруженные, делятся по складу выбранной фирмы.
         "sales": collect(O, O.status.in_(sorted(salesdoc.SHIPPED_STATUSES)),
                          store_filter=True),
@@ -1597,6 +1615,15 @@ def reconcile_components(db: Session, date_from: date, date_to: date,
         # 1С такой операции нет. Без этого компонента точка со списанным
         # долгом выглядит расхождением непонятного происхождения.
         "debt_writeoff": collect(P, P.txn.in_(sorted(salesdoc.BALANCE_ONLY_TXN))),
+        # Те же доставленное и оплаты, но БЕЗ отбора по складам фирмы. Нужны
+        # ровно для одного расчёта — «сколько SalesDoc держит в балансе сверх
+        # того, что отдаёт по API». Баланс из getBalance по фирмам не делится
+        # вовсе, поэтому сравнивать его можно только с неотфильтрованными
+        # суммами: иначе весь оборот чужой фирмы засчитывается как «скрытый».
+        "delivered_all": (collect(O, O.status.in_([3, 4])) if store_ids
+                          else collect(O, O.status.in_([3, 4]), store_filter=True)),
+        "payments_all": (_collect_payments_all() if store_ids
+                         else collect_payments(salesdoc.PAYMENT_TXN)),
     }
 
 
