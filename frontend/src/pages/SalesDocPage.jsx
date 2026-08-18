@@ -2112,6 +2112,15 @@ function PaymentsByTypePanel() {
             <>
               <p className="muted">
                 {data.count} операций на {formatMoney(data.total)}
+                {data.type_resolved && (
+                  <span> · тип «{data.type_resolved.name}», ключи: {data.type_resolved.ids.join(', ')}</span>
+                )}
+                {data.count === 0 && (
+                  <span className="error"> · по этому способу операций нет.
+                    Проверьте: обмен из 1С мог проставить другой тип — посмотрите
+                    в панели «Оплаты за день» с галочкой «спросить SalesDoc напрямую»,
+                    что реально лежит в поле paymentType.</span>
+                )}
                 {data.without_type_id > 0 && (
                   <span className="error"> · без идентификатора способа: {data.without_type_id}
                     {' '}(старые записи — заполнятся после полной синхронизации)</span>

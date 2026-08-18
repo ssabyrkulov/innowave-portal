@@ -3632,9 +3632,40 @@ def payments_by_type(
     P = models.SalesDocPayment
     q = db.query(P).filter(P.date >= date_from, P.date <= date_to)
     tid = (type_id or "").strip().lower()
-    if tid:
-        q = q.filter(P.type_sd_id == tid)
     rows = q.order_by(P.date.desc(), P.id.desc()).all()
+
+    # Отбор по способу оплаты делаем устойчиво к тому, чем именно SalesDoc
+    # идентифицирует тип в ответе по оплатам: там встречается и SD_id, и CS_id,
+    # и только code_1C. Поэтому по выбранному идентификатору поднимаем карточку
+    # типа из справочника и сверяем запись по ЛЮБОМУ из её ключей, включая имя.
+    resolved: dict = {}
+    if tid:
+        keys = {tid}
+        name_key = None
+        try:
+            for t in salesdoc.call_all_ex(
+                    "getPaymentType",
+                    ("currency", "paymentType", "paymentTypes", "types")):
+                ids = {str(t.get(k) or "").lower()
+                       for k in ("SD_id", "CS_id", "code_1C")} - {""}
+                if tid in ids:
+                    keys |= ids
+                    name_key = (t.get("name") or "").strip() or None
+                    resolved = {"name": name_key, "ids": sorted(ids)}
+                    break
+        except salesdoc.SalesDocError:
+            pass  # справочник недоступен — отберём по одному идентификатору
+
+        def hit(p) -> bool:
+            if (p.type_sd_id or "").lower() in keys:
+                return True
+            if (p.type_code_1c or "").lower() in keys:
+                return True
+            # Последний рубеж: у старых записей идентификатора нет вовсе —
+            # там осталось только название типа.
+            return bool(name_key) and (p.type_name or "").strip() == name_key
+
+        rows = [p for p in rows if hit(p)]
 
     names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
     by_type: dict = {}
@@ -3663,6 +3694,7 @@ def payments_by_type(
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "type_id": tid or None,
+        "type_resolved": resolved or None,
         "count": len(out),
         "total": round(sum(r["amount"] for r in out), 2),
         "without_type_id": no_type,
