@@ -236,6 +236,26 @@ def _sd_component(maps: dict, sd_id, code) -> float:
     return round(s, 2)
 
 
+def _names_diverge(one_c: str, sd: str) -> bool:
+    """Расходятся ли названия контрагента 1С и точки SalesDoc «по сути».
+
+    Не через `match_key`: он выбрасывает содержимое скобок, и «Мамонтенок
+    (ТЦ Весна)» превращается в «мамонтенок» — тогда любая точка сети выглядит
+    совпавшей, а любая уточнённая — разошедшейся. Здесь скобки, наоборот,
+    сохраняем и выбрасываем только ИД точки и пунктуацию, а сравниваем набор
+    слов: совпадение меньше половины короткого названия — разные точки.
+    """
+    def words(v: str) -> set:
+        v = salesdoc_mirror._CODE_RE.sub(" ", (v or "").lower().replace("ё", "е"))
+        v = re.sub(r"[^\w\s]", " ", v)
+        return {w for w in v.split() if len(w) > 1}
+
+    a, b = words(one_c), words(sd)
+    if not a or not b:
+        return False
+    return len(a & b) * 2 < min(len(a), len(b))
+
+
 def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
     """Короткий ярлык причины для колонки: одно-два слова — «реализации»,
     «возврат», «оплата» (или их сочетание). Если компоненты совпадают, но долг
@@ -364,6 +384,7 @@ def reconcile_debt(
             "name": c["name"],
             "code_1C": c["code_1C"],
             "debt": c.get("debt", 0.0),
+            "active": c.get("active", True),
         }
         if sid:
             sd_by_id[sid] = entry
@@ -440,6 +461,14 @@ def reconcile_debt(
             "in_sd": entry is not None,
             "code_1C": entry["code_1C"] if entry else None,
             "sd_id": entry["sd_id"] if entry else sid,
+            # Имя точки в самом SalesDoc. Связка часто идёт по ИД, зашитому в
+            # название контрагента 1С, — и если этот ИД устарел или набран с
+            # ошибкой, портал молча сверяет 1С с совершенно чужой точкой.
+            # Увидеть это можно только рядом стоящими именами.
+            "sd_name": entry["name"] if entry else None,
+            "sd_name_mismatch": bool(
+                entry and _names_diverge(name, entry["name"])),
+            "sd_active": entry.get("active", True) if entry else None,
             "organization": client_org,
             # Компоненты долга 1С — для «причины расхождения».
             "our_sales": round(c.get("shipped", 0.0), 2),
@@ -566,6 +595,9 @@ def reconcile_debt(
             if r["in_sd"] and r["in_1c"] and r.get("sd_hidden", 0) >= 500:
                 hidden_rows.append({
                     "name": r["name"],
+                    "sd_name": r.get("sd_name"),
+                    "sd_name_mismatch": r.get("sd_name_mismatch", False),
+                    "sd_active": r.get("sd_active"),
                     "sd_id": r["sd_id"],
                     "amount": r["sd_hidden"],
                     "reason": txt,

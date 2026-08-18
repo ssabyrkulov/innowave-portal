@@ -427,6 +427,21 @@ export default function SalesDocPage() {
                       <button className="client-link" onClick={() => setDetail(r)}>
                         {r.name}
                       </button>
+                      {/* Имя точки в SalesDoc показываем, только когда оно
+                          расходится с именем в 1С: связка идёт по ИД из
+                          названия контрагента, и устаревший или неверно
+                          набранный ИД молча сводит 1С с чужой точкой. */}
+                      {r.sd_name_mismatch && (
+                        <div className="rc-org-note rc-org-note-warn">
+                          в SalesDoc это <b>{r.sd_name}</b> ({r.sd_id}) — имена
+                          не совпадают, проверьте ИД в названии контрагента 1С
+                        </div>
+                      )}
+                      {r.sd_active === false && (
+                        <div className="rc-org-note rc-org-note-warn">
+                          точка неактивна в SalesDoc — в списке клиентов её не видно
+                        </div>
+                      )}
                       {sortMode === 'fresh' && r.appeared_at && (
                         <div className="rc-note">
                           в списке с {fdateShort(r.appeared_at.slice(0, 10))}
@@ -522,7 +537,16 @@ function HiddenDocsBanner({ hidden }) {
             <tbody>
               {hidden.top.map((h, i) => (
                 <tr key={i}>
-                  <td>{h.name}</td>
+                  <td>{h.name}
+                    {h.sd_name_mismatch && (
+                      <div className="rc-org-note rc-org-note-warn">
+                        в SalesDoc: {h.sd_name} ({h.sd_id})
+                      </div>
+                    )}
+                    {h.sd_active === false && (
+                      <div className="rc-note">точка неактивна в SalesDoc</div>
+                    )}
+                  </td>
                   <td>{h.reason}</td>
                   <td className="num">{money(h.amount)}</td>
                 </tr>

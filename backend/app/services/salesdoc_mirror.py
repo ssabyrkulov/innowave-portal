@@ -426,6 +426,12 @@ def sync_clients(db: Session, updated_since: str | None = None) -> int:
             "name": c["name"] or "",
             "debt": round(debt_by_id.get(sid, 0.0), 2),
             "in_balance": sid in debt_by_id,
+            # Признак активности приходил из getClient, но в зеркало не
+            # писался — и неактивные точки участвовали в сверке наравне с
+            # рабочими, ничем от них не отличаясь. Их не видно в списке
+            # клиентов SalesDoc, поэтому строка про такую точку выглядит как
+            # выдумка портала.
+            "active": bool(c.get("active", True)),
         })
         for a in c.get("agents") or []:
             want.add((sid, a["sd_id"],
@@ -454,7 +460,7 @@ def clients_for_reconcile(db: Session) -> list[dict]:
     """Точки SalesDoc из зеркала — в том же виде, что раньше приходил из API."""
     return [
         {"sd_id": c.sd_id, "code_1C": c.code_1c, "name": c.name,
-         "debt": float(c.debt or 0)}
+         "debt": float(c.debt or 0), "active": bool(c.active)}
         for c in db.query(models.SalesDocClient).all()
     ]
 
