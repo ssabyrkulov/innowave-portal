@@ -3520,20 +3520,44 @@ def payments_day(
         raw = salesdoc.call_all_ex(
             "getPayment", ("payments", "payment"),
             {"filter": {"period": {"date": {"from": iso, "to": iso}}}})
+        # В ответе getPayment у клиента и способа оплаты приходят только
+        # идентификаторы — названий там нет. Раньше колонки «Клиент» и
+        # «Способ» в живом режиме оставались пустыми: поднимаем их из
+        # справочников (клиенты — из зеркала, типы — живым запросом).
+        cli_names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+        type_names: dict = {}
+        try:
+            for t in salesdoc.call_all_ex(
+                    "getPaymentType",
+                    ("currency", "paymentType", "paymentTypes", "types")):
+                for k in ("SD_id", "CS_id", "code_1C"):
+                    key = str(t.get(k) or "").lower()
+                    if key:
+                        type_names[key] = t.get("name")
+        except salesdoc.SalesDocError:
+            pass
         for p in raw:
             box_id, box_name = salesdoc.cashbox_of(p)
             pt = p.get("paymentType") or {}
             txn = p.get("transactionType")
+            type_key = next(
+                (str(pt.get(k)).lower() for k in ("SD_id", "CS_id", "code_1C")
+                 if pt.get(k)), None) if isinstance(pt, dict) else None
+            cli = p.get("client") or {}
+            cli_id = str(cli.get("SD_id") or cli.get("CS_id") or "").lower() or None
             rows.append({
                 "sd_id": p.get("SD_id") or p.get("CS_id"),
-                "date": salesdoc.day(p.get("date") or p.get("dateDocument")),
+                "date": salesdoc.day(p.get("paymentDate")
+                                     or p.get("date") or p.get("dateDocument")),
                 "amount": float(p.get("amount") or 0),
                 "txn": txn,
                 "txn_name": salesdoc.PAY_TXN.get(_to_int_safe(txn), str(txn)),
-                "type_name": pt.get("name") if isinstance(pt, dict) else pt,
+                "type_id": type_key,
+                "type_name": (pt.get("name") if isinstance(pt, dict) and pt.get("name")
+                              else type_names.get(type_key or "")),
                 "cashbox": box_name or box_id,
-                "client": (p.get("client") or {}).get("name"),
-                "client_sd_id": (p.get("client") or {}).get("SD_id"),
+                "client": cli.get("name") or cli_names.get(cli_id) or cli_id,
+                "client_sd_id": cli_id,
                 "code_1c": p.get("code_1C"),
                 "from_1c": bool(p.get("code_1C")),
                 "raw": p,
@@ -3676,6 +3700,11 @@ def payments_by_type(
         for r in db.query(models.Receipt).filter(
             models.Receipt.doc_guid.isnot(None)).all()
     }
+    # Если в загруженных выгрузках 1С GUID документов нет вовсе (старый формат
+    # без ДокументGUID), сопоставлять НЕЧЕМ — и писать «нет в 1С» было бы
+    # клеветой на данные. Отличаем «пары нет» от «сверка недоступна».
+    guid_ready = bool(one_c)
+    receipts_total = db.query(models.Receipt).count()
     by_type: dict = {}
     out = []
     for p in rows:
@@ -3694,7 +3723,7 @@ def payments_by_type(
             "client": names.get(p.client_sd_id) or p.client_sd_id,
             "code_1c": p.code_1c,
             "from_1c": bool(p.code_1c),
-            **_one_c_side(one_c, p),
+            **_one_c_side(one_c, p, guid_ready),
         })
     # Сколько записей ещё без идентификатора способа: колонка появилась
     # недавно, старые строки заполнятся при ближайшей полной синхронизации.
@@ -3708,6 +3737,9 @@ def payments_by_type(
         "total": round(sum(r["amount"] for r in out), 2),
         "without_type_id": no_type,
         "sides": {
+            "guid_ready": guid_ready,
+            "receipts_total": receipts_total,
+            "receipts_with_guid": len(one_c),
             "in_1c_yes": sum(1 for r in out if r["in_1c"] == "yes"),
             "in_1c_no": sum(1 for r in out if r["in_1c"] == "no"),
             "in_1c_unknown": sum(1 for r in out if r["in_1c"] == "unknown"),
@@ -3720,7 +3752,7 @@ def payments_by_type(
     }
 
 
-def _one_c_side(one_c: dict, p) -> dict:
+def _one_c_side(one_c: dict, p, guid_ready: bool = True) -> dict:
     """Есть ли у операции SalesDoc пара в наших выгрузках 1С.
 
     Три честных состояния, а не «да/нет»: документ найден по GUID; GUID есть,
@@ -3728,6 +3760,9 @@ def _one_c_side(one_c: dict, p) -> dict:
     отстала); GUID не заполнен — сопоставлять нечем, и делать вид, что пары
     нет, было бы неправдой.
     """
+    if not guid_ready:
+        # В наших данных 1С нет ни одного ДокументGUID — сверять не с чем.
+        return {"in_1c": "unavailable", "one_c": None, "amount_diff": None}
     if not p.code_1c:
         return {"in_1c": "unknown", "one_c": None, "amount_diff": None}
     r = one_c.get(str(p.code_1c))

@@ -2141,13 +2141,22 @@ function PaymentsByTypePanel() {
                 </tbody>
               </table>
               {data.sides && (
-                <p className="muted">
-                  Пара в 1С найдена: {data.sides.in_1c_yes} · нет в 1С: {data.sides.in_1c_no} ·
-                  сопоставить нечем (без GUID): {data.sides.in_1c_unknown}
-                  {data.sides.amount_mismatch > 0 && (
-                    <span className="error"> · сумма расходится: {data.sides.amount_mismatch}</span>
-                  )}
-                </p>
+                data.sides.guid_ready ? (
+                  <p className="muted">
+                    Пара в 1С найдена: {data.sides.in_1c_yes} · нет в 1С: {data.sides.in_1c_no} ·
+                    сопоставить нечем (без GUID): {data.sides.in_1c_unknown}
+                    {data.sides.amount_mismatch > 0 && (
+                      <span className="error"> · сумма расходится: {data.sides.amount_mismatch}</span>
+                    )}
+                  </p>
+                ) : (
+                  <p className="error">
+                    Сверка с 1С недоступна: среди {data.sides.receipts_total} загруженных
+                    оплат 1С нет ни одной с ДокументGUID. Это старый формат выгрузок —
+                    сверять по идентификатору не с чем. Заработает, когда приедет пакет
+                    выгрузок с колонкой ДокументGUID.
+                  </p>
+                )
               )}
               <h4>Операции {data.rows.length < data.count ? `(первые ${data.rows.length})` : ''}</h4>
               <table className="table">
@@ -2177,6 +2186,9 @@ function PaymentsByTypePanel() {
                         )}
                         {r.in_1c === 'unknown' && (
                           <span className="muted" title="у операции не заполнен code_1C — сопоставлять нечем">—</span>
+                        )}
+                        {r.in_1c === 'unavailable' && (
+                          <span className="muted" title="в наших выгрузках 1С нет ДокументGUID — сверять не с чем">н/д</span>
                         )}
                       </td>
                     </tr>
