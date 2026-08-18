@@ -194,6 +194,8 @@ export const api = {
   },
   salesdocCashboxes: () => request('/salesdoc/cashboxes'),
   salesdocOrderChanges: () => request('/salesdoc/order-changes'),
+  salesdocPaymentsDay: (day, live) =>
+    request(`/salesdoc/payments-day?day=${day}${live ? '&live=true' : ''}`),
   salesdocSetClientFirm: (sd_id, org) =>
     request(`/salesdoc/client-firm?sd_id=${encodeURIComponent(sd_id)}&org=${encodeURIComponent(org)}`,
       { method: 'POST' }),

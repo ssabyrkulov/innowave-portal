@@ -310,6 +310,11 @@ def call_all_ex(method: str, key, params: dict | None = None,
 # ---------------------------------------------------------------------------
 # Готовые выборки под сверку
 # ---------------------------------------------------------------------------
+def cashbox_of(payment: dict) -> tuple[str | None, str | None]:
+    """Касса операции (SD_id, название) — публичная обёртка над _cashbox."""
+    return _cashbox(payment)
+
+
 def client_matches(cli: dict | None, sd_id, code_1c) -> bool:
     """Публичная обёртка над _client_matches — для диагностических зондов."""
     return _client_matches(cli, sd_id, code_1c)

@@ -3494,3 +3494,91 @@ def set_client_firm(
     row.set_at = datetime.utcnow()
     db.commit()
     return {"sd_id": sid, "organization": o}
+
+
+@router.get("/payments-day")
+def payments_day(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    day: date = Query(default_factory=date.today, description="Дата операций"),
+    live: bool = Query(default=False, description="Спросить SalesDoc напрямую, мимо зеркала"),
+):
+    """Все операции журнала SalesDoc за день: сумма, клиент, касса, вид оплаты.
+
+    Отвечает на вопрос «что это за оплата и куда она села». Отдельно помечает
+    операции, пришедшие ИЗ 1С: у них заполнен code_1C — это GUID документа 1С,
+    который проставляет обмен. Операция без code_1C заведена в самом SalesDoc
+    (агентом или оператором).
+    """
+    _require_configured()
+    iso = day.isoformat()
+    rows: list[dict] = []
+
+    if live:
+        # Живой запрос: сырые поля видно целиком — если касса или способ оплаты
+        # в зеркале пустые, здесь будет видно, что именно отдаёт SalesDoc.
+        raw = salesdoc.call_all_ex(
+            "getPayment", ("payments", "payment"),
+            {"filter": {"period": {"date": {"from": iso, "to": iso}}}})
+        for p in raw:
+            box_id, box_name = salesdoc.cashbox_of(p)
+            pt = p.get("paymentType") or {}
+            txn = p.get("transactionType")
+            rows.append({
+                "sd_id": p.get("SD_id") or p.get("CS_id"),
+                "date": salesdoc.day(p.get("date") or p.get("dateDocument")),
+                "amount": float(p.get("amount") or 0),
+                "txn": txn,
+                "txn_name": salesdoc.PAY_TXN.get(_to_int_safe(txn), str(txn)),
+                "type_name": pt.get("name") if isinstance(pt, dict) else pt,
+                "cashbox": box_name or box_id,
+                "client": (p.get("client") or {}).get("name"),
+                "client_sd_id": (p.get("client") or {}).get("SD_id"),
+                "code_1c": p.get("code_1C"),
+                "from_1c": bool(p.get("code_1C")),
+                "raw": p,
+            })
+    else:
+        q = (db.query(models.SalesDocPayment)
+             .filter(models.SalesDocPayment.date == day)
+             .order_by(models.SalesDocPayment.id.desc()).all())
+        names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+        for p in q:
+            rows.append({
+                "sd_id": p.sd_id,
+                "date": p.date and p.date.isoformat(),
+                "amount": float(p.amount or 0),
+                "txn": p.txn,
+                "txn_name": salesdoc.PAY_TXN.get(p.txn, str(p.txn)),
+                "type_name": p.type_name,
+                "cashbox": p.cashbox_name or p.cashbox_sd_id,
+                "client": names.get(p.client_sd_id) or p.client_sd_id,
+                "client_sd_id": p.client_sd_id,
+                "code_1c": p.code_1c,
+                "from_1c": bool(p.code_1c),
+                "orders": p.order_ids,
+            })
+
+    by_box: dict[str, dict] = {}
+    for r in rows:
+        b = by_box.setdefault(r["cashbox"] or "— касса не указана",
+                              {"count": 0, "sum": 0.0})
+        b["count"] += 1
+        b["sum"] += r["amount"]
+    return {
+        "day": iso,
+        "source": "live" if live else "mirror",
+        "count": len(rows),
+        "total": round(sum(r["amount"] for r in rows), 2),
+        "from_1c": sum(1 for r in rows if r["from_1c"]),
+        "by_cashbox": [{"cashbox": k, **v} for k, v in
+                       sorted(by_box.items(), key=lambda x: -x[1]["sum"])],
+        "rows": rows,
+    }
+
+
+def _to_int_safe(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return v

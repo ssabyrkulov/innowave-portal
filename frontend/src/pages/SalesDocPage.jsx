@@ -275,6 +275,7 @@ export default function SalesDocPage() {
 
       <MovementsProbePanel />
       <HiddenOrdersProbePanel />
+      <PaymentsDayPanel />
 
       <TxnTypesPanel />
 
@@ -2045,6 +2046,95 @@ function StoreLogPanel() {
                   </div>
                 </>
               )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PaymentsDayPanel() {
+  const [open, setOpen] = useState(false)
+  const [day, setDay] = useState(toISODate(new Date()))
+  const [live, setLive] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocPaymentsDay(day, live)
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 💳 Оплаты SalesDoc за день: касса и способ оплаты
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Что за операция прошла, на какую кассу села и каким
+            способом. Операции <b>из 1С</b> помечены отдельно: у них заполнен
+            <code>code_1C</code> — GUID документа 1С, который проставляет обмен.
+            Без него операция заведена в самом SalesDoc (агентом или оператором).</p>
+          <div className="rc-period">
+            <input type="date" className="filter-select" value={day}
+              onChange={(e) => setDay(e.target.value)} />
+            <label className="muted">
+              <input type="checkbox" checked={live}
+                onChange={(e) => setLive(e.target.checked)} /> спросить SalesDoc напрямую
+            </label>
+            <button className="btn btn-sm" onClick={load} disabled={loading}>
+              {loading ? 'Читаю…' : 'Показать'}
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+          {data && (
+            <>
+              <p className="muted">
+                {data.count} операций на {formatMoney(data.total)} · из 1С: {data.from_1c} ·
+                источник: {data.source === 'live' ? 'живой запрос' : 'зеркало'}
+              </p>
+              <h4>По кассам</h4>
+              <table className="table">
+                <thead><tr><th>Касса</th><th className="num">Операций</th><th className="num">Сумма</th></tr></thead>
+                <tbody>
+                  {(data.by_cashbox || []).map((b, i) => (
+                    <tr key={i}>
+                      <td>{b.cashbox}</td>
+                      <td className="num">{b.count}</td>
+                      <td className="num">{formatMoney(b.sum)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <h4>Операции</h4>
+              <table className="table">
+                <thead>
+                  <tr><th>ИД</th><th>Клиент</th><th>Вид</th><th>Способ</th>
+                    <th>Касса</th><th className="num">Сумма</th><th>Источник</th></tr>
+                </thead>
+                <tbody>
+                  {(data.rows || []).map((r, i) => (
+                    <tr key={i}>
+                      <td><code>{r.sd_id}</code></td>
+                      <td>{r.client || '—'}</td>
+                      <td>{r.txn_name}</td>
+                      <td>{r.type_name || '—'}</td>
+                      <td>{r.cashbox || '—'}</td>
+                      <td className="num">{formatMoney(r.amount)}</td>
+                      <td>
+                        {r.from_1c
+                          ? <span className="badge badge-paid" title={r.code_1c}>из 1С</span>
+                          : <span className="muted">заведена в SD</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </>
           )}
         </div>
