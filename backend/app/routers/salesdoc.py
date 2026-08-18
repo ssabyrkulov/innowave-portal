@@ -445,8 +445,10 @@ def reconcile_debt(
         # надёжным ключом и должен встать выше ИД из названия: код проставляет
         # обмен, а ИД в название вписывает человек и может ошибиться.
         entry = None
+        linked_by_hand = False
         if name in links and links[name] in sd_by_id:
             entry = sd_by_id[links[name]]
+            linked_by_hand = True
         if entry is None:
             sid = _extract_sd_id(name)
             if sid and sid in sd_by_id:
@@ -475,6 +477,10 @@ def reconcile_debt(
             "sd_name_mismatch": bool(
                 entry and _names_diverge(name, entry["name"])),
             "sd_active": entry.get("active", True) if entry else None,
+            # Связка задана человеком — значит и разорвать её должен человек,
+            # прямо здесь: ошибиться в выпадающем списке легко, а найти потом
+            # эту связку было негде.
+            "linked_by_hand": linked_by_hand,
             "organization": client_org,
             # Компоненты долга 1С — для «причины расхождения».
             "our_sales": round(c.get("shipped", 0.0), 2),

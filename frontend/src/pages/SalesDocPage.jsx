@@ -168,6 +168,19 @@ export default function SalesDocPage() {
 
   // Ручная привязка точки к фирме: перекрывает догадку по складам там, где
   // SalesDoc не отдаёт реализации и вычислить фирму не из чего.
+  // Разорвать ручную связку контрагента 1С с точкой SalesDoc. Связку легко
+  // задать не ту (в выпадающем списке рядом стоят похожие имена), а найти и
+  // отменить её до сих пор было негде — эндпоинт был, кнопки не было.
+  async function unlink(row) {
+    if (!row.name) return
+    try {
+      await api.salesdocUnlink(row.name)
+      await loadAll(range, onlyDiff)
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   async function setFirm(row, value) {
     if (!row.sd_id || !value) return
     try {
@@ -433,8 +446,15 @@ export default function SalesDocPage() {
                           набранный ИД молча сводит 1С с чужой точкой. */}
                       {r.sd_name_mismatch && (
                         <div className="rc-org-note rc-org-note-warn">
-                          в SalesDoc это <b>{r.sd_name}</b> ({r.sd_id}) — имена
-                          не совпадают, проверьте ИД в названии контрагента 1С
+                          в SalesDoc это <b>{r.sd_name}</b> — имена не совпадают,
+                          проверьте ИД в названии контрагента 1С
+                        </div>
+                      )}
+                      {r.linked_by_hand && (
+                        <div className="rc-note">
+                          связка с точкой SalesDoc задана вручную{' '}
+                          <button className="btn btn-ghost btn-sm"
+                            onClick={() => unlink(r)}>разорвать</button>
                         </div>
                       )}
                       {r.sd_active === false && (
