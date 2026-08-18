@@ -378,6 +378,8 @@ def sync_payments(db: Session, updated_since: str | None = None) -> int:
                 or ptypes.get(("sd", str(pt.get("SD_id") or "").lower()))
                 or None
             ),
+            "type_sd_id": str(pt.get("SD_id") or pt.get("CS_id") or "").lower() or None,
+            "type_code_1c": str(pt.get("code_1C") or "") or None,
             "cashbox_sd_id": box[0],
             "cashbox_name": box[1],
             "order_ids": _payment_orders(p),

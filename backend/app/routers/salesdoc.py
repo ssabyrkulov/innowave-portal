@@ -3611,3 +3611,62 @@ def payment_types(_: models.User = Depends(can_view)):
         "without_code_1c": sum(1 for r in out if not r["code_1C"]),
         "rows": out,
     }
+
+
+@router.get("/payments-by-type")
+def payments_by_type(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    type_id: str = Query(default="", description="SD_id/CS_id способа оплаты, напр. d0_7"),
+):
+    """Оплаты в разрезе способа оплаты за период.
+
+    Нужно, когда фирма зашита в сам способ («Bank Innowave (KGS)»): тогда
+    отбор по способу — это и есть отбор по фирме и месту денег. Отбираем по
+    идентификатору, а не по названию: названия переименовывают, идентификатор
+    остаётся.
+    """
+    _require_configured()
+    P = models.SalesDocPayment
+    q = db.query(P).filter(P.date >= date_from, P.date <= date_to)
+    tid = (type_id or "").strip().lower()
+    if tid:
+        q = q.filter(P.type_sd_id == tid)
+    rows = q.order_by(P.date.desc(), P.id.desc()).all()
+
+    names = {c.sd_id: c.name for c in db.query(models.SalesDocClient).all()}
+    by_type: dict = {}
+    out = []
+    for p in rows:
+        key = p.type_sd_id or "— способ не указан"
+        b = by_type.setdefault(key, {"name": p.type_name, "count": 0, "sum": 0.0})
+        b["count"] += 1
+        b["sum"] += float(p.amount or 0)
+        out.append({
+            "sd_id": p.sd_id,
+            "date": p.date and p.date.isoformat(),
+            "amount": float(p.amount or 0),
+            "txn_name": salesdoc.PAY_TXN.get(p.txn, str(p.txn)),
+            "type_id": p.type_sd_id,
+            "type_name": p.type_name,
+            "cashbox": p.cashbox_name or p.cashbox_sd_id,
+            "client": names.get(p.client_sd_id) or p.client_sd_id,
+            "code_1c": p.code_1c,
+            "from_1c": bool(p.code_1c),
+        })
+    # Сколько записей ещё без идентификатора способа: колонка появилась
+    # недавно, старые строки заполнятся при ближайшей полной синхронизации.
+    no_type = sum(1 for p in rows if not p.type_sd_id)
+    return {
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "type_id": tid or None,
+        "count": len(out),
+        "total": round(sum(r["amount"] for r in out), 2),
+        "without_type_id": no_type,
+        "by_type": [{"type_id": k, **v} for k, v in
+                    sorted(by_type.items(), key=lambda x: -x[1]["sum"])],
+        "rows": out[:500],
+    }

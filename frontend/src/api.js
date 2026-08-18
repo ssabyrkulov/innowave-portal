@@ -195,6 +195,11 @@ export const api = {
   salesdocCashboxes: () => request('/salesdoc/cashboxes'),
   salesdocOrderChanges: () => request('/salesdoc/order-changes'),
   salesdocPaymentTypes: () => request('/salesdoc/payment-types'),
+  salesdocPaymentsByType: ({ date_from, date_to, type_id }) => {
+    const qs = new URLSearchParams({ date_from, date_to })
+    if (type_id) qs.set('type_id', type_id)
+    return request(`/salesdoc/payments-by-type?${qs.toString()}`)
+  },
   salesdocPaymentsDay: (day, live) =>
     request(`/salesdoc/payments-day?day=${day}${live ? '&live=true' : ''}`),
   salesdocSetClientFirm: (sd_id, org) =>

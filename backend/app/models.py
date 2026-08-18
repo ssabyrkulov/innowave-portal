@@ -436,6 +436,11 @@ class SalesDocPayment(Base):
     type_name: Mapped[str | None] = mapped_column(String, nullable=True)
     # Касса, на которую посажена операция. У оплат склада нет, поэтому фирму
     # такой точки по складам не определить — касса единственная зацепка.
+    # Идентификаторы способа оплаты. Название хранить мало: фирму планируется
+    # зашивать в способ («Bank Innowave (KGS)»), а названия переименовывают —
+    # отбор должен идти по идентификатору, который не меняется.
+    type_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    type_code_1c: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     cashbox_sd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     cashbox_name: Mapped[str | None] = mapped_column(String, nullable=True)
     # Заказы, которые закрывает эта оплата (поле orders в ответе SalesDoc),

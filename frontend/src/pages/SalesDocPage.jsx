@@ -276,6 +276,7 @@ export default function SalesDocPage() {
       <MovementsProbePanel />
       <HiddenOrdersProbePanel />
       <PaymentsDayPanel />
+      <PaymentsByTypePanel />
 
       <TxnTypesPanel />
 
@@ -2046,6 +2047,111 @@ function StoreLogPanel() {
                   </div>
                 </>
               )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PaymentsByTypePanel() {
+  const [open, setOpen] = useState(false)
+  const [types, setTypes] = useState([])
+  const [typeId, setTypeId] = useState('')
+  const [from, setFrom] = useState(`${new Date().getFullYear()}-01-01`)
+  const [to, setTo] = useState(toISODate(new Date()))
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  function toggle() {
+    const n = !open; setOpen(n)
+    if (n && !types.length) {
+      api.salesdocPaymentTypes().then((d) => setTypes(d.rows || [])).catch(() => {})
+    }
+  }
+  function load() {
+    setBusy(true); setErr(null)
+    api.salesdocPaymentsByType({ date_from: from, date_to: to, type_id: typeId })
+      .then(setData).catch((e) => setErr(e.message)).finally(() => setBusy(false))
+  }
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🏦 Оплаты по способу оплаты (фирма в способе)
+      </button>
+      {open && (
+        <div className="store-map-body">
+          <p className="muted">Когда фирма зашита в сам способ оплаты
+            («Bank Innowave (KGS)»), отбор по способу — это и есть отбор по фирме
+            и месту денег. Отбор идёт по <b>идентификатору</b>, а не по названию:
+            названия переименовывают, идентификатор остаётся.</p>
+          <div className="rc-period">
+            <input type="date" className="filter-select" value={from}
+              onChange={(e) => setFrom(e.target.value)} />
+            <span className="muted">—</span>
+            <input type="date" className="filter-select" value={to}
+              onChange={(e) => setTo(e.target.value)} />
+            <select className="filter-select" value={typeId}
+              onChange={(e) => setTypeId(e.target.value)}>
+              <option value="">все способы</option>
+              {types.map((t, i) => (
+                <option key={i} value={(t.SD_id || t.CS_id || '').toLowerCase()}>
+                  {t.name} · {t.SD_id || t.CS_id}
+                </option>
+              ))}
+            </select>
+            <button className="btn btn-sm" onClick={load} disabled={busy}>
+              {busy ? 'Считаю…' : 'Показать'}
+            </button>
+          </div>
+          {err && <div className="error">{err}</div>}
+          {data && (
+            <>
+              <p className="muted">
+                {data.count} операций на {formatMoney(data.total)}
+                {data.without_type_id > 0 && (
+                  <span className="error"> · без идентификатора способа: {data.without_type_id}
+                    {' '}(старые записи — заполнятся после полной синхронизации)</span>
+                )}
+              </p>
+              <h4>По способам оплаты</h4>
+              <table className="table">
+                <thead><tr><th>Способ</th><th>ИД</th><th className="num">Операций</th><th className="num">Сумма</th></tr></thead>
+                <tbody>
+                  {(data.by_type || []).map((b, i) => (
+                    <tr key={i}>
+                      <td>{b.name || '—'}</td>
+                      <td><code>{b.type_id}</code></td>
+                      <td className="num">{b.count}</td>
+                      <td className="num">{formatMoney(b.sum)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <h4>Операции {data.rows.length < data.count ? `(первые ${data.rows.length})` : ''}</h4>
+              <table className="table">
+                <thead>
+                  <tr><th>Дата</th><th>Клиент</th><th>Вид</th><th>Способ</th>
+                    <th className="num">Сумма</th><th>Источник</th></tr>
+                </thead>
+                <tbody>
+                  {(data.rows || []).map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.date}</td>
+                      <td>{r.client || '—'}</td>
+                      <td>{r.txn_name}</td>
+                      <td>{r.type_name || '—'}</td>
+                      <td className="num">{formatMoney(r.amount)}</td>
+                      <td>{r.from_1c
+                        ? <span className="badge badge-paid" title={r.code_1c}>из 1С</span>
+                        : <span className="muted">в SD</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </>
           )}
         </div>
