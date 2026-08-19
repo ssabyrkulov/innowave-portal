@@ -257,15 +257,24 @@ def call_all(method: str, key, params: dict | None = None, page_limit: int = 100
         result, pagination = call(method, params)
         chunk = _pick(result, keys)
         out.extend(chunk)
-        if not pagination or not chunk:
+        if not chunk:
             break
         # Считаем ФАКТИЧЕСКИ полученные строки, а не «страница × лимит».
         # SalesDoc может отдать на странице меньше, чем мы запросили: тогда
         # расчётный счётчик убегал вперёд, цикл обрывался раньше времени и
         # хвост записей терялся — на практике пропадали самые свежие операции.
-        total = int(pagination.get("total") or 0)
+        total = int((pagination or {}).get("total") or 0)
         if total and len(out) >= total:
             break
+        if not total:
+            # Ответ без блока pagination. Раньше на этом цикл останавливался
+            # после ПЕРВОЙ страницы — и от журнала оставались только самые
+            # свежие записи, а всё, что дальше лимита, просто не существовало
+            # для портала. Это выглядело как «в SalesDoc оплата есть, а у нас
+            # нет пары». Без счётчика ориентируемся на полноту страницы:
+            # пришло меньше запрошенного — данные кончились.
+            if len(chunk) < int(params.get("limit") or page_limit):
+                break
         page += 1
         if page > 1000:  # страховка от бесконечного цикла при странном ответе
             break
