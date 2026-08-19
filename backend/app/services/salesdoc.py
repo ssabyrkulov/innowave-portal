@@ -252,6 +252,8 @@ def call_all(method: str, key, params: dict | None = None, page_limit: int = 100
     params.setdefault("limit", page_limit)
     out: list = []
     page = 1
+    page_size: int | None = None   # фактический размер страницы (см. ниже)
+    prev_head: str = ""
     while True:
         params["page"] = page
         result, pagination = call(method, params)
@@ -271,10 +273,26 @@ def call_all(method: str, key, params: dict | None = None, page_limit: int = 100
             # после ПЕРВОЙ страницы — и от журнала оставались только самые
             # свежие записи, а всё, что дальше лимита, просто не существовало
             # для портала. Это выглядело как «в SalesDoc оплата есть, а у нас
-            # нет пары». Без счётчика ориентируемся на полноту страницы:
-            # пришло меньше запрошенного — данные кончились.
-            if len(chunk) < int(params.get("limit") or page_limit):
+            # нет пары».
+            #
+            # Ориентироваться на ЗАПРОШЕННЫЙ лимит нельзя: сервер вправе отдать
+            # страницу меньше (у SalesDoc встречается потолок в 250 записей), и
+            # тогда первая же страница выглядела бы неполной — обрыв повторился
+            # бы, просто на другом числе. Поэтому размер страницы берём по
+            # факту, с первого ответа, и идём дальше, пока страницы полные.
+            if page_size is None:
+                page_size = len(chunk)
+            if len(chunk) < page_size:
                 break
+        # Сервер может игнорировать номер страницы и отдавать одно и то же —
+        # тогда цикл крутился бы до предохранителя, копя дубли. Сверяем
+        # идентификатор первой записи страницы с предыдущей.
+        head = str(chunk[0].get("SD_id") or chunk[0].get("CS_id") or "") \
+            if isinstance(chunk[0], dict) else str(chunk[0])
+        if head and head == prev_head:
+            out = out[: len(out) - len(chunk)]  # эта страница — повтор
+            break
+        prev_head = head
         page += 1
         if page > 1000:  # страховка от бесконечного цикла при странном ответе
             break
