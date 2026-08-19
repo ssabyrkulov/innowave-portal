@@ -595,10 +595,19 @@ def receivables(
             else:
                 client = norm_clients.get(_normalize(r.payer))
         if client is None:
+            # Плательщик, под именем которого в 1С нет ни одной отгрузки.
+            # Раньше такая оплата уходила ТОЛЬКО в «не сопоставлено» и в
+            # дебиторку не попадала вовсе — клиента не было в списке, и портал
+            # честно писал «в 1С операций по точке нет», хотя деньги от него
+            # приняты и лежат в 1С. Так выглядят точки, которые платят авансом
+            # или отгружаются на другое имя. Оставляем строку в «не
+            # сопоставлено» (это по-прежнему сигнал), но клиента заводим: у
+            # него просто отрицательный долг — переплата.
             u = unmatched.setdefault(r.payer, {"payer": r.payer, "paid": 0.0, "count": 0})
             u["paid"] += float(r.amount_kgs)
             u["count"] += 1
-            continue
+            client = r.payer
+        client_org.setdefault(client, r.organization)
         paid[client] += float(r.amount_kgs)
         if client not in last_payment or r.date > last_payment[client]:
             last_payment[client] = r.date
