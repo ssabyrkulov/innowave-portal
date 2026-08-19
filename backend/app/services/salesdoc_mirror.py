@@ -65,6 +65,9 @@ DELTA_OVERLAP = timedelta(hours=6)
 HISTORY_YEARS = 3
 
 _sync_lock = threading.Lock()
+# Отложенный запрос на полную выгрузку: ставится, когда «Обновить»
+# нажали во время идущей синхронизации.
+_full_pending = threading.Event()
 _worker_started = False
 
 
@@ -1237,11 +1240,42 @@ def sync(full: bool = False) -> dict:
     """Обновить зеркало. full=True — полная выгрузка, иначе дельта изменений.
 
     Идёт под замком: параллельные синхронизации только мешали бы друг другу и
-    зря дёргали токен SalesDoc."""
+    зря дёргали токен SalesDoc. Но запрос на ПОЛНУЮ выгрузку под замком не
+    выбрасывается, а запоминается и выполняется следом.
+
+    Раньше он терялся: дельты идут каждую минуту и занимают заметную её часть,
+    поэтому нажатие «Обновить» почти всегда приходилось на занятый замок и
+    молча пропадало. А документ, который в SalesDoc не менялся (у него старый
+    `dateUpdate`), дельта не забирает в принципе — он мог приехать только
+    часовой полной выгрузкой. Со стороны это выглядело как «обновляю, а ничего
+    не меняется».
+    """
     if not salesdoc.is_configured():
         return {"skipped": "SalesDoc не настроен"}
     if not _sync_lock.acquire(blocking=False):
+        if full:
+            _full_pending.set()
+            return {"skipped": "синхронизация уже идёт", "full_queued": True}
         return {"skipped": "синхронизация уже идёт"}
+    if _full_pending.is_set():  # просили, пока никто не работал
+        _full_pending.clear()
+        full = True
+    result = _sync_once(full)   # замок отпускает сама
+    # Запрос пришёл, пока мы работали, — выполняем сразу, а не через час.
+    if _full_pending.is_set() and not full and _sync_lock.acquire(blocking=False):
+        _full_pending.clear()
+        result = {"delta": result, "then_full": _sync_once(True)}
+    return result
+
+
+def full_pending() -> bool:
+    """Есть ли невыполненный запрос на полную выгрузку — для показа в UI."""
+    return _full_pending.is_set()
+
+
+def _sync_once(full: bool = False) -> dict:
+    """Один проход синхронизации. Вызывается только с уже взятым замком и
+    отпускает его сам."""
     started = time.time()
     result: dict = {"full": full}
     try:
@@ -1349,6 +1383,21 @@ def status(db: Session) -> dict:
             newest = st.last_delta_at
     out["synced_at"] = newest and newest.isoformat()
     out["ready"] = bool(newest)
+    # Состояние прямо сейчас: идёт ли выгрузка и не ждёт ли своей очереди
+    # запрошенная полная. Без этого кнопка «Обновить» ничего не сообщает
+    # пользователю — он жмёт её повторно и думает, что она не работает.
+    out["running"] = _sync_lock.locked()
+    out["full_pending"] = _full_pending.is_set()
+    # Берём САМУЮ СТАРУЮ полную выгрузку из ключевых видов: показать надо
+    # «полностью выгружено не позже чем», а не «хоть что-то обновилось».
+    full_at = None
+    for kind in ("orders", "payments", "clients"):
+        st = db.query(models.SalesDocSyncState).filter_by(kind=kind).first()
+        if st is not None and st.last_full_at and (full_at is None or st.last_full_at < full_at):
+            full_at = st.last_full_at
+    out["full_at"] = full_at and full_at.isoformat()
+    out["errors"] = {k: v["error"] for k, v in out["kinds"].items()
+                     if v and v.get("error")}
     return out
 
 

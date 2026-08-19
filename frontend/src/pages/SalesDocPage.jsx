@@ -162,8 +162,16 @@ export default function SalesDocPage() {
 
   // Обновление зеркала идёт на сервере в фоне: список отдаётся сразу, а
   // свежие данные подтягиваем повторным чтением через несколько секунд.
-  function reloadSoon(r, od) {
-    setTimeout(() => loadAll(r, od).catch(() => {}), 4000)
+  // После «Обновить» зеркало наполняется в фоне. Раньше страница
+  // перечитывалась ровно один раз через 4 секунды — к этому моменту полная
+  // выгрузка обычно ещё идёт, ничего не менялось, и человек жал кнопку снова.
+  // Теперь опрашиваем, пока синхронизация не закончится (но не бесконечно).
+  function reloadSoon(r, od, tries = 12) {
+    setTimeout(async () => {
+      const d = await loadAll(r, od).catch(() => null)
+      const busy = d?.sync?.running || d?.sync?.full_pending
+      if (busy && tries > 1) reloadSoon(r, od, tries - 1)
+    }, 5000)
   }
 
   // Ручная привязка точки к фирме: перекрывает догадку по складам там, где
@@ -203,8 +211,10 @@ export default function SalesDocPage() {
       setDebt(d)
       const p = await api.salesdocPeriod(r.from, r.to)
       setPeriod(p)
+      return d
     } catch (e) {
       setError(e.message)
+      return null
     } finally {
       setLoading(false)
     }
@@ -248,8 +258,12 @@ export default function SalesDocPage() {
               данные на {fmtClock(debt.synced_at)}
             </span>
           )}
+          {/* Что происходит с зеркалом прямо сейчас. Без этого «Обновить»
+              выглядит как кнопка, которая ничего не делает: полная выгрузка
+              идёт минутами, а на экране всё это время ничего не меняется. */}
+          <SyncState sync={debt?.sync} />
           <button className="btn btn-primary" disabled={loading}
-            title="Перечитать из SalesDoc. Список остаётся на месте — свежие данные подтянутся через несколько секунд."
+            title="Перечитать из SalesDoc. Список остаётся на месте — данные подтянутся сами, страница обновится."
             onClick={() => { loadAll(range, onlyDiff, true); reloadSoon(range, onlyDiff) }}>
             {loading ? 'Обновление…' : '↻ Обновить'}
           </button>
@@ -532,6 +546,38 @@ export default function SalesDocPage() {
 
 // Сводка по документам, которые SalesDoc учитывает в балансе, но не отдаёт в
 // выгрузке — типичный след деактивированного агента.
+/* Состояние зеркала рядом с кнопкой «Обновить»: идёт ли выгрузка, стоит ли
+   полная в очереди, когда была последняя полная и не отвалился ли какой-то
+   вид данных. Дельта раз в минуту берёт только изменившиеся документы, а
+   старый документ с неизменным dateUpdate приезжает лишь полной выгрузкой —
+   поэтому «когда была полная» важнее, чем «когда была любая». */
+function SyncState({ sync }) {
+  if (!sync) return null
+  const errs = Object.entries(sync.errors || {})
+  const full = sync.full_at
+    ? new Date(sync.full_at + 'Z').toLocaleString('ru-RU',
+        { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : null
+  return (
+    <span className="sd-sync-state">
+      {sync.running && <span className="muted">идёт обновление…</span>}
+      {!sync.running && sync.full_pending && (
+        <span className="muted">полное обновление в очереди</span>
+      )}
+      {!sync.running && !sync.full_pending && full && (
+        <span className="muted" title="Полная выгрузка забирает и те документы, которые в SalesDoc не менялись">
+          полностью: {full}
+        </span>
+      )}
+      {errs.length > 0 && (
+        <span className="sd-sync-err" title={errs.map(([k, v]) => `${k}: ${v}`).join('\n')}>
+          · ошибка: {errs.map(([k]) => k).join(', ')}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function HiddenDocsBanner({ hidden }) {
   const [open, setOpen] = useState(false)
   return (

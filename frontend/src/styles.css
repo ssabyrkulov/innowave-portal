@@ -2931,3 +2931,7 @@ button.summary-card {
   font-size: 11px;
   cursor: pointer;
 }
+
+/* Состояние синхронизации SalesDoc рядом с кнопкой «Обновить». */
+.sd-sync-state { font-size: 12px; margin-right: 8px; white-space: nowrap; }
+.sd-sync-err { color: #a33; }
