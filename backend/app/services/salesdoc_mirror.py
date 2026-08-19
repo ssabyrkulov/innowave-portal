@@ -183,7 +183,8 @@ def _client_keys(cli: dict | None) -> tuple[str | None, str | None]:
     return sd, code
 
 
-def _log_order_change(db: Session, sd_id: str, store_sd_id) -> None:
+def _log_order_change(db: Session, sd_id: str, store_sd_id,
+                      cache: dict | None = None) -> None:
     """Записывает смену склада документа, если она случилась.
 
     SalesDoc такие правки нигде не хранит: в истории документа остаётся первый
@@ -194,7 +195,12 @@ def _log_order_change(db: Session, sd_id: str, store_sd_id) -> None:
 
     Смену статуса не пишем: Новый → Отправлен → Доставлен → Закрыт проходит
     каждый документ, и этот шум похоронил бы редкие правки склада."""
-    row = db.query(models.SalesDocOrder).filter_by(sd_id=sd_id).first()
+    # Строку берём из уже прочитанного набора (см. _existing). Раньше здесь
+    # был отдельный SELECT НА КАЖДЫЙ документ: полная выгрузка заказов за три
+    # года превращалась в десятки тысяч точечных запросов к базе — и именно
+    # они, а не сеть, съедали почти всё время обновления.
+    row = cache.get(sd_id) if cache is not None else \
+        db.query(models.SalesDocOrder).filter_by(sd_id=sd_id).first()
     if row is None:
         return  # новый документ — сравнивать не с чем
     old, new = row.store_sd_id, store_sd_id
@@ -370,7 +376,7 @@ def sync_orders(db: Session, updated_since: str | None = None) -> int:
         seen.add(sd_id)
         cli_sd, cli_code = _client_keys(o.get("client"))
         store_sd_id = str((o.get("store") or {}).get("SD_id") or "").lower() or None
-        _log_order_change(db, sd_id, store_sd_id)
+        _log_order_change(db, sd_id, store_sd_id, cache)
         _upsert(db, models.SalesDocOrder, sd_id, cache=cache, values={
             "client_sd_id": cli_sd,
             "client_code_1c": cli_code,
