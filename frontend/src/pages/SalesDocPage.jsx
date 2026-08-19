@@ -263,10 +263,19 @@ export default function SalesDocPage() {
               идёт минутами, а на экране всё это время ничего не меняется. */}
           <SyncState sync={debt?.sync} />
           <button className="btn btn-primary" disabled={loading}
-            title="Перечитать из SalesDoc. Список остаётся на месте — данные подтянутся сами, страница обновится."
+            title="Перечитать заказы и оплаты из SalesDoc. Список остаётся на месте — данные подтянутся сами."
             onClick={() => { loadAll(range, onlyDiff, true); reloadSoon(range, onlyDiff) }}>
             {loading ? 'Обновление…' : '↻ Обновить'}
           </button>
+          {/* Тяжёлое обновление отдельной ссылкой: справочники, товары,
+              остатки и визиты (~100 тыс. строк) нужны редко, а ждать их
+              каждый раз — минуты. */}
+          <button className="btn btn-ghost btn-sm" disabled={loading}
+            title="Перевыгрузить и справочники: товары, склады, агенты, остатки, визиты. Идёт минутами."
+            onClick={async () => {
+              await api.salesdocMirrorSync(true).catch(() => {})
+              reloadSoon(range, onlyDiff)
+            }}>обновить всё</button>
         </div>
       </div>
 

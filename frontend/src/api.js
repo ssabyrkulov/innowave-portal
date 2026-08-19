@@ -261,8 +261,13 @@ export const api = {
   salesdocShipmentsCompare: (params) =>
     request('/salesdoc/shipments-compare?' + new URLSearchParams(params).toString()),
   salesdocMirror: () => request('/salesdoc/mirror'),
-  salesdocMirrorSync: (full = false) =>
-    request(`/salesdoc/mirror/sync${full ? '?full=true' : ''}`, { method: 'POST' }),
+  salesdocMirrorSync: (full = false, docsOnly = false) => {
+    const qs = new URLSearchParams()
+    if (full) qs.set('full', 'true')
+    if (docsOnly) qs.set('docs_only', 'true')
+    const tail = qs.toString()
+    return request(`/salesdoc/mirror/sync${tail ? '?' + tail : ''}`, { method: 'POST' })
+  },
   salesdocMatching: () => request('/salesdoc/matching'),
   salesdocLink: (client_1c, sd_id) =>
     request('/salesdoc/link', { method: 'POST', body: { client_1c, sd_id } }),

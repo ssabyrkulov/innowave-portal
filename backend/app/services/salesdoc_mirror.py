@@ -65,9 +65,40 @@ DELTA_OVERLAP = timedelta(hours=6)
 HISTORY_YEARS = 3
 
 _sync_lock = threading.Lock()
-# Отложенный запрос на полную выгрузку: ставится, когда «Обновить»
-# нажали во время идущей синхронизации.
-_full_pending = threading.Event()
+# Отложенный запрос на полную выгрузку: ставится, когда «Обновить» нажали во
+# время идущей синхронизации. Помнит и НАБОР видов: кнопка обновляет только
+# документы (заказы и оплаты), «обновить всё» — весь список.
+#   None            — запроса нет
+#   "all"           — полная по всем видам
+#   frozenset({...}) — полная только по этим видам
+_pending_full = None
+_pending_lock = threading.Lock()
+
+# Виды, которые обновляет кнопка «Обновить». Всё остальное (визиты ~100 тыс.
+# строк, товары, остатки, справочники) человеку в этот момент не нужно и
+# превращает нажатие в многоминутное ожидание — их обновляет фоновый цикл.
+DOC_KINDS = ("orders", "payments")
+
+
+def _request_full(kinds=None) -> None:
+    """Запомнить просьбу о полной выгрузке (пришла, пока шла другая)."""
+    global _pending_full
+    with _pending_lock:
+        want = "all" if not kinds else frozenset(kinds)
+        if _pending_full is None:
+            _pending_full = want
+        elif _pending_full == "all" or want == "all":
+            _pending_full = "all"
+        else:
+            _pending_full = _pending_full | want
+
+
+def _take_pending():
+    """Забрать отложенный запрос (и очистить его)."""
+    global _pending_full
+    with _pending_lock:
+        p, _pending_full = _pending_full, None
+        return p
 _worker_started = False
 
 
@@ -1236,7 +1267,7 @@ def stock_by_store(db: Session, store_ids=None, q: str | None = None,
     return out
 
 
-def sync(full: bool = False) -> dict:
+def sync(full: bool = False, kinds=None) -> dict:
     """Обновить зеркало. full=True — полная выгрузка, иначе дельта изменений.
 
     Идёт под замком: параллельные синхронизации только мешали бы друг другу и
@@ -1254,28 +1285,31 @@ def sync(full: bool = False) -> dict:
         return {"skipped": "SalesDoc не настроен"}
     if not _sync_lock.acquire(blocking=False):
         if full:
-            _full_pending.set()
+            _request_full(kinds)
             return {"skipped": "синхронизация уже идёт", "full_queued": True}
         return {"skipped": "синхронизация уже идёт"}
-    if _full_pending.is_set():  # просили, пока никто не работал
-        _full_pending.clear()
+    pend = _take_pending()       # просили, пока никто не работал
+    if pend is not None:
         full = True
-    result = _sync_once(full)   # замок отпускает сама
+        kinds = None if pend == "all" else sorted(pend)
+    result = _sync_once(full, kinds)   # замок отпускает сама
     # Запрос пришёл, пока мы работали, — выполняем сразу, а не через час.
-    if _full_pending.is_set() and not full and _sync_lock.acquire(blocking=False):
-        _full_pending.clear()
-        result = {"delta": result, "then_full": _sync_once(True)}
+    pend = _take_pending()
+    if pend is not None and _sync_lock.acquire(blocking=False):
+        result = {"first": result,
+                  "then_full": _sync_once(True, None if pend == "all" else sorted(pend))}
     return result
 
 
 def full_pending() -> bool:
     """Есть ли невыполненный запрос на полную выгрузку — для показа в UI."""
-    return _full_pending.is_set()
+    with _pending_lock:
+        return _pending_full is not None
 
 
-def _sync_once(full: bool = False) -> dict:
+def _sync_once(full: bool = False, kinds=None) -> dict:
     """Один проход синхронизации. Вызывается только с уже взятым замком и
-    отпускает его сам."""
+    отпускает его сам. kinds — ограничить набор видов (None — все)."""
     started = time.time()
     result: dict = {"full": full}
     try:
@@ -1292,6 +1326,10 @@ def _sync_once(full: bool = False) -> dict:
                     ("store_log", sync_store_log, None, models.SalesDocStoreLog),
                     ("stock", sync_stock, None, models.SalesDocStock),
                     ("visits", sync_visits, None, models.SalesDocVisit)):
+                # Точечное обновление: кнопка просит только документы, всё
+                # остальное в этот момент человеку не нужно.
+                if kinds and kind not in kinds:
+                    continue
                 st = _state(db, kind)
                 # Визиты (~100 тыс. строк) — только при полной синхронизации:
                 # для минутной дельты набор слишком тяжёлый.
@@ -1354,14 +1392,14 @@ def _sync_once(full: bool = False) -> dict:
     return result
 
 
-def sync_async(full: bool = False) -> dict:
+def sync_async(full: bool = False, kinds=None) -> dict:
     """Запустить синхронизацию в фоне и сразу вернуть управление.
 
     Пользователь никогда не должен ждать выгрузку из SalesDoc: страницы
     читаются из зеркала, а обновление идёт незаметно и доезжает само."""
-    threading.Thread(target=sync, kwargs={"full": full},
+    threading.Thread(target=sync, kwargs={"full": full, "kinds": kinds},
                      name="salesdoc-sync-once", daemon=True).start()
-    return {"started": True, "full": full}
+    return {"started": True, "full": full, "kinds": list(kinds) if kinds else None}
 
 
 def status(db: Session) -> dict:
@@ -1387,7 +1425,7 @@ def status(db: Session) -> dict:
     # запрошенная полная. Без этого кнопка «Обновить» ничего не сообщает
     # пользователю — он жмёт её повторно и думает, что она не работает.
     out["running"] = _sync_lock.locked()
-    out["full_pending"] = _full_pending.is_set()
+    out["full_pending"] = full_pending()
     # Берём САМУЮ СТАРУЮ полную выгрузку из ключевых видов: показать надо
     # «полностью выгружено не позже чем», а не «хоть что-то обновилось».
     full_at = None

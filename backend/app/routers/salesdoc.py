@@ -352,7 +352,11 @@ def reconcile_debt(
         # SalesDoc — список тут же отдаётся из зеркала, а свежие данные
         # доедут через несколько секунд сами.
         salesdoc.clear_cache()
-        salesdoc_mirror.sync_async(full=True)
+        # Кнопка «Обновить» тянет только документы: полная выгрузка всего
+        # (визиты ~100 тыс. строк, товары, остатки, справочники) занимает
+        # минуты, а нужны почти всегда свежие заказы и оплаты. Справочники
+        # обновляет фоновый цикл, а «обновить всё» есть отдельной ссылкой.
+        salesdoc_mirror.sync_async(full=True, kinds=salesdoc_mirror.DOC_KINDS)
 
     mirror_ready = salesdoc_mirror.status(db)["ready"]
     if mirror_ready:
@@ -3393,11 +3397,14 @@ def cashboxes(
 def mirror_sync(
     _: models.User = Depends(can_edit),
     full: bool = Query(default=False, description="Полная выгрузка вместо дельты"),
+    docs_only: bool = Query(default=False,
+                            description="Только заказы и оплаты (быстро)"),
 ):
     """Запустить обновление зеркала в фоне. Ответ приходит сразу — данные
     доезжают сами, страницу это не задерживает."""
     _require_configured()
-    return salesdoc_mirror.sync_async(full=full)
+    return salesdoc_mirror.sync_async(
+        full=full, kinds=salesdoc_mirror.DOC_KINDS if docs_only else None)
 
 
 @router.get("/hidden-orders-probe")
