@@ -96,6 +96,11 @@ DOC_KINDS = ("orders", "payments")
 # она просит явно (force_heavy).
 HEAVY_EVERY = {"visits": 6 * 3600, "store_log": 6 * 3600}
 
+# Как часто перевыгружать вид целиком, когда SalesDoc не отдаёт счётчик
+# записей. Тогда сверить количество не с чем, и единственная защита от
+# «документ появился, а мы о нём не знаем» — периодическая полная выгрузка.
+BLIND_FULL_EVERY = 15 * 60
+
 
 def _request_full(kinds=None) -> None:
     """Запомнить просьбу о полной выгрузке (пришла, пока шла другая)."""
@@ -1392,8 +1397,25 @@ def _sync_once(full: bool = False, kinds=None,
                     if sd_total is not None:
                         _last_counts[kind] = {
                             "salesdoc": sd_total, "ours": ours,
+                            "why": ("перевыгрузка целиком" if sd_total != ours
+                                    else ("изменений нет" if changed == 0
+                                          else f"изменилось {changed}")),
                             "at": datetime.utcnow().isoformat(timespec="seconds")}
-                    if sd_total is not None and sd_total != ours:
+                    if sd_total is None:
+                        # Счётчик получить не удалось — сверить количество не с
+                        # чем, и «изменений нет» нельзя принимать на веру: если
+                        # SalesDoc не проставляет dateUpdate новым документам,
+                        # вид завис бы до часовой полной выгрузки. Поэтому не
+                        # реже чем раз в BLIND_FULL_EVERY перевыгружаем целиком.
+                        blind = (datetime.utcnow() - st.last_full_at).total_seconds()
+                        _last_counts[kind] = {
+                            "salesdoc": None, "ours": ours, "why": "счётчик недоступен",
+                            "at": datetime.utcnow().isoformat(timespec="seconds")}
+                        if blind >= BLIND_FULL_EVERY:
+                            since = None
+                            result.setdefault("blind_resync", {})[kind] = {
+                                "ours": ours, "waited": round(blind)}
+                    elif sd_total != ours:
                         since = None
                         result.setdefault("resync", {})[kind] = {
                             "ours": ours, "salesdoc": sd_total}

@@ -600,8 +600,11 @@ function SyncState({ sync }) {
       {Object.entries(sync.counts || {})
         .filter(([, c]) => c && c.salesdoc !== c.ours)
         .map(([k, c]) => (
-          <span key={k} className="sd-sync-err" title="Портал догрузит недостающее ближайшей синхронизацией">
-            {' '}· {KIND_RU[k] || k}: в SalesDoc {c.salesdoc}, у нас {c.ours}
+          <span key={k} className="sd-sync-err"
+            title={`решение синхронизации: ${c.why || '—'}. Портал догрузит недостающее ближайшей выгрузкой.`}>
+            {' '}· {KIND_RU[k] || k}: {c.salesdoc === null
+              ? `SalesDoc не отдаёт счётчик, у нас ${c.ours}`
+              : `в SalesDoc ${c.salesdoc}, у нас ${c.ours}`}
           </span>
         ))}
     </span>
