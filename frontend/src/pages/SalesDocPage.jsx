@@ -555,6 +555,12 @@ export default function SalesDocPage() {
 
 // Сводка по документам, которые SalesDoc учитывает в балансе, но не отдаёт в
 // выгрузке — типичный след деактивированного агента.
+const KIND_RU = {
+  orders: 'заказы', payments: 'оплаты', clients: 'точки', warehouses: 'склады',
+  agents: 'агенты', products: 'товары', movements: 'перемещения',
+  store_log: 'журнал склада', stock: 'остатки', visits: 'визиты',
+}
+
 /* Состояние зеркала рядом с кнопкой «Обновить»: идёт ли выгрузка, стоит ли
    полная в очереди, когда была последняя полная и не отвалился ли какой-то
    вид данных. Дельта раз в минуту берёт только изменившиеся документы, а
@@ -569,7 +575,12 @@ function SyncState({ sync }) {
     : null
   return (
     <span className="sd-sync-state">
-      {sync.running && <span className="muted">идёт обновление…</span>}
+      {sync.running && (
+        <span className="muted" title="Кнопка обновляет только заказы и оплаты; остальное — фоновая часовая выгрузка">
+          обновление{sync.current?.kind ? `: ${KIND_RU[sync.current.kind] || sync.current.kind}` : '…'}
+          {sync.current?.seconds > 5 && ` · ${sync.current.seconds} с`}
+        </span>
+      )}
       {!sync.running && sync.full_pending && (
         <span className="muted">полное обновление в очереди</span>
       )}

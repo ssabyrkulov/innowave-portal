@@ -73,6 +73,10 @@ _sync_lock = threading.Lock()
 #   frozenset({...}) — полная только по этим видам
 _pending_full = None
 _pending_lock = threading.Lock()
+# Что синхронизируется прямо сейчас. Без этого надпись «идёт обновление…» не
+# отличает быстрое обновление документов по кнопке от часовой фоновой выгрузки
+# визитов и справочников — а ждать их приходится совсем по-разному.
+_current: dict = {"kind": None, "full": False, "started": None}
 
 # Виды, которые обновляет кнопка «Обновить». Всё остальное (визиты ~100 тыс.
 # строк, товары, остатки, справочники) человеку в этот момент не нужно и
@@ -1330,6 +1334,7 @@ def _sync_once(full: bool = False, kinds=None) -> dict:
                 # остальное в этот момент человеку не нужно.
                 if kinds and kind not in kinds:
                     continue
+                _current.update({"kind": kind, "full": full, "started": time.time()})
                 st = _state(db, kind)
                 # Визиты (~100 тыс. строк) — только при полной синхронизации:
                 # для минутной дельты набор слишком тяжёлый.
@@ -1425,6 +1430,11 @@ def status(db: Session) -> dict:
     # запрошенная полная. Без этого кнопка «Обновить» ничего не сообщает
     # пользователю — он жмёт её повторно и думает, что она не работает.
     out["running"] = _sync_lock.locked()
+    # Какой именно вид данных обновляется и сколько уже идёт.
+    cur = dict(_current)
+    out["current"] = ({"kind": cur["kind"], "full": cur["full"],
+                       "seconds": round(time.time() - cur["started"])}
+                      if out["running"] and cur.get("started") else None)
     out["full_pending"] = full_pending()
     # Берём САМУЮ СТАРУЮ полную выгрузку из ключевых видов: показать надо
     # «полностью выгружено не позже чем», а не «хоть что-то обновилось».
