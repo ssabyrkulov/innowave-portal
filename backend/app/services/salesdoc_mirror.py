@@ -87,6 +87,15 @@ _last_counts: dict = {}
 # превращает нажатие в многоминутное ожидание — их обновляет фоновый цикл.
 DOC_KINDS = ("orders", "payments")
 
+# Тяжёлые виды, которые нельзя перекладывать каждый час. Визиты (~100 тыс.
+# строк) выгружаются снапшотом — целиком удаляются и вставляются заново, это
+# минуты работы, и всё это время портал заметно медленнее: он живёт в одном
+# процессе с выгрузкой. Меняются при этом только визиты последних дней, а
+# история за 400 дней назад неизменна. Поэтому у них своя, редкая частота —
+# даже при полной синхронизации. Кнопка «обновить всё» их всё равно обновит:
+# она просит явно (force_heavy).
+HEAVY_EVERY = {"visits": 6 * 3600, "store_log": 6 * 3600}
+
 
 def _request_full(kinds=None) -> None:
     """Запомнить просьбу о полной выгрузке (пришла, пока шла другая)."""
@@ -1281,7 +1290,7 @@ def stock_by_store(db: Session, store_ids=None, q: str | None = None,
     return out
 
 
-def sync(full: bool = False, kinds=None) -> dict:
+def sync(full: bool = False, kinds=None, force_heavy: bool = False) -> dict:
     """Обновить зеркало. full=True — полная выгрузка, иначе дельта изменений.
 
     Идёт под замком: параллельные синхронизации только мешали бы друг другу и
@@ -1306,7 +1315,7 @@ def sync(full: bool = False, kinds=None) -> dict:
     if pend is not None:
         full = True
         kinds = None if pend == "all" else sorted(pend)
-    result = _sync_once(full, kinds)   # замок отпускает сама
+    result = _sync_once(full, kinds, force_heavy)   # замок отпускает сама
     # Запрос пришёл, пока мы работали, — выполняем сразу, а не через час.
     pend = _take_pending()
     if pend is not None and _sync_lock.acquire(blocking=False):
@@ -1321,7 +1330,8 @@ def full_pending() -> bool:
         return _pending_full is not None
 
 
-def _sync_once(full: bool = False, kinds=None) -> dict:
+def _sync_once(full: bool = False, kinds=None,
+               force_heavy: bool = False) -> dict:
     """Один проход синхронизации. Вызывается только с уже взятым замком и
     отпускает его сам. kinds — ограничить набор видов (None — все)."""
     started = time.time()
@@ -1352,6 +1362,15 @@ def _sync_once(full: bool = False, kinds=None) -> dict:
                         and st.last_full_at is not None:
                     result[kind] = {"skipped": "обновляется при полной синхронизации"}
                     continue
+                # Тяжёлые виды придерживаем и на полной выгрузке — кроме
+                # случая, когда их попросили явно кнопкой «обновить всё».
+                heavy = HEAVY_EVERY.get(kind)
+                if heavy and not force_heavy and st.last_full_at is not None:
+                    waited = (datetime.utcnow() - st.last_full_at).total_seconds()
+                    if waited < heavy:
+                        result[kind] = {
+                            "skipped": f"тяжёлый вид, обновляется раз в {heavy // 3600} ч"}
+                        continue
                 # Своя частота у каждого вида (см. KIND_EVERY): справочники не
                 # трогаем каждую минуту — это и была главная причина тормозов.
                 every = KIND_EVERY.get(kind)
@@ -1411,12 +1430,14 @@ def _sync_once(full: bool = False, kinds=None) -> dict:
     return result
 
 
-def sync_async(full: bool = False, kinds=None) -> dict:
+def sync_async(full: bool = False, kinds=None,
+               force_heavy: bool = False) -> dict:
     """Запустить синхронизацию в фоне и сразу вернуть управление.
 
     Пользователь никогда не должен ждать выгрузку из SalesDoc: страницы
     читаются из зеркала, а обновление идёт незаметно и доезжает само."""
-    threading.Thread(target=sync, kwargs={"full": full, "kinds": kinds},
+    threading.Thread(target=sync, kwargs={"full": full, "kinds": kinds,
+                                          "force_heavy": force_heavy},
                      name="salesdoc-sync-once", daemon=True).start()
     return {"started": True, "full": full, "kinds": list(kinds) if kinds else None}
 

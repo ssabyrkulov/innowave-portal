@@ -3403,8 +3403,11 @@ def mirror_sync(
     """Запустить обновление зеркала в фоне. Ответ приходит сразу — данные
     доезжают сами, страницу это не задерживает."""
     _require_configured()
+    # «Обновить всё» просит явно — значит тяжёлые виды (визиты, журнал склада)
+    # обновляем, даже если их очередь по расписанию ещё не подошла.
     return salesdoc_mirror.sync_async(
-        full=full, kinds=salesdoc_mirror.DOC_KINDS if docs_only else None)
+        full=full, kinds=salesdoc_mirror.DOC_KINDS if docs_only else None,
+        force_heavy=full and not docs_only)
 
 
 @router.get("/hidden-orders-probe")
