@@ -594,6 +594,16 @@ function SyncState({ sync }) {
           · ошибка: {errs.map(([k]) => k).join(', ')}
         </span>
       )}
+      {/* Прямой ответ на «новые документы не загрузились»: сколько записей
+          видит SalesDoc и сколько лежит у нас. Расхождение портал лечит сам —
+          при нём ближайшая синхронизация идёт полной, — но видеть его надо. */}
+      {Object.entries(sync.counts || {})
+        .filter(([, c]) => c && c.salesdoc !== c.ours)
+        .map(([k, c]) => (
+          <span key={k} className="sd-sync-err" title="Портал догрузит недостающее ближайшей синхронизацией">
+            {' '}· {KIND_RU[k] || k}: в SalesDoc {c.salesdoc}, у нас {c.ours}
+          </span>
+        ))}
     </span>
   )
 }

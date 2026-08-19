@@ -77,6 +77,10 @@ _pending_lock = threading.Lock()
 # отличает быстрое обновление документов по кнопке от часовой фоновой выгрузки
 # визитов и справочников — а ждать их приходится совсем по-разному.
 _current: dict = {"kind": None, "full": False, "started": None}
+# Последнее сравнение «сколько записей в SalesDoc / сколько у нас». Считается
+# и так на каждой дельте — раньше просто нигде не показывалось, и вопрос
+# «новые заказы загрузились?» приходилось выяснять расследованием.
+_last_counts: dict = {}
 
 # Виды, которые обновляет кнопка «Обновить». Всё остальное (визиты ~100 тыс.
 # строк, товары, остатки, справочники) человеку в этот момент не нужно и
@@ -1366,6 +1370,10 @@ def _sync_once(full: bool = False, kinds=None) -> dict:
                     # перевыгружаем целиком: это вычистит пропавшие записи.
                     sd_total = total_count(method)
                     ours = mirror_count(db, model)
+                    if sd_total is not None:
+                        _last_counts[kind] = {
+                            "salesdoc": sd_total, "ours": ours,
+                            "at": datetime.utcnow().isoformat(timespec="seconds")}
                     if sd_total is not None and sd_total != ours:
                         since = None
                         result.setdefault("resync", {})[kind] = {
@@ -1452,6 +1460,9 @@ def status(db: Session) -> dict:
     out["full_at"] = full_at and full_at.isoformat()
     out["errors"] = {k: v["error"] for k, v in out["kinds"].items()
                      if v and v.get("error")}
+    # Сколько записей видит SalesDoc и сколько лежит у нас. Расхождение —
+    # прямой ответ на «новые заказы не загрузились»: видно, отстаём мы или нет.
+    out["counts"] = dict(_last_counts)
     return out
 
 
