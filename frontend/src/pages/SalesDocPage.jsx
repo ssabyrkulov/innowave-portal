@@ -613,9 +613,6 @@ function OffsetPanel({ offset, onOpen }) {
             долга: реализации − возвраты − оплаты. Здесь эта сумма равна нулю —
             потому строки и не попали в список расхождений.
           </p>
-          {offset.clients > offset.top.length && (
-            <p className="muted">Показаны первые {offset.top.length} из {offset.clients}.</p>
-          )}
         </div>
       )}
     </div>
@@ -724,9 +721,6 @@ function HiddenDocsBanner({ hidden, onOpen }) {
               ))}
             </tbody>
           </table>
-          {hidden.clients > hidden.top.length && (
-            <p className="muted">Показаны первые {hidden.top.length} из {hidden.clients}.</p>
-          )}
         </div>
       )}
     </div>

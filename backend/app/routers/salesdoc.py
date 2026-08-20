@@ -699,12 +699,15 @@ def reconcile_debt(
         "offset": {
             "clients": len(offset_rows),
             "worst": round(max((o["worst"] for o in offset_rows), default=0.0), 2),
-            "top": offset_rows[:30],
+            # Отдаём весь список, а не первые N: строк тут на порядки меньше,
+            # чем в самой таблице сверки, а «показаны первые 30» превращает
+            # разбор в игру в угадайку — до остальных точек не добраться.
+            "top": offset_rows,
         },
         "hidden": {
             "clients": len(hidden_rows),
             "amount": round(sum(h["amount"] for h in hidden_rows), 2),
-            "top": hidden_rows[:20],
+            "top": hidden_rows,
         },
         "rows": rows,
     }
