@@ -1823,9 +1823,12 @@ def journal_anatomy(
     if inactive and all(a["orders"] == 0 for a in inactive) and active_orders:
         verdict = (
             f"Все {active_orders} заказов выдачи принадлежат активным агентам, "
-            f"а у всех {len(inactive)} неактивных — ровно ноль. getOrder не "
-            "отдаёт заказы деактивированных агентов: их документы остаются в "
-            "интерфейсе, но исчезают из выгрузки."
+            f"а у всех {len(inactive)} неактивных — ровно ноль. Это согласуется "
+            "с версией «getOrder не отдаёт заказы деактивированных агентов», но "
+            "не доказывает её: уволенный агент мог просто перестать работать "
+            "раньше начала периода. Решающая проверка — запросить заказы с "
+            "ЯВНЫМ фильтром по такому агенту (зонд «Почему SalesDoc не отдаёт "
+            "часть реализаций», раздел «агенты»)."
         )
 
     return {
@@ -3489,7 +3492,11 @@ def hidden_orders_probe(
     3. поиск по номеру документа — если заведомо скрытый документ находится
        по номеру, дело в фильтрах запроса, а не в видимости;
     4. возвраты — сырые записи getOrderDefect: в них может лежать ссылка на
-       родительскую реализацию, то есть идентификатор скрытого документа.
+       родительскую реализацию, то есть идентификатор скрытого документа;
+    5. агенты — запрос заказов с ЯВНЫМ указанием агента, по каждому из
+       справочника (включая уволенных). Прямая проверка версии
+       «документы деактивированных агентов не приходят»: если при явном
+       фильтре они появляются, у версии есть и подтверждение, и обход.
 
     Только чтение: ни одного set-метода.
     """
@@ -3584,6 +3591,67 @@ def hidden_orders_probe(
         }
     except salesdoc.SalesDocError as e:
         out["defects_raw"] = {"error": str(e)[:160]}
+
+    # --- 5. Прямая проверка версии «деактивированные агенты» ----------------
+    # Мы НИКОГДА не фильтруем заказы по агенту — значит если документы не
+    # приходят, их прячет сервер. Проверяем это в лоб: справочник getAgent
+    # отдаёт и уволенных (у нас хранится признак active), поэтому запросим
+    # заказы с явным указанием агента — по каждому. Если при явном фильтре
+    # документы уволенного появляются, версия подтверждается И у неё есть
+    # обход: тянуть заказы поагентно. Если нет — версия неверна.
+    try:
+        agents = salesdoc.call_all_ex("getAgent", ("agent", "agents"))
+    except salesdoc.SalesDocError as e:
+        agents = []
+        out["agents_error"] = str(e)[:160]
+    base_ids = set()
+    try:
+        for o in salesdoc.call_all_ex(
+                "getOrder", ("orders", "order"),
+                {"filter": {"include": "all", "status": [1, 2, 3, 4, 5], **period}}):
+            if salesdoc.client_matches(o.get("client"), sd_id, code_1c):
+                base_ids.add(str(o.get("SD_id") or o.get("CS_id")))
+    except salesdoc.SalesDocError:
+        pass
+    sweep = []
+    for a in agents:
+        aid = str(a.get("SD_id") or "").strip()
+        if not aid:
+            continue
+        act = a.get("active")
+        params = {"filter": {"include": "all", "status": [1, 2, 3, 4, 5],
+                             "agent": aid, **period}}
+        try:
+            rows = salesdoc.call_all_ex("getOrder", ("orders", "order"), params)
+        except salesdoc.SalesDocError as e:
+            sweep.append({"agent": a.get("name"), "sd_id": aid,
+                          "active": act, "error": str(e)[:120]})
+            continue
+        mine = [o for o in rows
+                if salesdoc.client_matches(o.get("client"), sd_id, code_1c)]
+        # Главное число: сколько документов этот запрос ДОБАВИЛ к тому, что
+        # виден без фильтра по агенту.
+        extra = [o for o in mine
+                 if str(o.get("SD_id") or o.get("CS_id")) not in base_ids]
+        sweep.append({
+            "agent": a.get("name"), "sd_id": aid,
+            "active": not (act in ("N", "n", False, 0, "0")),
+            "scanned": len(rows), "client_rows": len(mine),
+            "новых сверх общего запроса": len(extra),
+            "samples": [{"sd_id": o.get("SD_id") or o.get("CS_id"),
+                         "date": salesdoc.day(o.get("dateDocument")),
+                         "amount": o.get("totalSummaAfterDiscount")
+                         or o.get("totalSumma")} for o in extra[:5]],
+        })
+    out["by_agent"] = {
+        "без фильтра по агенту": len(base_ids),
+        "агентов в справочнике": len(agents),
+        "из них уволенных": sum(1 for a in agents
+                                if a.get("active") in ("N", "n", False, 0, "0")),
+        "фильтр по агенту дал новых документов":
+            sum(x.get("новых сверх общего запроса", 0) for x in sweep),
+        "по агентам": sorted(sweep, key=lambda x: -x.get("новых сверх общего запроса", 0)),
+    }
 
     return out
 
