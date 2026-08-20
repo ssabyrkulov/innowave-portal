@@ -647,6 +647,9 @@ def reconcile_debt(
                         "name": r["name"], "sd_id": r["sd_id"],
                         "sd_name": r.get("sd_name"),
                         "organization": r.get("organization"),
+                        "code_1C": r["code_1C"], "in_1c": r["in_1c"],
+                        "in_sd": r["in_sd"], "our_debt": r["our_debt"],
+                        "sd_debt": r["sd_debt"], "diff": r["diff"],
                         "debt": r["our_debt"],
                         "worst": max(abs(g["diff"]) for g in gaps),
                         "gaps": gaps,
@@ -654,6 +657,9 @@ def reconcile_debt(
             if r["in_sd"] and r["in_1c"] and r.get("sd_hidden", 0) >= 500:
                 hidden_rows.append({
                     "name": r["name"],
+                    "code_1C": r["code_1C"], "in_1c": r["in_1c"],
+                    "in_sd": r["in_sd"], "our_debt": r["our_debt"],
+                    "sd_debt": r["sd_debt"], "diff": r["diff"],
                     "sd_name": r.get("sd_name"),
                     "sd_name_mismatch": r.get("sd_name_mismatch", False),
                     "sd_active": r.get("sd_active"),

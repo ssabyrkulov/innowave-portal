@@ -340,7 +340,9 @@ export default function SalesDocPage() {
           выгрузке. Считаются по всем точкам: у таких клиентов долги сходятся,
           поэтому в отфильтрованный список расхождений они не попадают, и без
           этой сводки масштаб проблемы не виден вовсе. */}
-      {debt?.hidden?.clients > 0 && <HiddenDocsBanner hidden={debt.hidden} />}
+      {debt?.hidden?.clients > 0 && (
+        <HiddenDocsBanner hidden={debt.hidden} onOpen={setDetail} />
+      )}
 
       {debt?.unmapped_stores?.length > 0 && (
         <UnmappedStoresBanner stores={debt.unmapped_stores} />
@@ -546,7 +548,9 @@ export default function SalesDocPage() {
         </>
       )}
 
-      {debt?.offset?.clients > 0 && <OffsetPanel offset={debt.offset} />}
+      {debt?.offset?.clients > 0 && (
+        <OffsetPanel offset={debt.offset} onOpen={setDetail} />
+      )}
 
       {detail && (
         <ReconcileDetailModal row={detail} onClose={() => setDetail(null)} />
@@ -559,7 +563,7 @@ export default function SalesDocPage() {
    две ошибки гасят друг друга (не проведена реализация и не проведена оплата
    на ту же сумму), сальдо совпадает, и в обычном списке строка выглядит
    здоровой. Найти её можно только сравнив компоненты по отдельности. */
-function OffsetPanel({ offset }) {
+function OffsetPanel({ offset, onOpen }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="note-readonly sd-warn sd-offset">
@@ -587,7 +591,9 @@ function OffsetPanel({ offset }) {
                   <tr key={o.sd_id + g.name}>
                     {j === 0 && (
                       <td rowSpan={o.gaps.length}>
-                        {o.name}
+                        <button className="client-link" onClick={() => onOpen(o)}>
+                          {o.name}
+                        </button>
                         {o.sd_name && o.sd_name !== o.name && (
                           <div className="rc-note">в SalesDoc: {o.sd_name}</div>
                         )}
@@ -674,7 +680,7 @@ function SyncState({ sync }) {
   )
 }
 
-function HiddenDocsBanner({ hidden }) {
+function HiddenDocsBanner({ hidden, onOpen }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="note-readonly sd-warn">
@@ -699,7 +705,10 @@ function HiddenDocsBanner({ hidden }) {
             <tbody>
               {hidden.top.map((h, i) => (
                 <tr key={i}>
-                  <td>{h.name}
+                  <td>
+                    <button className="client-link" onClick={() => onOpen(h)}>
+                      {h.name}
+                    </button>
                     {h.sd_name_mismatch && (
                       <div className="rc-org-note rc-org-note-warn">
                         в SalesDoc: {h.sd_name} ({h.sd_id})
