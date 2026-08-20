@@ -256,6 +256,32 @@ def _names_diverge(one_c: str, sd: str) -> bool:
     return len(a & b) * 2 < min(len(a), len(b))
 
 
+# С какой суммы расхождение по компоненту считается значимым.
+COMPONENT_MIN = 500
+
+
+def _component_gaps(row: dict, comp: dict) -> list[dict]:
+    """Расхождение по каждому компоненту отдельно: 1С против SalesDoc.
+
+    Знак везде один — «1С минус SalesDoc», — поэтому компоненты складываются
+    в разницу долга: долг = реализации − возвраты − оплаты, значит
+    `разница долга = разрыв по реализациям − разрыв по возвратам − разрыв по
+    оплатам`. Это и позволяет находить взаимно гасящиеся ошибки: баланс сошёлся,
+    а внутри обе стороны неверны.
+    """
+    sd_sales = _sd_component(comp["sales"], row["sd_id"], row["code_1C"])
+    sd_ret = _sd_component(comp["returns"], row["sd_id"], row["code_1C"])
+    sd_pay = _sd_component(comp["payments"], row["sd_id"], row["code_1C"])
+    return [
+        {"name": "реализации", "one_c": round(row["our_sales"], 2), "sd": sd_sales,
+         "diff": round(row["our_sales"] - sd_sales, 2)},
+        {"name": "возвраты", "one_c": round(row["our_returns"], 2), "sd": sd_ret,
+         "diff": round(row["our_returns"] - sd_ret, 2)},
+        {"name": "оплаты", "one_c": round(row["our_pay"], 2), "sd": sd_pay,
+         "diff": round(row["our_pay"] - sd_pay, 2)},
+    ]
+
+
 def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
     """Короткий ярлык причины для колонки: одно-два слова — «реализации»,
     «возврат», «оплата» (или их сочетание). Если компоненты совпадают, но долг
@@ -322,7 +348,8 @@ def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
         ("возврат", round(row["our_returns"] - sd_ret, 2)),
         ("оплата", round(row["our_pay"] - sd_pay, 2)),
     ]
-    sig = sorted((f for f in factors if abs(f[1]) >= 500), key=lambda f: -abs(f[1]))
+    sig = sorted((f for f in factors if abs(f[1]) >= COMPONENT_MIN),
+                 key=lambda f: -abs(f[1]))
     if sig:
         return "warn", " · ".join(name for name, _ in sig)
     # Компоненты совпали, а долг расходится: баланс SD не отражает операции
@@ -598,6 +625,10 @@ def reconcile_debt(
     # точки в отфильтрованный список не попадают. Их масштаб виден только по
     # полному списку.
     hidden_rows: list[dict] = []
+    # Точки, у которых ДОЛГ сошёлся, а компоненты — нет. Две ошибки гасят друг
+    # друга (не проведена реализация и не проведена оплата на ту же сумму), и
+    # в обычном списке такая строка выглядит здоровой. Считаем отдельно.
+    offset_rows: list[dict] = []
     if with_reason and salesdoc_mirror.status(db)["ready"]:
         df, dt = salesdoc.reason_window()
         comp = salesdoc_mirror.reconcile_components(
@@ -608,6 +639,18 @@ def reconcile_debt(
             lvl, txt = _diagnose_reason(r, comp)
             r["reason_level"] = lvl
             r["reason"] = txt
+            if r["in_1c"] and r["in_sd"]:
+                gaps = [g for g in _component_gaps(r, comp)
+                        if abs(g["diff"]) >= COMPONENT_MIN]
+                if gaps and abs(r["diff"]) < 0.5:
+                    offset_rows.append({
+                        "name": r["name"], "sd_id": r["sd_id"],
+                        "sd_name": r.get("sd_name"),
+                        "organization": r.get("organization"),
+                        "debt": r["our_debt"],
+                        "worst": max(abs(g["diff"]) for g in gaps),
+                        "gaps": gaps,
+                    })
             if r["in_sd"] and r["in_1c"] and r.get("sd_hidden", 0) >= 500:
                 hidden_rows.append({
                     "name": r["name"],
@@ -619,6 +662,7 @@ def reconcile_debt(
                     "reason": txt,
                 })
         hidden_rows.sort(key=lambda x: -x["amount"])
+        offset_rows.sort(key=lambda x: -x["worst"])
 
     if only_diff:
         rows = [r for r in rows if abs(r["diff"]) >= 0.5]
@@ -645,6 +689,12 @@ def reconcile_debt(
         "unmapped_stores": _unmapped_stores(db),
         # Документы, которые SalesDoc учитывает в балансе, но не отдаёт в
         # выгрузке. Считается по всем точкам, а не только по видимым в списке.
+        # Баланс сошёлся, а операции — нет: взаимно гасящиеся ошибки.
+        "offset": {
+            "clients": len(offset_rows),
+            "worst": round(max((o["worst"] for o in offset_rows), default=0.0), 2),
+            "top": offset_rows[:30],
+        },
         "hidden": {
             "clients": len(hidden_rows),
             "amount": round(sum(h["amount"] for h in hidden_rows), 2),

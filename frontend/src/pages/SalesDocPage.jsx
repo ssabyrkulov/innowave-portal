@@ -546,8 +546,71 @@ export default function SalesDocPage() {
         </>
       )}
 
+      {debt?.offset?.clients > 0 && <OffsetPanel offset={debt.offset} />}
+
       {detail && (
         <ReconcileDetailModal row={detail} onClose={() => setDetail(null)} />
+      )}
+    </div>
+  )
+}
+
+/* Точки, у которых ДОЛГ сошёлся, а операции — нет. Самый неприятный случай:
+   две ошибки гасят друг друга (не проведена реализация и не проведена оплата
+   на ту же сумму), сальдо совпадает, и в обычном списке строка выглядит
+   здоровой. Найти её можно только сравнив компоненты по отдельности. */
+function OffsetPanel({ offset }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="note-readonly sd-warn sd-offset">
+      <b>Баланс сходится, а операции — нет: {offset.clients} точек.</b>{' '}
+      Долг совпал с точностью до сома, но реализации, возвраты или оплаты
+      расходятся — значит ошибки в двух местах взаимно погасились. Сальдо
+      верное, обороты нет: такие точки не видны ни в «только расхождения», ни
+      по колонке «Причина». Наибольшее расхождение — {money(offset.worst)}.{' '}
+      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
+        {open ? 'Свернуть' : 'Показать точки'}
+      </button>
+      {open && (
+        <div className="table-wrap rc-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Точка</th><th>Что разошлось</th>
+                <th className="num">1С</th><th className="num">SalesDoc</th>
+                <th className="num">Разница</th>
+              </tr>
+            </thead>
+            <tbody>
+              {offset.top.map((o) => (
+                o.gaps.map((g, j) => (
+                  <tr key={o.sd_id + g.name}>
+                    {j === 0 && (
+                      <td rowSpan={o.gaps.length}>
+                        {o.name}
+                        {o.sd_name && o.sd_name !== o.name && (
+                          <div className="rc-note">в SalesDoc: {o.sd_name}</div>
+                        )}
+                      </td>
+                    )}
+                    <td>{g.name}</td>
+                    <td className="num">{money(g.one_c)}</td>
+                    <td className="num">{money(g.sd)}</td>
+                    <td className={`num ${cls(g.diff)}`}>{money(g.diff)}</td>
+                  </tr>
+                ))
+              ))}
+            </tbody>
+          </table>
+          <p className="muted">
+            Знак везде «1С минус SalesDoc». Компоненты складываются в разницу
+            долга: реализации − возвраты − оплаты. Здесь эта сумма равна нулю —
+            потому строки и не попали в список расхождений.
+          </p>
+          {offset.clients > offset.top.length && (
+            <p className="muted">Показаны первые {offset.top.length} из {offset.clients}.</p>
+          )}
+        </div>
       )}
     </div>
   )
