@@ -2542,10 +2542,14 @@ function HiddenOrdersProbePanel() {
   const [loading, setLoading] = useState(false)
   const [sdId, setSdId] = useState('y8_96')
   const [number, setNumber] = useState('161')
+  // Перебор агентов — самая долгая часть: это отдельная выгрузка журнала на
+  // каждого. По умолчанию выключен, чтобы быстрые проверки (статусы, филиал,
+  // номер) не приходилось ждать минутами.
+  const [withAgents, setWithAgents] = useState(false)
 
   function load() {
     setLoading(true); setError(null)
-    api.salesdocHiddenOrdersProbe({ sd_id: sdId.trim(), number: number.trim() })
+    api.salesdocHiddenOrdersProbe({ sd_id: sdId.trim(), number: number.trim(), withAgents })
       .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
   }
 
@@ -2563,6 +2567,11 @@ function HiddenOrdersProbePanel() {
       return 'Нашлось: без подстановки филиала документов больше — причина в филиале.'
     const found = (data.by_number?.варианты || []).find((v) => v.count > 0)
     if (found) return `Документ нашёлся поиском по номеру (${found.shape}) — значит дело в фильтрах запроса, а не в видимости.`
+    const ag = data.by_agent || {}
+    if (ag['фильтр по агенту работает'] === false)
+      return 'Ключ agent сервер игнорирует: выдача с фильтром по агенту и без него одинаковая. Проверить версию про деактивированных агентов через API нельзя — вопрос в поддержку SalesDoc.'
+    if ((ag['фильтр по агенту дал новых документов'] ?? 0) > 0)
+      return `Нашлось: запрос по конкретному агенту вернул ${ag['фильтр по агенту дал новых документов']} документов, которых нет в общей выдаче. Версия про агентов подтверждена — синхронизацию можно чинить у нас, поагентно.`
     return 'Ни один вариант не вернул скрытые документы: остаётся версия про видимость (права токена / деактивированный агент) — вопрос в поддержку SalesDoc.'
   })()
 
@@ -2579,16 +2588,28 @@ function HiddenOrdersProbePanel() {
             с 1С до сома — значит документы у него <b>есть</b>, но <code>getOrder</code>
             их не возвращает (984 160 KGS, 6 реализаций). Зонд перебирает подозреваемых:
             статусы по одному, филиал, поиск по номеру, сырые возвраты со ссылкой
-            на родительский заказ. Только чтение.</p>
+            на родительский заказ. Только чтение. Окно — год: зонд гоняет журнал
+            заказов больше десятка раз, и на трёх годах это минуты ожидания.</p>
           <div className="rc-period">
             <input className="filter-select" value={sdId}
               placeholder="SD_id клиента" onChange={(e) => setSdId(e.target.value)} />
             <input className="filter-select" value={number}
               placeholder="номер скрытого документа" onChange={(e) => setNumber(e.target.value)} />
+            <label className="muted" title="Отдельная выгрузка журнала на каждого агента — самая долгая часть зонда">
+              <input type="checkbox" checked={withAgents}
+                onChange={(e) => setWithAgents(e.target.checked)} />{' '}
+              перебрать агентов (долго)
+            </label>
             <button className="btn btn-sm" onClick={load} disabled={loading || !sdId.trim()}>
               {loading ? 'Опрашиваю…' : 'Запустить'}
             </button>
           </div>
+          {data?.seconds != null && (
+            <p className="muted">
+              Окно {data.date_from} … {data.date_to} · запросов к SalesDoc:{' '}
+              {data.requests} · {data.seconds} с
+            </p>
+          )}
           {error && <div className="error">{error}</div>}
           {verdict && <div className="rc-note"><b>Вывод:</b> {verdict}</div>}
           {data && (

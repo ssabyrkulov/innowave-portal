@@ -3479,6 +3479,9 @@ def hidden_orders_probe(
     sd_id: str = Query(default="", description="SD_id клиента, например y8_96"),
     code_1c: str = Query(default="", description="код 1С клиента"),
     number: str = Query(default="", description="номер заведомо скрытого документа"),
+    date_from: date | None = Query(default=None, description="начало окна (по умолчанию год назад)"),
+    date_to: date | None = Query(default=None, description="конец окна"),
+    with_agents: bool = Query(default=True, description="перебирать агентов (дольше всего)"),
 ):
     """Почему SalesDoc не отдаёт часть реализаций (см. docs/SD_НЕВИДИМЫЕ_ДОКУМЕНТЫ.md).
 
@@ -3504,14 +3507,24 @@ def hidden_orders_probe(
     _require_configured()
     if not sd_id and not code_1c:
         raise HTTPException(status_code=400, detail="Нужен sd_id или code_1c клиента")
-    df, dt = salesdoc.reason_window()
+    # Окно намеренно НЕ трёхлетнее. Зонд гоняет журнал заказов десятки раз
+    # (статусы по одному, филиал, номера, агенты), и на трёх годах это
+    # десятки полных выгрузок — ждать приходится минутами. Год покрывает все
+    # известные случаи скрытых документов, а если нужен более ранний период,
+    # его можно задать явно.
+    today = date.today()
+    df = (date_from or (today - timedelta(days=365))).isoformat()
+    dt = (date_to or (today + timedelta(days=30))).isoformat()
     period = {"period": {"date": {"from": df, "to": dt}}}
+    calls = {"n": 0}
+    started = time.time()
     out: dict = {"sd_id": sd_id, "code_1c": code_1c,
                  "date_from": df, "date_to": dt}
 
     def count_orders(params: dict, with_filial: bool = True) -> dict:
         """Сколько заказов вернул запрос всего и сколько из них этого клиента."""
         try:
+            calls["n"] += 1
             rows = salesdoc.call_all_ex("getOrder", ("orders", "order"), params,
                                         with_filial=with_filial)
         except salesdoc.SalesDocError as e:
@@ -3600,21 +3613,29 @@ def hidden_orders_probe(
     # заказы с явным указанием агента — по каждому. Если при явном фильтре
     # документы уволенного появляются, версия подтверждается И у неё есть
     # обход: тянуть заказы поагентно. Если нет — версия неверна.
+    if not with_agents:
+        out["by_agent"] = {"skipped": "перебор агентов выключен"}
+        out["requests"] = calls["n"]
+        out["seconds"] = round(time.time() - started, 1)
+        return out
     try:
         agents = salesdoc.call_all_ex("getAgent", ("agent", "agents"))
     except salesdoc.SalesDocError as e:
         agents = []
         out["agents_error"] = str(e)[:160]
-    base_ids = set()
+    base_ids, base_scanned = set(), None
     try:
-        for o in salesdoc.call_all_ex(
-                "getOrder", ("orders", "order"),
-                {"filter": {"include": "all", "status": [1, 2, 3, 4, 5], **period}}):
+        calls["n"] += 1
+        base = salesdoc.call_all_ex(
+            "getOrder", ("orders", "order"),
+            {"filter": {"include": "all", "status": [1, 2, 3, 4, 5], **period}})
+        base_scanned = len(base)
+        for o in base:
             if salesdoc.client_matches(o.get("client"), sd_id, code_1c):
                 base_ids.add(str(o.get("SD_id") or o.get("CS_id")))
     except salesdoc.SalesDocError:
         pass
-    sweep = []
+    sweep, ignored = [], False
     for a in agents:
         aid = str(a.get("SD_id") or "").strip()
         if not aid:
@@ -3623,11 +3644,21 @@ def hidden_orders_probe(
         params = {"filter": {"include": "all", "status": [1, 2, 3, 4, 5],
                              "agent": aid, **period}}
         try:
+            calls["n"] += 1
             rows = salesdoc.call_all_ex("getOrder", ("orders", "order"), params)
         except salesdoc.SalesDocError as e:
             sweep.append({"agent": a.get("name"), "sd_id": aid,
                           "active": act, "error": str(e)[:120]})
             continue
+        # Если сервер вернул РОВНО столько же, сколько без фильтра, значит
+        # ключ `agent` он не понимает и молча игнорирует. Гонять из-за этого
+        # ещё двадцать полных выгрузок журнала бессмысленно — прекращаем.
+        if base_scanned is not None and len(rows) == base_scanned:
+            ignored = True
+            sweep.append({"agent": a.get("name"), "sd_id": aid, "active": act,
+                          "scanned": len(rows),
+                          "note": "выдача не изменилась — фильтр по агенту игнорируется"})
+            break
         mine = [o for o in rows
                 if salesdoc.client_matches(o.get("client"), sd_id, code_1c)]
         # Главное число: сколько документов этот запрос ДОБАВИЛ к тому, что
@@ -3645,6 +3676,8 @@ def hidden_orders_probe(
                          or o.get("totalSumma")} for o in extra[:5]],
         })
     out["by_agent"] = {
+        "фильтр по агенту работает": not ignored,
+        "заказов в выдаче без фильтра": base_scanned,
         "без фильтра по агенту": len(base_ids),
         "агентов в справочнике": len(agents),
         "из них уволенных": sum(1 for a in agents
@@ -3653,7 +3686,8 @@ def hidden_orders_probe(
             sum(x.get("новых сверх общего запроса", 0) for x in sweep),
         "по агентам": sorted(sweep, key=lambda x: -x.get("новых сверх общего запроса", 0)),
     }
-
+    out["requests"] = calls["n"]
+    out["seconds"] = round(time.time() - started, 1)
     return out
 
 
