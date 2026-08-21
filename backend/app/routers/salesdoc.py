@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..config import settings
 from ..database import get_db
 from ..deps import require_roles
 from ..services import salesdoc, salesdoc_mirror
