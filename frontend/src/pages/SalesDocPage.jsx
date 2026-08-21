@@ -2565,7 +2565,17 @@ function HiddenOrdersProbePanel() {
     const f = data.filial || {}
     if ((f['без филиала']?.client_rows ?? 0) > (f['с филиалом']?.client_rows ?? 0))
       return 'Нашлось: без подстановки филиала документов больше — причина в филиале.'
-    const found = (data.by_number?.варианты || []).find((v) => v.count > 0)
+    // Ненулевой ответ на поиск по номеру ещё ничего не значит: если сервер
+    // ключ `number` не понимает, он вернёт свою выдачу по умолчанию. Узнаём
+    // это по совпадению с запросом БЕЗ ключа status — у него та же природа.
+    const noStatus = sweep.find((r) => r.status === 'без ключа status')
+    const nums = data.by_number?.варианты || []
+    const ignoredNumber = noStatus != null
+      && nums.length > 0
+      && nums.every((v) => v.count === noStatus.scanned)
+    if (ignoredNumber)
+      return `Ключ number сервер игнорирует: все четыре формы вернули по ${noStatus.scanned} записей — ровно столько же, сколько запрос вообще без фильтров. Документ по номеру не ищется, версия про фильтры запроса отпадает.`
+    const found = nums.find((v) => v.count > 0)
     if (found) return `Документ нашёлся поиском по номеру (${found.shape}) — значит дело в фильтрах запроса, а не в видимости.`
     const ag = data.by_agent || {}
     if (ag['фильтр по агенту работает'] === false)
