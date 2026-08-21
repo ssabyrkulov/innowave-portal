@@ -2560,6 +2560,12 @@ function HiddenOrdersProbePanel() {
   const best = sweep.reduce((a, r) => (r.client_rows > (a?.client_rows ?? -1) ? r : a), null)
   const verdict = (() => {
     if (!data) return null
+    // Перебор агентов — решающий опыт, поэтому его вывод идёт первым.
+    const ag0 = data.by_agent || {}
+    if (ag0['фильтр по агенту работает'] === false)
+      return 'Ключ agent сервер игнорирует: запрос с фильтром по агенту вернул ровно ту же выдачу, что и без него. Проверить версию про деактивированных агентов через API невозможно.'
+    if ((ag0['фильтр по агенту дал новых документов'] ?? 0) > 0)
+      return `Нашлось: запрос по конкретному агенту вернул ${ag0['фильтр по агенту дал новых документов']} документов, которых нет в общей выдаче. Версия про агентов подтверждена — чиним у себя, синхронизацией поагентно.`
     if (best && ours && best.client_rows > ours.client_rows)
       return `Нашлось: статус «${best.status}» отдаёт ${best.client_rows} реализаций вместо ${ours.client_rows}. Причина — фильтр статусов.`
     const f = data.filial || {}
@@ -2665,7 +2671,44 @@ function HiddenOrdersProbePanel() {
                   </table>
                 </>
               )}
-              <h4>Сырые возвраты клиента</h4>
+              {data.by_agent && !data.by_agent.skipped && (
+            <>
+              <h4>Перебор по агентам</h4>
+              <div className="an-grid">
+                <AnRow label="Фильтр по агенту работает"
+                  value={data.by_agent['фильтр по агенту работает'] ? 'да' : 'нет — сервер его игнорирует'}
+                  warn={!data.by_agent['фильтр по агенту работает']} />
+                <AnRow label="Заказов в выдаче без фильтра"
+                  value={String(data.by_agent['заказов в выдаче без фильтра'] ?? '—')} />
+                <AnRow label="Документов клиента без фильтра"
+                  value={String(data.by_agent['без фильтра по агенту'] ?? '—')} />
+                <AnRow label="Агентов в справочнике"
+                  value={`${data.by_agent['агентов в справочнике']} · уволенных ${data.by_agent['из них уволенных']}`} />
+                <AnRow label="Фильтр по агенту дал новых документов"
+                  value={String(data.by_agent['фильтр по агенту дал новых документов'] ?? 0)}
+                  warn={(data.by_agent['фильтр по агенту дал новых документов'] ?? 0) > 0} />
+              </div>
+              <table className="table">
+                <thead>
+                  <tr><th>Агент</th><th>Работает</th><th className="num">Всего в выдаче</th>
+                    <th className="num">Строк клиента</th><th className="num">Новых</th><th>Примечание</th></tr>
+                </thead>
+                <tbody>
+                  {(data.by_agent['по агентам'] || []).map((a) => (
+                    <tr key={a.sd_id}>
+                      <td>{a.agent} <span className="muted">{a.sd_id}</span></td>
+                      <td>{a.active ? 'да' : 'уволен'}</td>
+                      <td className="num">{a.scanned ?? '—'}</td>
+                      <td className="num">{a.client_rows ?? '—'}</td>
+                      <td className="num">{a['новых сверх общего запроса'] ?? '—'}</td>
+                      <td className="muted">{a.note || a.error || ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+          <h4>Сырые возвраты клиента</h4>
               <p className="muted">Ищем в них ссылку на родительскую реализацию —
                 это и будет идентификатор скрытого документа.</p>
               <pre className="order-raw-json">{JSON.stringify(data.defects_raw, null, 2)}</pre>
