@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
 from .config import settings
-from .database import Base, engine
+from .database import Base, database_url, engine
 from .routers import (
     agents,
     auth,
@@ -99,6 +99,10 @@ def wait_for_db(attempts: int = 40, base_delay: float = 2.0) -> None:
     стартует (см. on_startup) и не уходит в бесконечный перезапуск.
     """
     print(f"[startup] Подключаюсь к БД: {db_target()}", flush=True)
+    if database_url.startswith("sqlite"):
+        print("[startup] ВНИМАНИЕ: база — SQLite внутри контейнера. Она "
+              "пересоздаётся при каждом деплое, все данные портала теряются. "
+              "Задайте DATABASE_URL на сервере.", flush=True)
     last_err: Exception | None = None
     for i in range(attempts):
         try:
@@ -280,6 +284,13 @@ def health():
         # Видно, поднялась ли база: при обслуживании сервис жив, db=false.
         "db": db_state["ready"],
         "db_error": db_state["error"],
+        # К какой именно базе подключён сервис и переживёт ли она деплой.
+        # Без DATABASE_URL приложение молча берёт SQLite-файл внутри
+        # контейнера, а контейнер пересоздаётся при каждой выкладке: данные
+        # обнуляются, и понять это можно было только по обнулившимся счётчикам
+        # в журнале загрузок.
+        "db_target": db_target(),
+        "db_persistent": not database_url.startswith("sqlite"),
         "modules": modules,
     }
 
