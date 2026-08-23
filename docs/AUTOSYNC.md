@@ -181,6 +181,102 @@ function resendAll() {
 
 function syncNewFiles() {
   const props = PropertiesService.getScriptProperties();
+  let seen = 0, sent = 0, known = 0, failed = 0;
+  const notSent = [];
+
+  FOLDERS.forEach(function (folder) {
+    // Имена собираем заранее и грузим по одному через getFilesByName.
+    // Итератор getFiles() держит соединение с Drive всё время прогона, а
+    // прогон идёт минуты: на длинных пачках он молча терял часть файлов —
+    // из 36 налоговых Хайджина доходило 19, и в логе не было ни ошибки,
+    // ни строки о пропуске.
+    const names = [];
+    const it = DriveApp.getFolderById(folder.id).getFiles();
+    while (it.hasNext()) names.push(it.next().getName());
+    names.sort();
+
+    const tag = '[' + folder.org + '/' + (folder.ledger || 'upr') + '] ';
+    names.forEach(function (name) {
+      const found = DriveApp.getFolderById(folder.id).getFilesByName(name);
+      if (!found.hasNext()) { notSent.push(name + ' — исчез из папки'); return; }
+      const f = found.next();
+      if (!isExcel(f)) { notSent.push(name + ' — не Excel'); return; }
+      seen++;
+
+      const key = 'sent_' + folder.org + '_' + (folder.ledger || 'upr') + '_' + f.getId();
+      const mod = String(f.getLastUpdated().getTime());
+      if (props.getProperty(key) === mod) { known++; return; }  // не менялся
+
+      try {
+        const res = UrlFetchApp.fetch(ENDPOINT, {
+          method: 'post',
+          headers: { Authorization: 'Bearer ' + TOKEN },
+          // fname — имя файла отдельным полем (кириллица в заголовке multipart
+          // портится); org — фирма; ledger — контур (управленка/налоговая).
+          payload: { file: f.getBlob(), fname: name, org: folder.org,
+                     ledger: folder.ledger || 'upr' },
+          muteHttpExceptions: true,
+        });
+        const code = res.getResponseCode();
+        if (code === 200) {
+          props.setProperty(key, mod); // запомнили — файл доставлен
+          sent++;
+          console.log(tag + name + ' -> ' + res.getContentText());
+        } else {
+          failed++;
+          notSent.push(name + ' — HTTP ' + code);
+          console.warn(tag + name + ' -> HTTP ' + code + ': ' + res.getContentText());
+          // не помечаем как отправленный — попробуем в следующий запуск
+        }
+      } catch (e) {
+        failed++;
+        notSent.push(name + ' — ' + e);
+        console.error(tag + name + ' -> ' + e);
+      }
+    });
+  });
+
+  // Итог прогона. Без него понять, что часть файлов не доехала, можно было
+  // только вручную сверив список лога со списком папки.
+  console.log('ИТОГ: файлов ' + seen + ' · отправлено ' + sent +
+              ' · без изменений ' + known + ' · ошибок ' + failed);
+  if (notSent.length) console.warn('НЕ ДОСТАВЛЕНЫ:\n' + notSent.join('\n'));
+}
+
+// Показать, что скрипт видит в папке (диагностика, ничего не отправляет).
+function checkFolder() {
+  FOLDERS.forEach(function (folder) {
+    const it = DriveApp.getFolderById(folder.id).getFiles();
+    const excel = [], other = [];
+    while (it.hasNext()) {
+      const f = it.next();
+      (isExcel(f) ? excel : other).push(f.getName());
+    }
+    excel.sort(); other.sort();
+    console.log('ВСЕГО файлов: ' + (excel.length + other.length) +
+                ' | Excel: ' + excel.length + ' | пропускается: ' + other.length);
+    if (other.length) console.log('НЕ Excel:\n' + other.join('\n'));
+    for (var i = 0; i < excel.length; i += 40) {
+      console.log('Excel ' + (i + 1) + '–' + Math.min(i + 40, excel.length) + ':\n' +
+                  excel.slice(i, i + 40).join('\n'));
+    }
+  });
+}
+
+// Забыть, что уже отправлено, и прислать ВСЕ файлы заново.
+// Нужно, если данные на портале чистили или восстанавливали из копии:
+// обычный прогон шлёт только изменившиеся файлы, поэтому после очистки
+// база осталась бы без тех выгрузок, которые скрипт считает доставленными.
+// Повторная отправка безопасна: импортёры заменяют снапшот или отбивают
+// дубли по деловым значениям, задвоения не будет.
+function resendAll() {
+  PropertiesService.getScriptProperties().deleteAllProperties();
+  console.log('Память очищена, отправляю всё заново.');
+  syncNewFiles();
+}
+
+function syncNewFiles() {
+  const props = PropertiesService.getScriptProperties();
 
   FOLDERS.forEach(function (folder) {
     const files = DriveApp.getFolderById(folder.id).getFiles();
