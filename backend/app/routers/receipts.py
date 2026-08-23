@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .. import models, onec
+from ..services import xlsx
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 
@@ -30,7 +31,10 @@ admin_only = require_roles(models.Role.admin)
 # Курс хранится в каждой строке и правится вручную в интерфейсе.
 DEFAULT_RATES = {"KGS": 1.0, "USD": 87.0, "EUR": 95.0, "RUB": 1.1, "KZT": 0.17}
 
-HEADERS = {"Дата": "date", "Сумма": "amount", "Валюта": "currency",
+# В новом формате выгрузок сумма документа называется «СуммаДокумента»
+# (а в строках расшифровки — «СуммаПлатежа»); «Сумма» осталась от старого.
+HEADERS = {"Дата": "date", "Сумма": "amount", "СуммаДокумента": "amount",
+           "СуммаПлатежа": "amount", "Валюта": "currency",
            "Контрагент": "payer", "ВидОперации": "operation",
            # Необязательная колонка обновлённых выгрузок 1С: GUID документа.
            "ДокументGUID": "doc_guid",
@@ -60,6 +64,17 @@ def _hash(d: dict, occurrence: int, org: str = models.DEFAULT_ORG) -> str:
     # повтора на случай полностью идентичных строк выгрузки.
     key = "|".join(str(d[f]) for f in ("src_dt", "amount", "currency", "payer", "operation"))
     return hashlib.sha256(f"{org}|{key}#{occurrence}".encode()).hexdigest()
+
+
+def _biz_key(date, amount, currency, payer, operation) -> tuple:
+    """Ключ «та же самая оплата» по значениям, которые лежат в базе.
+
+    Время сюда не входит намеренно: в файле оно записано по-разному в
+    зависимости от версии выгрузки, а в базе его нет вовсе. Повторы одного дня
+    на одну сумму различаются порядковым номером на стороне вызывающего кода.
+    """
+    return (date, round(float(amount or 0), 2), (currency or "").strip(),
+            (payer or "").strip(), (operation or "").strip())
 
 
 def _normalize(name: str) -> str:
@@ -100,7 +115,7 @@ def import_receipts_workbook(
     """
     org = models.normalize_org(org)
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        wb = xlsx.load_workbook(content)
     except Exception:
         raise HTTPException(status_code=400, detail="Не удалось открыть файл Excel")
 
@@ -182,14 +197,42 @@ def import_receipts_workbook(
         db.flush()
 
     existing = {h for (h,) in db.query(models.Receipt.row_hash).all()}
-    seen, added, skipped = set(), 0, 0
+    # Второй ключ — по деловым значениям, а не по хешу. Нужен на переходе со
+    # старого формата выгрузок на новый: хеш строится из ДАТЫ СО ВРЕМЕНЕМ,
+    # взятой из файла КАК СТРОКА, а форматы записи времени разные —
+    # «11.12.2025 4:36:57» против «11.12.2025 04:36:57». Строки разные, хеши
+    # разные, и без этого ключа 638 уже загруженных оплат приехали бы вторыми
+    # экземплярами. Пересчитать старые хеши нельзя: время в базе не хранится,
+    # только дата. Зато дата, сумма, плательщик и вид операции хранятся —
+    # по ним и узнаём «эту оплату мы уже видели».
+    prior: dict[tuple, list] = defaultdict(list)
+    for r in db.query(models.Receipt).filter(models.Receipt.organization == org).all():
+        prior[_biz_key(r.date, float(r.amount or 0), r.currency or "",
+                       r.payer or "", r.operation or "")].append(r)
+
+    seen, added, skipped, adopted = set(), 0, 0, 0
     occurrences: dict[str, int] = defaultdict(int)
+    biz_used: dict[tuple, int] = defaultdict(int)
     for p in parsed_rows:
         base = "|".join(str(p[f]) for f in ("src_dt", "amount", "currency", "payer", "operation"))
         occurrences[base] += 1
         h = _hash(p, occurrences[base], org)
         p = {k: v for k, v in p.items() if k != "src_dt"}
         if h in existing or h in seen:
+            skipped += 1
+            continue
+        bk = _biz_key(p["date"], p["amount"], p["currency"], p["payer"], p["operation"])
+        same = prior.get(bk) or []
+        if biz_used[bk] < len(same):
+            # Строка уже есть в базе, просто под хешем старого формата.
+            # Не задваиваем, а дописываем то, чего у старой записи не было:
+            # GUID документа 1С — тот самый ключ, которого не хватало для
+            # точной сверки с SalesDoc.
+            row = same[biz_used[bk]]
+            biz_used[bk] += 1
+            if p.get("doc_guid") and not row.doc_guid:
+                row.doc_guid = p["doc_guid"]
+                adopted += 1
             skipped += 1
             continue
         seen.add(h)
@@ -208,6 +251,8 @@ def import_receipts_workbook(
     return {
         "added": added,
         "skipped_duplicates": skipped,
+        # Сколько уже загруженных оплат получили ДокументGUID из нового формата.
+        "guid_backfilled": adopted,
         "skipped_not_posted": len(not_posted),
         "replaced_rows": replaced,
         "errors": errors,
@@ -489,7 +534,7 @@ def receivables(
     org: str = Query(default="all"),
 ):
     """Дебиторка: отгружено − возвраты − оплачено по каждому клиенту."""
-    from ..services import salesdoc_mirror
+    from ..services import salesdoc_mirror, xlsx
 
     sales = models.org_scope(db.query(models.Sale), models.Sale, org).all()
     receipts = models.org_scope(db.query(models.Receipt), models.Receipt, org).all()

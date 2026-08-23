@@ -230,6 +230,9 @@ class Expense(Base):
     kind: Mapped[str] = mapped_column(String, default="bank", nullable=False)  # bank|cash
     basis: Mapped[str | None] = mapped_column(String, nullable=True)  # Основание / ВидОперации
     doc_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    # GUID документа 1С — есть в новом формате выгрузок. Точный ключ сверки
+    # вместо совпадения по дате и сумме.
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

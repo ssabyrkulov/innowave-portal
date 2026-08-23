@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..services import xlsx
 from ..database import get_db
 from ..deps import get_current_user
 
@@ -138,7 +139,7 @@ def import_returns_workbook(
 ) -> dict:
     org = models.normalize_org(org)
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        wb = xlsx.load_workbook(content)
     except Exception:
         raise HTTPException(status_code=400, detail="Не удалось открыть файл Excel")
 

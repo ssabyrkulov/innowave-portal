@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..services import xlsx
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from .receipts import DEFAULT_RATES
@@ -34,6 +35,8 @@ HEADERS = {
     "Валюта": "currency",
     "ВалютаДокумента": "currency",
     "ВалютаДокументаНаименование": "currency",
+    # GUID документа 1С — в новом формате есть у всех денежных документов
+    "ДокументGUID": "doc_guid",
     # контрагент/получатель
     "Контрагент": "counterparty",
     "КонтрагентНаименование": "counterparty",
@@ -72,7 +75,7 @@ def import_expenses_workbook(
 ) -> dict:
     org = models.normalize_org(org)
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        wb = xlsx.load_workbook(content)
     except Exception:
         raise HTTPException(status_code=400, detail="Не удалось открыть файл Excel")
 
@@ -141,6 +144,7 @@ def import_expenses_workbook(
             "kind": kind,
             "basis": str(data.get("basis") or "").strip() or None,
             "doc_number": str(data.get("doc_number") or "").strip() or None,
+            "doc_guid": str(data.get("doc_guid") or "").strip() or None,
         })
 
     line_no = header_idx + 1
@@ -150,9 +154,23 @@ def import_expenses_workbook(
         process(row, line_no)
 
     existing = {h for (h,) in db.query(models.Expense.row_hash).all()}
+    # Тот же ключ по деловым значениям, что и в поступлениях: хеш включает
+    # дату со временем строкой из файла, а старый и новый форматы пишут время
+    # по-разному («4:36:57» против «04:36:57»). Без этого ключа переход на
+    # новый формат задвоил бы всю историю расходов.
+    def _bk(date_, amount, currency, counterparty, kind_, doc_number):
+        return (date_, round(float(amount or 0), 2), (currency or "").strip(),
+                (counterparty or "").strip(), (kind_ or "").strip(),
+                (doc_number or "").strip())
+
+    prior: dict[tuple, list] = defaultdict(list)
+    for r in db.query(models.Expense).filter(models.Expense.organization == org).all():
+        prior[_bk(r.date, r.amount, r.currency, r.counterparty, r.kind, r.doc_number)].append(r)
+
     seen: set[str] = set()
     occurrences: dict[str, int] = defaultdict(int)
-    added = skipped = 0
+    biz_used: dict[tuple, int] = defaultdict(int)
+    added = skipped = adopted = 0
     for p in parsed:
         base = "|".join(str(p[f]) for f in
                         ("src_dt", "amount", "currency", "counterparty", "kind", "doc_number"))
@@ -160,6 +178,17 @@ def import_expenses_workbook(
         h = hashlib.sha256(f"{org}|{base}#{occurrences[base]}".encode()).hexdigest()
         p = {k: v for k, v in p.items() if k != "src_dt"}
         if h in existing or h in seen:
+            skipped += 1
+            continue
+        bk = _bk(p["date"], p["amount"], p["currency"], p["counterparty"],
+                 p["kind"], p.get("doc_number"))
+        same = prior.get(bk) or []
+        if biz_used[bk] < len(same):
+            row = same[biz_used[bk]]
+            biz_used[bk] += 1
+            if p.get("doc_guid") and not getattr(row, "doc_guid", None):
+                row.doc_guid = p["doc_guid"]
+                adopted += 1
             skipped += 1
             continue
         seen.add(h)

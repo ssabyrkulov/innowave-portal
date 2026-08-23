@@ -22,8 +22,13 @@ HEADERS = {
     "Дата": "date",
     "Номер": "doc_number",
     "КонтрагентНаименование": "supplier",
+    "Контрагент": "supplier",
     "СкладНаименование": "warehouse",
+    "Склад": "warehouse",
     "НоменклатураНаименование": "product",
+    "Номенклатура": "product",
+    "ЕдИзм": "unit",
+    "Валюта": "currency",
     "Количество": "qty",
     "Цена": "price",
     "Сумма": "amount_kgs",
@@ -52,8 +57,10 @@ def import_purchases_workbook(db: Session, content: bytes, filename: str,
     header_idx, col = None, {}
     for i, row in enumerate(rows[:10]):
         names = {str(c).strip(): j for j, c in enumerate(row) if c}
-        if "КонтрагентНаименование" in names and "НоменклатураНаименование" in names \
-                and "Дата" in names:
+        # Имена колонок различаются в старом и новом формате выгрузок —
+        # ищем шапку по полям, а не по конкретным названиям.
+        got = {HEADERS[k] for k in names if k in HEADERS}
+        if {"supplier", "product", "date"} <= got:
             header_idx = i
             col = {HEADERS[k]: j for k, j in names.items() if k in HEADERS}
             break

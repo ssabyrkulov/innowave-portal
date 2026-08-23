@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Form, Header, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..services import xlsx
 from ..config import settings
 from ..database import get_db
 from ..deps import require_roles
@@ -96,6 +97,26 @@ def _robot_user(db: Session) -> models.User:
 # данных, которые тестировали с 1С. Грузим ТОЛЬКО каноничный, дубли-варианты
 # явно пропускаем, чтобы не задваивать выручку/возвраты.
 # Чтобы сменить каноничный файл — поправьте условия ниже.
+def org_from_name(filename: str) -> str | None:
+    """Фирма по имени файла: «Хайджин_…» / «Инновейв_…». None — не понять.
+
+    Раньше фирму определяла только папка Drive. Это работало, пока папок было
+    две, но выгрузки четырёх баз лежат в одной, а фирма написана в имени файла
+    первым словом. Имя надёжнее папки ещё и потому, что файл, случайно
+    положенный не туда, уедет в чужую фирму молча, а по имени приедет куда
+    назван.
+
+    Важно: «Хайджин» проверяем ПЕРВЫМ. Полное название фирмы — «Инновейв
+    Хайджин», и по подстроке «инновейв» она бы досталась второй фирме.
+    """
+    name = (filename or "").lower()
+    if "хайджин" in name or "hygiene" in name or "haydzhin" in name:
+        return "hygiene"
+    if "инновейв" in name or "innowave" in name or "innovejv" in name:
+        return "innowave"
+    return None
+
+
 def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None:
     """Тип выгрузки по имени файла — самый надёжный сигнал. None → sniff_kind.
 
@@ -143,6 +164,17 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # раньше денежного «поступления», иначе закупки грузились бы как оплаты.
     if has("поступлен", "postuplen") and has("товар", "tovar"):
         return "purchases"
+    # «Дополнительные расходы» — это себестоимость импорта (landed cost),
+    # привязанная к ГТД, а не выплата денег. Правило обязано стоять раньше
+    # общего «расход», иначе 294 строки по Хайджин уехали бы в денежные
+    # расходы и задвоили их.
+    if has("дополнительн", "dopolnitel") and has("расход", "rashod"):
+        return "unsupported"
+    # «Платёжный ордер списание ДС» — банковская операция, а не списание
+    # товаров. Правило обязано стоять раньше общего «спис», иначе документ
+    # уедет в товарный импортёр, где ждут номенклатуру и количество.
+    if has("ордер", "order") and has("списан", "spisan"):
+        return "expense"
     # Списание товаров: «ВыгрузкаСпис» и полное «Списание товаров». Правило
     # обязано стоять раньше блока неподдерживаемых — там «списан» до сих пор
     # значилось как вид без импортёра.
@@ -214,7 +246,7 @@ _PRODUCT_HEADERS = {"НоменклатураНаименование", "Ном�
 def _headers(content: bytes) -> set[str]:
     """Заголовки колонок из первых 20 строк книги (шапка бывает не в 1-й)."""
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        wb = xlsx.load_workbook(content)
     except Exception:
         return set()
     ws = wb[wb.sheetnames[0]]
@@ -302,6 +334,9 @@ async def inbox(
     # имени в заголовке multipart, где кириллица портится. Заголовок —
     # запасной вариант с попыткой восстановления.
     filename = fname or _recover_filename(file.filename or "file.xlsx")
+    # Фирма: сначала по имени файла, папка — запасной вариант. Так одна папка
+    # Drive обслуживает все базы, и перекладывать файлы не нужно.
+    org = models.normalize_org(org_from_name(filename) or org)
     # Имя файла — первичный сигнал; колонки — запасной для незнакомых имён.
     kind = classify_by_name(filename, org) or sniff_kind(content)
     if kind == "ignore":

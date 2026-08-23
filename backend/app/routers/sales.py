@@ -16,6 +16,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from .. import models, onec
+from ..services import xlsx
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 
@@ -26,11 +27,23 @@ admin_only = require_roles(models.Role.admin)
 
 # Заголовки колонок 1С → поля модели. Ищем по именам, а не по позициям,
 # чтобы перестановка колонок в выгрузке не ломала импорт.
+# Имена колонок 1С → поля модели. С августа 2026 выгрузки идут в новом
+# формате, где имена короткие: «Контрагент» вместо «КонтрагентНаименование»,
+# «Номенклатура» вместо «НоменклатураНаименование». Старые имена оставлены
+# намеренно — ими загружена вся история, и пока в базе есть такие строки,
+# файлы прежнего образца должны читаться наравне с новыми.
 HEADER_MAP = {
     "Дата": "date",
     "КонтрагентНаименование": "client",
+    "Контрагент": "client",
     "Склад": "warehouse",
+    "СкладНаименование": "warehouse",
     "НоменклатураНаименование": "product",
+    "Номенклатура": "product",
+    "ЕдИзм": "unit",
+    "Валюта": "currency",
+    "Ответственный": "responsible",
+    "ОтветственноеЛицо": "responsible",
     "Количество": "qty",
     "Цена": "price",
     "Сумма": "amount",
@@ -113,7 +126,7 @@ def parse_sales_workbook(content: bytes) -> tuple[list[dict], list[str]]:
     очисткой ошибочно загруженных возвратов.
     """
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        wb = xlsx.load_workbook(content)
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -275,7 +288,7 @@ def import_sales_docs_workbook(
     игнорировали."""
     org = models.normalize_org(org)
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        wb = xlsx.load_workbook(content)
     except Exception:
         raise HTTPException(status_code=400, detail="Не удалось открыть файл Excel")
 
