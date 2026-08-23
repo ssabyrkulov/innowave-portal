@@ -12,7 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
 from .config import settings
-from .database import Base, database_url, engine
+from . import models
+from .database import Base, SessionLocal, database_url, engine
 from .routers import (
     agents,
     auth,
@@ -165,11 +166,38 @@ def init_database() -> None:
     salesdoc_mirror.start_background_sync()
 
 
+def log_row_counts() -> None:
+    """Печатает количество строк в основных таблицах при каждом запуске.
+
+    Данные портала уже дважды обнулялись между прогонами автоприёма, и понять
+    это удалось только по счётчикам в чужом логе Google Apps Script — сам
+    сервис молчал. Со строкой в логе запуска видно, с чем сервис поднялся, и
+    момент пропажи можно привязать к конкретной выкладке или перезапуску.
+    """
+    tables = [
+        ("продажи", models.Sale), ("оплаты", models.Receipt),
+        ("расходы", models.Expense), ("возвраты", models.ReturnDoc),
+        ("закупки", models.Purchase), ("списания", models.WriteOff),
+        ("налоговая", models.TaxOperation), ("пользователи", models.User),
+        ("связки НАЛ↔УПР", models.TaxClientLink),
+        ("алиасы плательщиков", models.ClientAlias),
+    ]
+    parts = []
+    with SessionLocal() as db:
+        for label, model in tables:
+            try:
+                parts.append(f"{label} {db.query(model).count()}")
+            except Exception as err:  # noqa: BLE001 — диагностика не роняет старт
+                parts.append(f"{label} ? ({type(err).__name__})")
+    print("[startup] В базе: " + " · ".join(parts), flush=True)
+
+
 def startup_sequence() -> None:
     wait_for_db()
     init_database()
     db_state["ready"] = True
     db_state["error"] = None
+    log_row_counts()
     print("[startup] БД готова, сервис поднят", flush=True)
 
 
