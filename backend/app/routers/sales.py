@@ -235,6 +235,26 @@ def import_sales_workbook(
         )
         db.flush()
 
+    # --- Документные строки того же периода стали лишними ---
+    # Innowave раньше выгружалась документами: одна строка — один документ с
+    # итогом, номенклатура заменялась заглушкой DOC_SALE_PRODUCT. Новый пакет
+    # даёт ту же реализацию построчно. Хэши у них разные по определению, и
+    # без этой уборки выручка Innowave удваивалась: 636 построчных строк
+    # ложились поверх документных за тот же период.
+    superseded = 0
+    if parsed_rows:
+        dmin = min(p["date"] for p in parsed_rows)
+        dmax = max(p["date"] for p in parsed_rows)
+        superseded = (
+            db.query(models.Sale)
+            .filter(models.Sale.organization == org,
+                    models.Sale.product == models.DOC_SALE_PRODUCT,
+                    models.Sale.date >= dmin, models.Sale.date <= dmax)
+            .delete(synchronize_session=False)
+        )
+        if superseded:
+            db.flush()
+
     # --- Фаза 2: вставка с защитой от дублей (хэш учитывает организацию) ---
     existing_hashes = {h for (h,) in db.query(models.Sale.row_hash).all()}
     seen_in_file: set[str] = set()
@@ -266,6 +286,7 @@ def import_sales_workbook(
         # молчать о них нельзя: строки файла есть, а в учёт не пошли.
         "skipped_not_posted": len(not_posted),
         "replaced_rows": replaced,
+        "superseded_doc_rows": superseded,
         "errors": errors,
         "total_in_db": total,
     }

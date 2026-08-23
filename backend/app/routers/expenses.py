@@ -67,6 +67,31 @@ def _parse_date(value):
     return None
 
 
+def _drop_legacy_twins(db: Session, org: str) -> int:
+    """Убирает строки старого формата, у которых уже появился двойник нового.
+
+    Ключ дедупликации какое-то время включал номер документа, которого в
+    старой выгрузке не было. Пока это не исправили, один и тот же платёж
+    успел лечь в базу дважды: строка без номера и она же с номером. Пары
+    ищем по деловым значениям и удаляем ровно столько безномерных строк,
+    сколько нашлось номерных — если старый платёж пары не получил, он
+    остаётся нетронутым.
+    """
+    groups: dict[tuple, dict] = defaultdict(lambda: {"old": [], "new": []})
+    for r in db.query(models.Expense).filter(models.Expense.organization == org).all():
+        key = (r.date, round(float(r.amount or 0), 2), (r.currency or "").strip(),
+               (r.counterparty or "").strip(), (r.kind or "").strip())
+        groups[key]["new" if (r.doc_number or r.doc_guid) else "old"].append(r)
+    removed = 0
+    for g in groups.values():
+        for row in g["old"][:len(g["new"])]:
+            db.delete(row)
+            removed += 1
+    if removed:
+        db.flush()
+    return removed
+
+
 def import_expenses_workbook(
     db: Session, content: bytes, filename: str, user_id: int, kind: str = "bank",
     org: str = models.DEFAULT_ORG,
@@ -151,19 +176,25 @@ def import_expenses_workbook(
     for line_no, row in enumerate(rows_iter, start=line_no + 1):
         process(row, line_no)
 
-    existing = {h for (h,) in db.query(models.Expense.row_hash).all()}
-    # Тот же ключ по деловым значениям, что и в поступлениях: хеш включает
-    # дату со временем строкой из файла, а старый и новый форматы пишут время
-    # по-разному («4:36:57» против «04:36:57»). Без этого ключа переход на
-    # новый формат задвоил бы всю историю расходов.
-    def _bk(date_, amount, currency, counterparty, kind_, doc_number):
+    # Ключ по деловым значениям — тот же, что и в поступлениях. Хеш строки
+    # включает дату со временем прямо из файла, а форматы пишут время
+    # по-разному («4:36:57» против «04:36:57»), поэтому одного хеша мало.
+    #
+    # Номера документа в ключе НЕТ, и это принципиально: старая выгрузка
+    # расходов состояла из «Дата, Сумма, Валюта, Контрагент, ВидОперации» —
+    # колонки «Номер» в ней не было вовсе. С номером в ключе ни одна старая
+    # строка не сходилась с новой, и переход задваивал расходы: РКО Хайджина
+    # дал 611 новых строк из 821 вместо трёх десятков.
+    def _bk(date_, amount, currency, counterparty, kind_):
         return (date_, round(float(amount or 0), 2), (currency or "").strip(),
-                (counterparty or "").strip(), (kind_ or "").strip(),
-                (doc_number or "").strip())
+                (counterparty or "").strip(), (kind_ or "").strip())
 
+    removed_twins = _drop_legacy_twins(db, org)
+
+    existing = {h for (h,) in db.query(models.Expense.row_hash).all()}
     prior: dict[tuple, list] = defaultdict(list)
     for r in db.query(models.Expense).filter(models.Expense.organization == org).all():
-        prior[_bk(r.date, r.amount, r.currency, r.counterparty, r.kind, r.doc_number)].append(r)
+        prior[_bk(r.date, r.amount, r.currency, r.counterparty, r.kind)].append(r)
 
     seen: set[str] = set()
     occurrences: dict[str, int] = defaultdict(int)
@@ -178,8 +209,7 @@ def import_expenses_workbook(
         if h in existing or h in seen:
             skipped += 1
             continue
-        bk = _bk(p["date"], p["amount"], p["currency"], p["counterparty"],
-                 p["kind"], p.get("doc_number"))
+        bk = _bk(p["date"], p["amount"], p["currency"], p["counterparty"], p["kind"])
         same = prior.get(bk) or []
         if biz_used[bk] < len(same):
             row = same[biz_used[bk]]
@@ -204,6 +234,8 @@ def import_expenses_workbook(
     return {
         "added": added,
         "skipped_duplicates": skipped,
+        "guid_backfilled": adopted,
+        "legacy_twins_removed": removed_twins,
         "errors": errors,
         "total_in_db": db.query(models.Expense).count(),
     }
