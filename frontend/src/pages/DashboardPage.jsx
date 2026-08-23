@@ -172,6 +172,12 @@ function StockSourcesCard() {
                 ? ` · ${formatMoney(s[k].total_amount)}` : ''}
               {k === 'upr' && when(s[k].updated_at) ? ` · ${when(s[k].updated_at)}` : ''}
               {k === 'sd' && when(s[k].synced_at) ? ` · ${when(s[k].synced_at)}` : ''}
+              {k === 'sd' && s[k].unmapped_stores > 0 ? (
+                <div className="sc-bad">
+                  из них {fmt(s[k].unmapped_qty)} шт на {s[k].unmapped_stores} складах
+                  без привязки к фирме — они считаются обеим
+                </div>
+              ) : null}
             </div>
           </div>
         ))}

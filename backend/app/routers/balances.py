@@ -470,6 +470,14 @@ def stock_sources(
     store_ids = _store_ids_for_org(db, org)
     if store_ids:
         sd_q = sd_q.filter(models.SalesDocStock.store_sd_id.in_(store_ids))
+    # Склады без привязки к фирме попадают в обе — так задумано в сверке,
+    # чтобы отгрузки не исчезали молча. Но в остатках это значит, что одни и
+    # те же штуки видны и у Хайджина, и у Инновейва. Считаем их отдельно,
+    # чтобы в карточке было честно написано, сколько числа спорны.
+    mapped = {str(st.store_id).lower() for st in db.query(models.SalesDocStore).all()
+              if st.store_id and st.organization}
+    sd_unmapped_qty = 0.0
+    sd_unmapped_stores: set = set()
     for r in sd_q.all():
         # Код 1С точнее названия: позицию могли переименовать в одной системе
         # и не переименовать в другой.
@@ -477,7 +485,11 @@ def stock_sources(
         e = rows.get(key) if key else None
         if e is None:
             e = cell(r.product_name)
-        e["sd"] = (e["sd"] or 0.0) + float(r.quantity or 0)
+        qty = float(r.quantity or 0)
+        e["sd"] = (e["sd"] or 0.0) + qty
+        if str(r.store_sd_id or "").lower() not in mapped:
+            sd_unmapped_qty += qty
+            sd_unmapped_stores.add(r.store_sd_id)
 
     items = []
     for e in rows.values():
@@ -527,6 +539,8 @@ def stock_sources(
                 "available": any(i["sd"] is not None for i in items),
                 "total_qty": total("sd"),
                 "synced_at": synced,
+                "unmapped_stores": len(sd_unmapped_stores),
+                "unmapped_qty": round(sd_unmapped_qty, 1),
             },
         },
         "items": items,
