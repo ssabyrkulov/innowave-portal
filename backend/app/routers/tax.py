@@ -16,6 +16,7 @@ from collections import defaultdict
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -277,6 +278,18 @@ def import_tax_workbook(db: Session, content: bytes, filename: str,
         models.TaxOperation.organization == org,
         models.TaxOperation.kind == kind,
         models.TaxOperation.source == source,
+    ).delete(synchronize_session=False)
+    # Наследство старого формата. Файлы со скобочными именами
+    # («[Hygiene][NAL][Realizaciya tovarov i uslug]») новый разбор уже не
+    # принимает, но строки от них лежат в базе с пустым источником: колонка
+    # появилась вместе с новым пакетом. Оставить их рядом с новыми — значит
+    # задвоить налоговые реализации в сверке, поэтому первый же файл нового
+    # формата убирает старый снапшот своего вида.
+    db.query(models.TaxOperation).filter(
+        models.TaxOperation.organization == org,
+        models.TaxOperation.kind == kind,
+        or_(models.TaxOperation.source.is_(None),
+            models.TaxOperation.source.like("%[%")),
     ).delete(synchronize_session=False)
     for p in parsed:
         db.add(models.TaxOperation(organization=org, **p))
