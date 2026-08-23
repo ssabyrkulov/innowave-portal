@@ -46,10 +46,11 @@ def import_writeoffs_workbook(db: Session, content: bytes, filename: str,
     """Импорт списаний. Файл выгружается за всю историю, поэтому загрузка
     заменяет данные организации целиком; сначала разбор, потом замена —
     битый файл не может стереть данные."""
-    from .tax import _load_wb, _day, _num  # та же читалка с починкой архива 1С
+    from ..services import xlsx  # читалка с починкой архива 1С ред. 1.7
+    from .tax import _day, _num
 
     org = models.normalize_org(org)
-    wb = _load_wb(content)
+    wb = xlsx.load_workbook(content)
     ws = wb[wb.sheetnames[0]]
     rows = [list(r) for r in ws.iter_rows(values_only=True)]
 

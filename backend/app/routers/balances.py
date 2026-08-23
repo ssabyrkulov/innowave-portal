@@ -57,11 +57,26 @@ def import_cash_balances_workbook(
 ) -> dict:
     org = models.normalize_org(org)
     rows = _load_rows(content)
-    header_idx = None
+    # Два формата выгрузки. Старый — две колонки «Касса_Банк / СуммаОстаток».
+    # Новый — «Счет | Место хранения | KGS | USD | RUB | Итого, сом»: остаток
+    # разложен по валютам, а сомовый эквивалент лежит в «Итого, сом». Именно
+    # он и нужен: касса в долларах на −6 500 USD — это −568 425 сом, и по
+    # валютной колонке остаток был бы посчитан как шесть с половиной тысяч.
+    header_idx, name_col, amount_col = None, 0, 1
     for i, row in enumerate(rows[:20]):
-        cells = {str(c).strip() for c in row if c is not None}
-        if "Касса_Банк" in cells and "СуммаОстаток" in cells:
+        cells = [str(c).strip() if c is not None else "" for c in row]
+        cset = {c for c in cells if c}
+        if "Касса_Банк" in cset and "СуммаОстаток" in cset:
             header_idx = i
+            name_col = cells.index("Касса_Банк")
+            amount_col = cells.index("СуммаОстаток")
+            break
+        total = next((j for j, c in enumerate(cells)
+                      if c.lower().startswith("итого")), None)
+        if "Место хранения" in cset and total is not None:
+            header_idx = i
+            name_col = cells.index("Место хранения")
+            amount_col = total
             break
     if header_idx is None:
         raise HTTPException(status_code=400, detail="Не найдены колонки остатков денег")
@@ -70,12 +85,18 @@ def import_cash_balances_workbook(
     # выгрузка стёрла бы остатки денег.
     parsed: list[tuple[str, float]] = []
     for row in rows[header_idx + 1:]:
-        if not row or row[0] is None:
+        if not row or name_col >= len(row) or row[name_col] is None:
             continue
-        amount = _num(row[1] if len(row) > 1 else None)
+        account = str(row[name_col]).strip()
+        # Новая выгрузка заканчивается строкой «ИТОГО». Сейчас она отсеивается
+        # сама (место хранения там пусто), но если 1С однажды его заполнит,
+        # итог приедет восьмым счётом и удвоит все деньги на портале.
+        if account.lower().startswith(("итого", "всего")):
+            continue
+        amount = _num(row[amount_col] if amount_col < len(row) else None)
         if amount is None:
             continue
-        parsed.append((str(row[0]).strip(), amount))
+        parsed.append((account, amount))
 
     if not parsed:
         db.add(models.ImportLog(
