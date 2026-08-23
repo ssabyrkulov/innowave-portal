@@ -28,10 +28,8 @@ from .expenses import import_expenses_workbook
 from .receipts import import_receipts_workbook
 from .returns import import_return_lines_workbook, import_returns_workbook
 from .sales import (
-    _row_hash,
     import_sales_docs_workbook,
     import_sales_workbook,
-    parse_sales_workbook,
 )
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
@@ -131,14 +129,14 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     def has(*tokens: str) -> bool:
         return any(t in name for t in tokens)
 
-    # Налоговый контур портал пока не ведёт. Файлы по схеме
-    # «[Фирма][NAL][Тип]» нельзя смешивать с управленческими: имя
-    # «…[NAL][Реализация…]» иначе распозналось бы как обычная реализация и
-    # задвоило бы данные. Пропускаем осознанно, с внятной причиной в ответе.
-    # Короткую метку ловим только в скобках: голое «nal» встречается внутри
-    # обычных слов (analiz, nalichnie) и как подстрока опасно.
+    # Налоговый контур. Файл с меткой налоговой уходит своим импортёром в
+    # отдельную таблицу и с управленческими не смешивается: имя
+    # «Хайджин_НАЛОГОВАЯ_Реализация товары» иначе распозналось бы как обычная
+    # реализация и задвоило бы продажи вдвое. Короткую метку ловим только в
+    # скобках и подчёркиваниях: голое «nal» встречается внутри обычных слов
+    # (analiz, nalichnie), и как подстрока опасно.
     if has("налог", "nalog", "[nal]", "[нал]", "_nal_", "_нал_"):
-        return "tax_skip"
+        return "tax"
 
     # --- Новая схема имён: «Фирма_Управленка_ТипВыгрузки» полными словами ---
     # Понимаем кириллицу и транслит. Эти правила стоят РАНЬШЕ старых коротких
@@ -194,7 +192,20 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
            "счет на оплату", "счёт на оплату", "schet na oplatu",
            "контрагент", "kontragent",
            "номенклатур", "nomenklatur",
-           "оборотно", "oborotno"):
+           "оборотно", "oborotno",
+           # Новый пакет выгрузки добавил виды, которых в старом не было.
+           # Ловим их по имени, потому что sniff_kind по колонкам ошибается:
+           # «Движение МБП» с колонками Дата/Сумма/Контрагент он принимает за
+           # денежный расход и подмешивает движение малоценки к платежам.
+           "гтд", "gtd",
+           "журнал проводок", "jurnal provodok", "zhurnal provodok",
+           "конвертац", "konvertac",
+           "начисление зарплат", "nachislenie zarplat",
+           "проблемные документ", "problemnye dokument",
+           "ручные операц", "ruchnye operac",
+           "движение мбп", "dvijenie mbp", "dvizhenie mbp",
+           "эсф", "esf", "счет-фактур", "счёт-фактур", "schet-faktur",
+           "бланки счетов", "blanki schetov"):
         return "unsupported"
     # Поступления денег: «Платёжное поручение ВХОДЯЩЕЕ» (банк) и «ПРИХОДНЫЙ
     # кассовый ордер» (касса). Проверяется раньше расходов: слово «платёжное»
@@ -345,7 +356,7 @@ async def inbox(
     # меткой НАЛ в имени грузятся своими импортёрами в отдельную таблицу —
     # автоматом, как и управленка. Тип определяется по колонкам, поэтому
     # работает даже с черновыми именами без метки.
-    if (ledger or "").strip().lower().startswith("nal") or kind == "tax_skip":
+    if (ledger or "").strip().lower().startswith("nal") or kind == "tax":
         from .tax import import_tax_workbook
         robot = _robot_user(db)
         try:

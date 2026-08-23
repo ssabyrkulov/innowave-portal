@@ -245,9 +245,19 @@ function DocsRegistry() {
     return () => { alive = false }
   }, [kind])
 
+  // Первые четыре вида сверяются с управленкой, остальные — справочный
+  // реестр налоговой базы: управленческой пары у них нет.
+  // Товарные виды показываются документами: склад и число позиций вместо
+  // вида операции. Сверяемые виды получают колонку «Управленка».
+  const GOODS = ['sale', 'return', 'return_supplier', 'purchase', 'writeoff']
+  const isGoods = GOODS.includes(kind)
+  const paired = data && data.matched !== null && data.matched !== undefined
+
   const TABS = [
     ['sale', 'Реализации'], ['return', 'Возвраты'],
-    ['cash_in', 'Касса · приход'], ['cash_out', 'Касса · расход'],
+    ['cash_in', 'Деньги · приход'], ['cash_out', 'Деньги · расход'],
+    ['purchase', 'Закупки'], ['advance', 'Авансовые отчёты'],
+    ['writeoff', 'Списания'], ['return_supplier', 'Возвраты поставщикам'],
   ]
   return (
     <div className="chart-card">
@@ -267,9 +277,13 @@ function DocsRegistry() {
         <>
           <p className="muted">
             {data.label}: <b>{data.count}</b> операций на <b>{money(data.amount)}</b>
-            {' '}· пара в управленке у <b>{data.matched}</b>
-            {data.unmatched > 0 && (
+            {paired && <>{' '}· пара в управленке у <b>{data.matched}</b></>}
+            {paired && data.unmatched > 0 && (
               <> · <span className="sc-bad">без пары {data.unmatched} на {money(data.unmatched_amount)}</span></>
+            )}
+            {!paired && (
+              <> · <span className="muted">справочно: управленческого контура
+                под этот вид нет, сверка не проводится</span></>
             )}
           </p>
           {data.items.length === 0 ? (
@@ -280,11 +294,11 @@ function DocsRegistry() {
                 <thead>
                   <tr>
                     <th>Дата</th><th>№</th><th>Контрагент</th>
-                    {kind === 'sale'
+                    {isGoods
                       ? <><th>Склад</th><th className="num">Позиций</th></>
                       : <th>Вид операции</th>}
                     <th className="num">Сумма</th>
-                    <th>Управленка</th>
+                    {paired && <th>Управленка</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -293,7 +307,7 @@ function DocsRegistry() {
                       <td>{r.date.split('-').reverse().join('.')}</td>
                       <td>{r.doc_number || <span className="muted">—</span>}</td>
                       <td>{r.counterparty || <span className="muted">—</span>}</td>
-                      {kind === 'sale'
+                      {isGoods
                         ? <><td>{r.warehouse || '—'}</td>
                             <td className="num">{r.positions}</td></>
                         : <td>{r.operation || '—'}</td>}
@@ -302,7 +316,7 @@ function DocsRegistry() {
                       </td>
                       {/* Пара найдена по сумме и близкой дате: имя контрагента
                           в контурах разное, показываем его как подсказку. */}
-                      <td>
+                      {paired && <td>
                         {r.upr ? (
                           <span className="sc-ok" title={r.upr.who || ''}>
                             {r.upr.by_link ? '🔗' : '✓'} {r.upr.date.split('-').reverse().join('.')}
@@ -314,7 +328,7 @@ function DocsRegistry() {
                         ) : (
                           <span className="sc-bad">нет пары</span>
                         )}
-                      </td>
+                      </td>}
                     </tr>
                   ))}
                 </tbody>

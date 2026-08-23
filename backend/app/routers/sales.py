@@ -1,9 +1,7 @@
 import hashlib
-import io
 from collections import defaultdict
 from datetime import date, datetime
 
-import openpyxl
 from fastapi import (
     APIRouter,
     Depends,

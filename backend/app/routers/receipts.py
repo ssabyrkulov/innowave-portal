@@ -1,10 +1,8 @@
 import hashlib
-import io
 import re
 from collections import defaultdict
 from datetime import date, datetime
 
-import openpyxl
 from fastapi import (
     APIRouter,
     Depends,
@@ -534,7 +532,7 @@ def receivables(
     org: str = Query(default="all"),
 ):
     """Дебиторка: отгружено − возвраты − оплачено по каждому клиенту."""
-    from ..services import salesdoc_mirror, xlsx
+    from ..services import salesdoc_mirror
 
     sales = models.org_scope(db.query(models.Sale), models.Sale, org).all()
     receipts = models.org_scope(db.query(models.Receipt), models.Receipt, org).all()

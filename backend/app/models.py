@@ -766,6 +766,16 @@ class TaxOperation(Base):
     # Вид операции кассы («Выдача подотчётнику», «Оплата от покупателя»…) —
     # по нему деньги раскладываются на подотчёт/зарплату/инкассацию/клиентов.
     operation: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Из какого файла приехала строка («Приходный кассовый ордер», «ПП
+    # входящее», …). В старом пакете на каждый вид приходился ровно один файл,
+    # и замена шла по виду. В новом на один вид их несколько — ПКО, ПП
+    # входящее и платёжный ордер поступления все дают cash_in, — и замена по
+    # виду стирала бы предыдущий файл. Поэтому снапшот заменяется по паре
+    # «вид + источник».
+    source: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # GUID документа 1С: в новом формате есть у всех документов, и это точный
+    # ключ сверки налоговой с управленкой вместо совпадения по дате и сумме.
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

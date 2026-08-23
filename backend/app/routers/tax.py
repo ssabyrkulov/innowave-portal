@@ -1,49 +1,37 @@
-"""Налоговый контур (черновик): выгрузки из налоговой базы 1С (ред. 1.7).
+"""Налоговый контур: выгрузки из налоговых баз 1С (ред. 1.7) обеих фирм.
 
-Пока Эрмек не довёл выгрузку до конца (нет метки НАЛ в именах, нет банка и
-остатков), файлы грузятся вручную на отдельной странице и живут в своей
-таблице — с управленческими данными не пересекаются вообще. Когда формат
-устаканится, эти же импортёры подключатся к автоприёму.
+Живут в своей таблице и с управленческими данными не пересекаются вообще —
+иначе задвоились бы и деньги, и продажи. Грузятся автоматически из общей
+папки Drive: фирму даёт первое слово имени файла, налоговый контур — метка
+«НАЛОГОВАЯ», вид документа — остаток имени.
+
+Вид операции определяется ТОЛЬКО по имени файла. Заголовки не различают ни
+приход от расхода денег, ни закупку от продажи: у «Поступление товары» те же
+Контрагент/Номенклатура/Количество/Сумма, что у «Реализация товары». Файл с
+незнакомым именем отбивается ошибкой — молча угадать значит уложить закупки
+в реализации и сломать сверку.
 """
 
-import io
-import zipfile
 from collections import defaultdict
 from datetime import date, datetime
 
-import openpyxl
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import get_db
 from ..deps import get_current_user, require_roles
+from ..services import xlsx
 
 router = APIRouter(prefix="/tax", tags=["tax"])
 
 can_edit = require_roles(models.Role.admin, models.Role.accountant)
 
 
-def _load_wb(content: bytes):
-    """openpyxl с починкой архива 1С: ред. 1.7 пишет SharedStrings.xml с
-    большой буквы, а openpyxl ищет строчную — без переупаковки файл не
-    открывается вовсе."""
-    try:
-        return openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
-    except KeyError:
-        zin = zipfile.ZipFile(io.BytesIO(content))
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-            for it in zin.infolist():
-                name = it.filename
-                if name.lower().endswith("sharedstrings.xml"):
-                    name = "xl/sharedStrings.xml"
-                zout.writestr(name, zin.read(it.filename))
-        return openpyxl.load_workbook(io.BytesIO(buf.getvalue()), data_only=True, read_only=True)
-
-
 def _rows(content: bytes) -> list[list]:
-    wb = _load_wb(content)
+    # xlsx.load_workbook чинит архив 1С ред. 1.7: она пишет SharedStrings.xml
+    # с большой буквы, а openpyxl ищет строчную.
+    wb = xlsx.load_workbook(content)
     ws = wb[wb.sheetnames[0]]
     return [list(r) for r in ws.iter_rows(values_only=True)]
 
@@ -77,32 +65,122 @@ def _header_map(rows: list[list]) -> tuple[int, dict]:
     """Строка заголовков и карта «имя колонки → индекс» (первые 5 строк)."""
     for i, row in enumerate(rows[:5]):
         names = {str(c).strip(): j for j, c in enumerate(row) if c}
-        if "Дата" in names and ("Сумма" in names or "СуммаДокумента" in names):
+        if "Дата" in names and (_AMOUNT_FIELDS & set(names)
+                                or "Количество" in names or "Номенклатура" in names):
             return i, names
-    raise HTTPException(status_code=400, detail="Не нашёл строку заголовков (нужны «Дата» и «Сумма»)")
+    raise HTTPException(
+        status_code=400,
+        detail="Не нашёл строку заголовков (нужны «Дата» и сумма либо количество)")
 
 
-def _detect_kind(names: dict, filename: str) -> str:
-    """Тип файла по заголовкам; имя — только чтобы отличить ПКО от РКО,
-    когда колонка вида операции называется одинаково."""
-    if "НоменклатураНаименование" in names:
-        return "sale"
-    if "ВидОперации" in names:
-        return "cash_in"      # так называется колонка в ПКО
-    if "Основание" in names:
-        return "cash_out"     # а так — в РКО
-    low = (filename or "").lower()
-    if any(t in low for t in ("пко", "pko", "приход", "prihod", "вход", "vhod")):
-        return "cash_in"
-    if any(t in low for t in ("рко", "rko", "расход", "rashod", "исход", "ishod")):
-        return "cash_out"
-    return "return"  # Дата/Сумма/Валюта/Контрагент — документные возвраты
+# Явная карта «имя файла налоговой → вид операции». Вид берём ТОЛЬКО из имени:
+# в новом формате заголовки не различают ни приход от расхода денег (у ПКО и
+# РКО колонки почти одинаковы), ни закупку от продажи (у «Поступление товары»
+# те же Контрагент/Номенклатура/Количество/Сумма, что у «Реализация товары»).
+# Угадывание по заголовкам укладывало 600 строк закупок в реализации и ломало
+# сверку, поэтому неизвестное имя честно отбивается ошибкой.
+# Порядок важен: частные токены идут раньше общих.
+_TAX_BY_NAME = (
+    ("возврат поставщику", "return_supplier"),
+    ("возврат от покупателя", "return"),
+    ("реализация", "sale"),
+    ("поступление доп расходов", "purchase"),
+    ("поступление товары", "purchase"),
+    ("поступление услуги", "purchase"),
+    ("поступление товаров и услуг", "purchase"),
+    ("пко выдача в подотчет", "cash_in"),
+    ("приходный кассовый ордер", "cash_in"),
+    ("пп входящее", "cash_in"),
+    ("платежный ордер поступление", "cash_in"),
+    ("рко выдача в подотчет", "cash_out"),
+    ("рко выплата зарплаты", "cash_out"),
+    ("расходный кассовый ордер", "cash_out"),
+    ("пп исходящее", "cash_out"),          # покрывает и «ПП исходящее налоги»
+    ("платежный ордер списание", "cash_out"),
+    ("авансовый отчет", "advance"),
+    ("списание товаров", "writeoff"),
+    ("оприходование товаров", "stock_in"),
+    ("перемещение товаров", "transfer"),
+    ("инвентаризация товаров", "inventory"),
+    # Ниже — файлы, которые в налоговый контур пока не грузятся. Держим их в
+    # той же карте, чтобы отказ был осмысленным, а не «не нашёл заголовков».
+    ("журнал проводок", "unsupported"),
+    ("гтд", "unsupported"),
+    ("конвертация", "unsupported"),
+    ("начисление зарплаты", "unsupported"),
+    ("сф выданные", "unsupported"),
+    ("сф полученные", "unsupported"),
+    ("эсф выписанные", "unsupported"),
+    ("эсф полученные", "unsupported"),
+    ("бланки счетов-фактур", "unsupported"),
+    ("ручные операции", "unsupported"),
+    ("проблемные документы", "unsupported"),
+    ("контрагенты", "unsupported"),
+    ("номенклатура", "unsupported"),
+    ("остатки", "unsupported"),
+)
+
+# Виды, которые участвуют в сверке налоговой с управленкой. Остальные лежат
+# справочно: закупки, подотчёт, склад и возвраты поставщикам — управленческого
+# контура под них в портале нет, сверять не с чем.
+MATCHED_KINDS = ("sale", "return", "cash_in", "cash_out")
+
+# Товарные виды: у них есть номенклатура, количество и склад.
+_GOODS_KINDS = ("sale", "return", "return_supplier", "purchase",
+                "writeoff", "stock_in", "transfer", "inventory")
+
+# Сумма товарной строки: сначала строка табличной части, потом итог документа.
+# Табличная часть товарных документов выгружена корректно — по всем 175
+# реализациям Хайджина и 191 Инновейва строки сходятся с итогом до копейки.
+_AMOUNT_ORDER = ("Сумма", "СуммаРасхода", "СуммаФакт", "СуммаДокумента",
+                 "СуммаОперации")
+_AMOUNT_FIELDS = set(_AMOUNT_ORDER) | {"СуммаПлатежа", "СуммаКВыплате"}
+
+# Денежные виды: одна строка файла = один документ, сумма берётся из шапки.
+_CASH_KINDS = ("cash_in", "cash_out")
+
+# Плательщик/получатель. У ПКО и РКО подотчёта нет колонки «Контрагент» —
+# там физлицо в «ПринятоОт», «Выдать» или «ФизЛицо».
+_PARTY_ORDER = ("Контрагент", "КонтрагентНаименование", "Поставщик",
+                "Покупатель", "ПринятоОт", "Выдать", "ФизЛицо", "Сотрудник")
+
+
+def _detect_kind(filename: str) -> str:
+    """Вид операции по имени файла. Неизвестное имя — ошибка, а не догадка."""
+    low = (filename or "").lower().replace("\u0451", "\u0435")
+    for token, kind in _TAX_BY_NAME:
+        if token in low:
+            return kind
+    raise HTTPException(
+        status_code=400,
+        detail=f"Не знаю, к какому виду отнести файл «{filename}». "
+               "Вид определяется по имени файла из выгрузки 1С.",
+    )
+
+
+def _tax_source(filename: str) -> str:
+    """Вид документа из имени файла — «Хайджин_НАЛОГОВАЯ_ПП входящее» → «ПП
+    входящее». Нужен, чтобы снапшоты разных файлов одного вида не затирали
+    друг друга."""
+    base = (filename or "").rsplit("/", 1)[-1]
+    for suffix in (".xlsx", ".xls"):
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)]
+    parts = base.split("_")
+    return (parts[-1] if len(parts) > 1 else base).strip() or "без имени"
 
 
 def _parse(content: bytes, filename: str) -> tuple[str, list[dict]]:
+    kind = _detect_kind(filename)
+    if kind == "unsupported":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Файл «{filename}» в налоговый контур пока не грузится "
+                   "(проводки, ГТД, счета-фактуры, зарплата и справочники).",
+        )
+    source = _tax_source(filename)
     rows = _rows(content)
     hi, names = _header_map(rows)
-    kind = _detect_kind(names, filename)
 
     def cell(row, name):
         j = names.get(name)
@@ -113,35 +191,71 @@ def _parse(content: bytes, filename: str) -> tuple[str, list[dict]]:
         d = _day(cell(row, "Дата"))
         if d is None:
             continue
-        if kind == "sale":
-            amount = _num(cell(row, "Сумма"))
-            if amount is None:
+
+        # Имена колонок различаются у старого и нового формата: короткие
+        # «Контрагент», «Номенклатура», «Валюта» пришли на смену длинным.
+        def first(*fields):
+            for f in fields:
+                v = cell(row, f)
+                if v not in (None, ""):
+                    return v
+            return None
+
+        if kind in _CASH_KINDS:
+            # У ПКО, РКО и платёжек колонка «СуммаПлатежа» выгружается
+            # несвязанной с шапкой: ПКО Хайджина по «СуммаДокумента» даёт
+            # 40 467 679,11, а по «СуммаПлатежа» — 104 458 284, причём у
+            # документа на 89 сом там стоит 3 200 000 от чужой строки.
+            # Деньги берём только из шапки документа.
+            amount = _num(first("СуммаДокумента", "Сумма"))
+        else:
+            amount = _num(first(*_AMOUNT_ORDER))
+        if amount is None:
+            # У складских документов суммы нет вовсе — «Списание товаров»
+            # выгружается с пустой СуммаДокумента и одним количеством.
+            # Отбрасывать такие строки нельзя: тогда весь файл теряется.
+            if kind not in ("writeoff", "stock_in", "transfer", "inventory"):
                 continue
+            amount = 0.0
+        common = {
+            "kind": kind, "date": d, "amount": amount, "source": source,
+            "currency": str(first("Валюта", "ВалютаДокументаНаименование")
+                            or "KGS").strip() or "KGS",
+            "doc_number": str(first("Номер") or "").strip() or None,
+            "doc_guid": str(first("ДокументGUID") or "").strip() or None,
+            "counterparty": str(first(*_PARTY_ORDER) or "").strip() or None,
+        }
+        if kind in _GOODS_KINDS:
             out.append({
-                "kind": kind, "date": d,
-                "counterparty": str(cell(row, "КонтрагентНаименование") or "").strip() or None,
-                "amount": amount,
-                "currency": str(cell(row, "ВалютаДокументаНаименование") or "KGS").strip() or "KGS",
-                "doc_number": str(cell(row, "Номер") or "").strip() or None,
-                "doc_total": _num(cell(row, "СуммаДокумента")),
-                "warehouse": str(cell(row, "Склад") or "").strip() or None,
-                "product": str(cell(row, "НоменклатураНаименование") or "").strip() or None,
-                "qty": _num(cell(row, "Количество")),
+                **common,
+                "doc_total": _num(first("СуммаДокумента", "СуммаРасходаВсего")),
+                "warehouse": str(first("Склад", "СкладНаименование",
+                                       "СкладПолучатель") or "").strip() or None,
+                "product": str(first("Номенклатура", "НоменклатураНаименование")
+                               or "").strip() or None,
+                "qty": _num(first("Количество", "КоличествоФакт", "КоличествоУчет")),
             })
         else:
-            amount = _num(cell(row, "Сумма"))
-            if amount is None:
-                continue
             out.append({
-                "kind": kind, "date": d,
-                "counterparty": str(cell(row, "Контрагент") or "").strip() or None,
-                "amount": amount,
-                "currency": str(cell(row, "Валюта") or "KGS").strip() or "KGS",
-                "doc_number": str(cell(row, "Номер") or "").strip() or None,
-                "operation": str(
-                    cell(row, "ВидОперации") or cell(row, "Основание") or ""
-                ).strip() or None,
+                **common,
+                "operation": str(first("ВидОперации", "Основание",
+                                       "НазначениеПлатежа", "Содержание",
+                                       "СтатьяДДС") or "").strip() or None,
             })
+
+    if kind in _CASH_KINDS:
+        # Страховка: если 1С выгрузит платёжку несколькими строками (у
+        # «ПП исходящее налоги» табличная часть уже есть), сумма шапки
+        # повторится на каждой и задвоится.
+        seen: set = set()
+        uniq = []
+        for op in out:
+            key = op["doc_guid"] or (op["doc_number"], op["date"], op["amount"])
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(op)
+        out = uniq
     return kind, out
 
 
@@ -156,18 +270,22 @@ def import_tax_workbook(db: Session, content: bytes, filename: str,
         raise HTTPException(status_code=400, detail="В файле не нашлось ни одной строки с датой и суммой")
     # Снапшот-замена: сначала парсим (выше), только потом удаляем старое —
     # битый файл не может стереть данные.
+    source = parsed[0].get("source")
+    # Заменяем снапшот по паре «вид + источник». По одному виду замена стирала
+    # бы соседний файл: приход дают и ПКО, и ПП входящее, и платёжный ордер.
     db.query(models.TaxOperation).filter(
         models.TaxOperation.organization == org,
         models.TaxOperation.kind == kind,
+        models.TaxOperation.source == source,
     ).delete(synchronize_session=False)
     for p in parsed:
         db.add(models.TaxOperation(organization=org, **p))
     db.add(models.ImportLog(
-        filename=f"[налоговая:{org}:{kind}] {filename}",
+        filename=f"[налоговая:{org}:{kind}:{source}] {filename}",
         user_id=user_id, added=len(parsed), skipped=0, errors_count=0,
     ))
     db.commit()
-    return {"kind": kind, "added": len(parsed)}
+    return {"kind": kind, "source": source, "added": len(parsed)}
 
 
 @router.post("/import")
@@ -181,8 +299,19 @@ async def tax_import(
     return import_tax_workbook(db, content, file.filename or "", user.id, org)
 
 
-KIND_LABEL = {"sale": "Реализации", "return": "Возвраты",
-              "cash_in": "Касса · приход", "cash_out": "Касса · расход"}
+KIND_LABEL = {
+    "sale": "Реализации",
+    "return": "Возвраты от покупателей",
+    "return_supplier": "Возвраты поставщикам",
+    "cash_in": "Деньги · приход",
+    "cash_out": "Деньги · расход",
+    "purchase": "Закупки",
+    "advance": "Авансовые отчёты",
+    "writeoff": "Списания",
+    "stock_in": "Оприходование",
+    "transfer": "Перемещения",
+    "inventory": "Инвентаризация",
+}
 
 
 from pydantic import BaseModel
@@ -425,9 +554,13 @@ def tax_docs(
 ):
     """Реестр операций налогового контура — каждый документ строкой.
 
-    Для реализаций строки файла собираются в документы (номер + дата +
-    контрагент): итоговая сумма и число позиций. Остальные виды — одна строка
-    файла и есть одна операция."""
+    Товарные виды (реализации, возвраты, закупки, списания) собираются из
+    строк в документы: номер + дата + контрагент, итоговая сумма и число
+    позиций. Денежные — одна строка файла и есть одна операция.
+
+    Пара в управленке ищется только для видов сверки. У закупок, подотчёта и
+    склада управленческой пары нет — показываем реестром, без пустой колонки
+    «не найдено», которая читалась бы как расхождение."""
     if kind not in KIND_LABEL:
         raise HTTPException(status_code=400, detail="Неизвестный вид операций")
     q = db.query(models.TaxOperation).filter(models.TaxOperation.kind == kind)
@@ -436,7 +569,7 @@ def tax_docs(
         q = q.filter(models.TaxOperation.organization == o)
     rows = q.all()
 
-    if kind == "sale":
+    if kind in _GOODS_KINDS:
         docs: dict = {}
         for r in rows:
             key = (r.doc_number, r.date, r.counterparty)
@@ -512,6 +645,18 @@ def tax_docs(
                  "amount": round(float(e.amount), 2)}
                 for e in db.query(models.Expense).filter(
                     models.Expense.organization == uq_org).all()]
+
+    if kind not in MATCHED_KINDS:
+        # Сверять не с чем: у закупок, авансовых отчётов и склада в управленке
+        # нет соответствующего контура. Возвращаем чистый реестр.
+        for item in items:
+            item["upr"] = None
+        return {
+            "kind": kind, "label": KIND_LABEL[kind], "count": len(items),
+            "amount": round(sum(i["amount"] for i in items), 2),
+            "matched": None, "unmatched": None, "unmatched_amount": None,
+            "items": items[:DOCS_CAP], "cap": DOCS_CAP,
+        }
 
     cands = upr_candidates()
     used: set = set()
