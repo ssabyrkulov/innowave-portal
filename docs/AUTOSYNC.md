@@ -122,16 +122,14 @@ Key `INBOX_TOKEN`, Value — любая длинная случайная стр
 
 ```javascript
 // ===== Настройки =====
-// По одной строке на папку: id папки Drive + код фирмы (org) + контур
-// (ledger: 'upr' — управленка, 'nal' — налоговая база).
+// Одна папка на все четыре базы. Фирму («Хайджин…»/«Инновейв…») и контур
+// («НАЛОГОВАЯ») портал берёт из имени файла, поэтому org здесь — только
+// запасной вариант для файлов без имени фирмы.
 const FOLDERS = [
-  // Одна папка на все четыре базы. Фирму и контур портал берёт из имени
-  // файла («Хайджин_НАЛОГОВАЯ_Реализация товары»), поэтому org здесь —
-  // только запасной вариант для файлов без имени фирмы.
   { id: '1m8Ho_qeLuLJJg2cI1XdrJ2HDRJ6dUtAo', org: 'hygiene' },  // INNOWAVE GROUP UPLOAD
 ];
 // Старые папки отключены: новый пакет покрывает все девять видов, которые
-// портал умеет грузить, по обеим фирмам. Держать их подключёнными не нужно.
+// портал умеет грузить, по обеим фирмам.
 //   1HBmmRwmxPnxkbtr_x4bkKnQdc1F9wNhD — Innowave Hygiene (единый)
 //   1L9LuCJ0lOPit7ABkV_zLxPY8Jtp3uPLi — Innowave (общий)
 //   1Xtjseug4Pp863O1b307W4DbB_8QmCX6x — Налоговая база (ред. 1.7)
@@ -167,33 +165,22 @@ function isExcel(f) {
   );
 }
 
-// Забыть, что уже отправлено, и прислать ВСЕ файлы заново.
-// Нужно, если данные на портале чистили или восстанавливали из копии:
-// обычный прогон шлёт только изменившиеся файлы, поэтому после очистки
-// база осталась бы без тех выгрузок, которые скрипт считает доставленными.
-// Повторная отправка безопасна: импортёры заменяют снапшот или отбивают
-// дубли по деловым значениям, задвоения не будет.
-function resendAll() {
-  PropertiesService.getScriptProperties().deleteAllProperties();
-  console.log('Память очищена, отправляю всё заново.');
-  syncNewFiles();
-}
-
 function syncNewFiles() {
   const props = PropertiesService.getScriptProperties();
   let seen = 0, sent = 0, known = 0, failed = 0;
   const notSent = [];
 
   FOLDERS.forEach(function (folder) {
-    // Имена собираем заранее и грузим по одному через getFilesByName.
-    // Итератор getFiles() держит соединение с Drive всё время прогона, а
-    // прогон идёт минуты: на длинных пачках он молча терял часть файлов —
+    // Имена собираем заранее, а сам файл берём по имени прямо перед
+    // отправкой. Итератор getFiles() держит соединение с Drive весь прогон,
+    // а прогон идёт минуты: на длинной пачке он молча терял часть файлов —
     // из 36 налоговых Хайджина доходило 19, и в логе не было ни ошибки,
     // ни строки о пропуске.
     const names = [];
     const it = DriveApp.getFolderById(folder.id).getFiles();
     while (it.hasNext()) names.push(it.next().getName());
     names.sort();
+    console.log('В папке файлов: ' + names.length);
 
     const tag = '[' + folder.org + '/' + (folder.ledger || 'upr') + '] ';
     names.forEach(function (name) {
@@ -243,7 +230,17 @@ function syncNewFiles() {
   if (notSent.length) console.warn('НЕ ДОСТАВЛЕНЫ:\n' + notSent.join('\n'));
 }
 
-// Показать, что скрипт видит в папке (диагностика, ничего не отправляет).
+// Разовая переотправка ВСЕХ файлов: очищает память скрипта и шлёт всё
+// заново. Нужна, если данные на портале чистили или восстанавливали из
+// копии. Повторная отправка безопасна — импортёры заменяют снапшот или
+// отбивают дубли по деловым значениям.
+function resendAll() {
+  PropertiesService.getScriptProperties().deleteAllProperties();
+  console.log('Память очищена, отправляю всё заново.');
+  syncNewFiles();
+}
+
+// Диагностика: показать, что скрипт видит в папке. Ничего не отправляет.
 function checkFolder() {
   FOLDERS.forEach(function (folder) {
     const it = DriveApp.getFolderById(folder.id).getFiles();
@@ -261,65 +258,6 @@ function checkFolder() {
                   excel.slice(i, i + 40).join('\n'));
     }
   });
-}
-
-// Забыть, что уже отправлено, и прислать ВСЕ файлы заново.
-// Нужно, если данные на портале чистили или восстанавливали из копии:
-// обычный прогон шлёт только изменившиеся файлы, поэтому после очистки
-// база осталась бы без тех выгрузок, которые скрипт считает доставленными.
-// Повторная отправка безопасна: импортёры заменяют снапшот или отбивают
-// дубли по деловым значениям, задвоения не будет.
-function resendAll() {
-  PropertiesService.getScriptProperties().deleteAllProperties();
-  console.log('Память очищена, отправляю всё заново.');
-  syncNewFiles();
-}
-
-function syncNewFiles() {
-  const props = PropertiesService.getScriptProperties();
-
-  FOLDERS.forEach(function (folder) {
-    const files = DriveApp.getFolderById(folder.id).getFiles();
-
-    while (files.hasNext()) {
-      const f = files.next();
-      if (!isExcel(f)) continue;
-
-      // Ключ памяти включает org и контур — файлы из разных папок не путаются.
-      const key = 'sent_' + folder.org + '_' + (folder.ledger || 'upr') + '_' + f.getId();
-      const mod = String(f.getLastUpdated().getTime());
-      if (props.getProperty(key) === mod) continue; // не менялся — пропускаем
-
-      try {
-        const res = UrlFetchApp.fetch(ENDPOINT, {
-          method: 'post',
-          headers: { Authorization: 'Bearer ' + TOKEN },
-          // fname — имя файла отдельным полем (кириллица в заголовке multipart
-          // портится); org — фирма; ledger — контур (управленка/налоговая).
-          payload: { file: f.getBlob(), fname: f.getName(), org: folder.org,
-                     ledger: folder.ledger || 'upr' },
-          muteHttpExceptions: true,
-        });
-        const code = res.getResponseCode();
-        if (code === 200) {
-          props.setProperty(key, mod); // запомнили — файл доставлен
-          console.log('[' + folder.org + '] ' + f.getName() + ' -> ' + res.getContentText());
-        } else {
-          console.warn('[' + folder.org + '] ' + f.getName() + ' -> HTTP ' + code + ': ' + res.getContentText());
-          // не помечаем как отправленный — попробуем в следующий запуск
-        }
-      } catch (e) {
-        console.error('[' + folder.org + '] ' + f.getName() + ' -> ' + e);
-      }
-    }
-  });
-}
-
-// Разовая переотправка ВСЕХ файлов обеих папок (после включения мультиучёта
-// или смены логики): очищает память скрипта и шлёт всё заново.
-function resendAll() {
-  PropertiesService.getScriptProperties().deleteAllProperties();
-  syncNewFiles();
 }
 ```
 
