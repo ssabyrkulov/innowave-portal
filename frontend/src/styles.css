@@ -2935,3 +2935,29 @@ button.summary-card {
 /* Состояние синхронизации SalesDoc рядом с кнопкой «Обновить». */
 .sd-sync-state { font-size: 12px; margin-right: 8px; white-space: nowrap; }
 .sd-sync-err { color: #a33; }
+
+/* Остатки из трёх источников на главной: плитки с итогом по каждому. */
+.stock-src-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 12px 0 16px;
+}
+.stock-src-tile {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.stock-src-tile.src-upr { border-left-color: #2f7ed8; }
+.stock-src-tile.src-nal { border-left-color: #d98c2f; }
+.stock-src-tile.src-sd  { border-left-color: #4aa564; }
+.stock-src-name {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.stock-src-qty { font-size: 22px; font-weight: 600; line-height: 1.3; }
+.stock-src-qty span { font-size: 13px; font-weight: 400; color: var(--muted); }
+.stock-src-note { font-size: 12px; color: var(--muted); }

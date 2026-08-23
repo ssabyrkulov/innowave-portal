@@ -126,8 +126,99 @@ export default function DashboardPage() {
       ) : (
         <DesktopDash data={data} user={user} />
       )}
+      <StockSourcesCard />
       <CalcStockCard />
     </>
+  )
+}
+
+
+// Остатки товаров из трёх источников рядом. Источники разной природы, и это
+// главное, что нужно понимать при чтении: управленка — снапшот 1С (факт на
+// дату выгрузки), налоговая — расчёт из движений (снапшота в её пакете нет
+// вовсе), SalesDoc — остатки торговых точек. Сходиться они не обязаны;
+// смысл в том, чтобы видеть все три числа рядом.
+function StockSourcesCard() {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [showAll, setShowAll] = useState(false)
+
+  useEffect(() => {
+    api.stockSources().then(setData).catch((e) => setError(e.message))
+  }, [])
+
+  if (error || !data || !data.items.length) return null
+  const s = data.sources
+  const cols = ['upr', 'nal', 'sd'].filter((k) => s[k].available)
+  if (!cols.length) return null
+  const shown = showAll || data.items.length <= 20 ? data.items : data.items.slice(0, 20)
+  const fmt = (v) => (v == null ? '—' : Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 0 }))
+  const when = (iso) => (iso
+    ? new Date(iso.endsWith('Z') ? iso : iso + 'Z').toLocaleString('ru-RU',
+        { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : null)
+
+  return (
+    <div className="chart-card">
+      <div className="sd-card-title">📦 Остатки на складах: три источника</div>
+      <div className="stock-src-tiles">
+        {cols.map((k) => (
+          <div key={k} className={`stock-src-tile src-${k}`}>
+            <div className="stock-src-name">{s[k].label}</div>
+            <div className="stock-src-qty">{fmt(s[k].total_qty)} <span>шт</span></div>
+            <div className="stock-src-note">
+              {s[k].note}
+              {k === 'upr' && s[k].total_amount
+                ? ` · ${formatMoney(s[k].total_amount)}` : ''}
+              {k === 'upr' && when(s[k].updated_at) ? ` · ${when(s[k].updated_at)}` : ''}
+              {k === 'sd' && when(s[k].synced_at) ? ` · ${when(s[k].synced_at)}` : ''}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="table-wrap rc-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Номенклатура</th>
+              {cols.map((k) => <th key={k} className="num">{s[k].label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((r, i) => (
+              <tr key={i}>
+                <td>{r.product}</td>
+                {cols.map((k) => (
+                  <td key={k} className={`num ${(r[k] ?? 0) < 0 ? 'neg' : ''}`}>
+                    {fmt(r[k])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td><b>Итого</b></td>
+              {cols.map((k) => (
+                <td key={k} className="num"><b>{fmt(s[k].total_qty)}</b></td>
+              ))}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {data.items.length > 20 && (
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowAll(!showAll)}>
+          {showAll ? 'Свернуть' : `Показать все ${data.items.length}`}
+        </button>
+      )}
+      <p className="muted">
+        Колонки считаются по-разному и совпадать не обязаны. Управленка — факт
+        склада из отчёта 1С. Налоговая — расчёт «поступления − реализации +
+        возвраты − списания»: снапшота остатков в её выгрузке нет вовсе.
+        SalesDoc — остатки торговых точек, а не своих складов, и только в
+        штуках: сумм он не отдаёт.
+      </p>
+    </div>
   )
 }
 

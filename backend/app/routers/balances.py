@@ -397,3 +397,129 @@ def stock_balances(
             for r in rows
         ],
     }
+
+
+@router.get("/stock-sources")
+def stock_sources(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
+):
+    """Остатки товаров из трёх источников рядом: управленка, налоговая, SalesDoc.
+
+    Источники разной природы, и это принципиально для чтения таблицы:
+
+    * **управленка** — снапшот «Остатки товаров» из 1С, факт на дату выгрузки;
+    * **налоговая** — снапшота нет, в пакете налоговой такого файла вообще не
+      выгружается. Считаем из движений: поступления − реализации + возвраты −
+      списания. Это «как должно быть по документам», а не факт склада;
+    * **SalesDoc** — остатки торговых точек из зеркала, только количество:
+      сумм SalesDoc не отдаёт.
+
+    Сходиться они не обязаны и в норме не сойдутся: налоговый контур ведёт не
+    весь товар, а в SalesDoc лежат остатки точек, а не своих складов. Смысл
+    таблицы — видеть все три числа рядом и замечать, когда расхождение
+    выходит за привычное.
+    """
+    from .purchases import _group_of, _norm_product, _size_of
+    from .salesdoc import _store_ids_for_org
+
+    # Ключ сопоставления — нормализованное имя номенклатуры. Названия в трёх
+    # системах пишутся по-разному, но после нормализации совпадают.
+    rows: dict[str, dict] = {}
+
+    def cell(name: str | None) -> dict:
+        key = _norm_product(name)
+        e = rows.get(key)
+        if e is None:
+            e = rows[key] = {"product": name or "—", "upr": None,
+                             "nal": None, "sd": None, "upr_amount": None}
+        return e
+
+    # --- Управленка: снапшот 1С ---
+    upr_rows = models.org_scope(
+        db.query(models.StockBalance), models.StockBalance, org).all()
+    guid_key: dict[str, str] = {}
+    for r in upr_rows:
+        e = cell(r.product)
+        e["upr"] = (e["upr"] or 0.0) + float(r.qty or 0)
+        e["upr_amount"] = (e["upr_amount"] or 0.0) + float(r.amount or 0)
+        if r.product_guid:
+            guid_key[str(r.product_guid)] = _norm_product(r.product)
+
+    # --- Налоговая: расчёт из движений ---
+    tax_q = models.org_scope(
+        db.query(models.TaxOperation), models.TaxOperation, org)
+    SIGN = {"purchase": 1, "return": 1, "sale": -1, "writeoff": -1}
+    for op in tax_q.filter(models.TaxOperation.kind.in_(tuple(SIGN))).all():
+        if not op.product:
+            continue
+        e = cell(op.product)
+        e["nal"] = (e["nal"] or 0.0) + SIGN[op.kind] * float(op.qty or 0)
+
+    # --- SalesDoc: зеркало остатков точек ---
+    sd_q = db.query(models.SalesDocStock)
+    store_ids = _store_ids_for_org(db, org)
+    if store_ids:
+        sd_q = sd_q.filter(models.SalesDocStock.store_sd_id.in_(store_ids))
+    for r in sd_q.all():
+        # Код 1С точнее названия: позицию могли переименовать в одной системе
+        # и не переименовать в другой.
+        key = guid_key.get(str(r.code_1c or "")) if r.code_1c else None
+        e = rows.get(key) if key else None
+        if e is None:
+            e = cell(r.product_name)
+        e["sd"] = (e["sd"] or 0.0) + float(r.quantity or 0)
+
+    items = []
+    for e in rows.values():
+        if not any(abs(e[k] or 0) >= 0.001 for k in ("upr", "nal", "sd")):
+            continue
+        items.append({
+            "product": e["product"],
+            "upr": None if e["upr"] is None else round(e["upr"], 1),
+            "nal": None if e["nal"] is None else round(e["nal"], 1),
+            "sd": None if e["sd"] is None else round(e["sd"], 1),
+            "upr_amount": None if e["upr_amount"] is None else round(e["upr_amount"], 2),
+        })
+    items.sort(key=lambda x: (_group_of(x["product"]), _size_of(x["product"]),
+                              x["product"]))
+
+    def total(field: str) -> float:
+        return round(sum(i[field] or 0 for i in items), 1)
+
+    synced = None
+    try:
+        from ..services import salesdoc_mirror
+        synced = salesdoc_mirror.status(db).get("synced_at")
+    except Exception:  # noqa: BLE001 — зеркало не должно ронять карточку
+        synced = None
+
+    return {
+        "org": org,
+        "sources": {
+            "upr": {
+                "label": "Управленка",
+                "note": "снапшот 1С",
+                "available": bool(upr_rows),
+                "total_qty": total("upr"),
+                "total_amount": round(sum(i["upr_amount"] or 0 for i in items), 2),
+                "updated_at": (upr_rows[0].updated_at.isoformat()
+                               if upr_rows else None),
+            },
+            "nal": {
+                "label": "Налоговая",
+                "note": "расчёт из движений",
+                "available": any(i["nal"] is not None for i in items),
+                "total_qty": total("nal"),
+            },
+            "sd": {
+                "label": "SalesDoc",
+                "note": "остатки точек",
+                "available": any(i["sd"] is not None for i in items),
+                "total_qty": total("sd"),
+                "synced_at": synced,
+            },
+        },
+        "items": items,
+    }

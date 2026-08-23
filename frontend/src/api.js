@@ -182,6 +182,7 @@ export const api = {
   writeoffsLines: () => request('/writeoffs/lines'),
   purchasesLines: () => request('/purchases/lines'),
   stockCalc: () => request('/purchases/stock-calc'),
+  stockSources: () => request('/balances/stock-sources'),
   stockCompare: () => request('/purchases/stock-compare'),
   taxSummary: () => request('/tax/summary'),
   taxCompare: () => request('/tax/compare'),
