@@ -454,6 +454,14 @@ def stock_sources(
     for op in tax_q.filter(models.TaxOperation.kind.in_(tuple(SIGN))).all():
         if not op.product:
             continue
+        # Склад двигают только товарные документы. «Поступление услуги» —
+        # это услуги, а «Поступление доп расходов» перечисляет ТЕ ЖЕ товары
+        # ещё раз, чтобы разнести на них таможню и доставку. Без этого
+        # отсева остаток Хайджина завышался на 856 583 шт из 635 066
+        # закупленных — больше чем вдвое.
+        src = (op.source or "").lower()
+        if "услуг" in src or "доп расход" in src:
+            continue
         e = cell(op.product)
         e["nal"] = (e["nal"] or 0.0) + SIGN[op.kind] * float(op.qty or 0)
 
