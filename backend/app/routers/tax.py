@@ -12,6 +12,7 @@
 в реализации и сломать сверку.
 """
 
+import re
 from collections import defaultdict
 from datetime import date, datetime
 
@@ -225,6 +226,7 @@ def _parse(content: bytes, filename: str) -> tuple[str, list[dict]]:
             "doc_number": str(first("Номер") or "").strip() or None,
             "doc_guid": str(first("ДокументGUID") or "").strip() or None,
             "counterparty": str(first(*_PARTY_ORDER) or "").strip() or None,
+            "comment": str(first("Комментарий") or "").strip() or None,
         }
         if kind in _GOODS_KINDS:
             out.append({
@@ -923,4 +925,144 @@ def tax_summary(
             ({"client": c, "amount": round(a, 2)} for c, a in clients.items()),
             key=lambda x: -x["amount"],
         )[:15],
+    }
+
+
+# Номер документа управленки в комментарии налогового: «0000-000760».
+_UPR_NUMBER = re.compile(r"\d{4}-\d{6}")
+
+
+@router.get("/by-comment")
+def tax_by_comment(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "hygiene",
+    only_diff: bool = False,
+):
+    """Сверка налоговых реализаций с управленческими по номерам из комментария.
+
+    Прямой связи между контурами нет: GUID у баз свои, контрагенты разные —
+    в управленке торговая точка, в налоговой юрлицо или ИП. Единственный
+    мостик — номер документа управленки, который бухгалтер вписывает в
+    комментарий налогового документа.
+
+    Связь не «один к одному»: одну отгрузку управленки в налоговой разбивают
+    на несколько документов по разным ИП, а один налоговый документ может
+    покрывать несколько управленческих. Поэтому считаем связными группами:
+    все налоговые документы, ссылающиеся на общий номер, и все упомянутые
+    документы управленки — это одна группа, и сходиться должны её итоги.
+
+    Номера повторяются по годам: «0000-000001» есть и в октябре 2024, и в
+    январе 2026. Из одноимённых берём тот, что ближе по дате к налоговому
+    документу, — иначе отгрузка на 10,5 млн сверяется с документом на 8 907
+    сом, и расхождение выглядит катастрофой на ровном месте.
+    """
+    o = models.normalize_org(org) if (org or "").lower() in models.ORGS else "hygiene"
+
+    # --- Управленка: документы (номер + дата) с итогами ---
+    upr: dict = defaultdict(lambda: defaultdict(
+        lambda: {"qty": 0.0, "amount": 0.0, "doc_total": None, "client": None}))
+    for s in db.query(models.Sale).filter(models.Sale.organization == o).all():
+        if not s.doc_number:
+            continue
+        e = upr[s.doc_number][s.date]
+        e["qty"] += float(s.qty or 0)
+        e["amount"] += float(s.amount or 0)
+        e["client"] = s.client
+        if s.doc_total is not None:
+            e["doc_total"] = float(s.doc_total)
+
+    # --- Налоговая: документы реализации с комментарием ---
+    tax: dict = defaultdict(lambda: {"qty": 0.0, "amount": 0.0, "date": None,
+                                     "number": None, "counterparty": None,
+                                     "comment": ""})
+    for t in db.query(models.TaxOperation).filter(
+            models.TaxOperation.organization == o,
+            models.TaxOperation.kind == "sale").all():
+        key = t.doc_guid or f"{t.doc_number}|{t.date}|{t.counterparty}"
+        e = tax[key]
+        e["qty"] += float(t.qty or 0)
+        e["amount"] += float(t.amount or 0)
+        e["date"] = t.date
+        e["number"] = t.doc_number
+        e["counterparty"] = t.counterparty
+        if t.comment:
+            e["comment"] = t.comment
+
+    parent: dict = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    chosen: dict = {}
+    no_link = []
+    for key, e in tax.items():
+        nums = _UPR_NUMBER.findall(e["comment"] or "")
+        hit = False
+        for n in nums:
+            if n not in upr:
+                continue
+            best = min(upr[n], key=lambda d: abs((d - e["date"]).days))
+            chosen[(n, best)] = upr[n][best]
+            union(("T", key), ("U", (n, best)))
+            hit = True
+        if not hit:
+            no_link.append(e)
+
+    comps: dict = defaultdict(lambda: {"t": set(), "u": set()})
+    for node in list(parent):
+        comps[find(node)]["t" if node[0] == "T" else "u"].add(node[1])
+
+    groups = []
+    for c in comps.values():
+        uq = sum(chosen[k]["qty"] for k in c["u"])
+        ua = sum((chosen[k]["doc_total"] if chosen[k]["doc_total"] is not None
+                  else chosen[k]["amount"]) for k in c["u"])
+        nq = sum(tax[g]["qty"] for g in c["t"])
+        na = sum(tax[g]["amount"] for g in c["t"])
+        dates = [d for _, d in c["u"]]
+        groups.append({
+            "date": min(dates).isoformat(),
+            "upr_numbers": sorted({n for n, _ in c["u"]}),
+            "client": next((chosen[k]["client"] for k in c["u"]
+                            if chosen[k]["client"]), None),
+            "tax_docs": sorted(
+                ({"number": str(tax[g]["number"] or ""),
+                  "date": tax[g]["date"].isoformat(),
+                  "counterparty": tax[g]["counterparty"],
+                  "qty": round(tax[g]["qty"], 1),
+                  "amount": round(tax[g]["amount"], 2)} for g in c["t"]),
+                key=lambda x: x["date"]),
+            "upr_qty": round(uq, 1), "tax_qty": round(nq, 1),
+            "diff_qty": round(nq - uq, 1),
+            "upr_amount": round(ua, 2), "tax_amount": round(na, 2),
+            # Разница в цене между контурами — не ошибка, а трансфертная
+            # наценка. Показываем процентом, чтобы выбросы были заметны.
+            "price_pct": round((na / ua - 1) * 100, 1) if ua else None,
+        })
+    groups.sort(key=lambda g: g["date"], reverse=True)
+    matched = sum(1 for g in groups if abs(g["diff_qty"]) < 1)
+    if only_diff:
+        groups = [g for g in groups if abs(g["diff_qty"]) >= 1]
+
+    return {
+        "org": o,
+        "groups": groups,
+        "total_groups": len(comps),
+        "matched": matched,
+        "diff_qty": round(sum(g["diff_qty"] for g in groups), 1),
+        # Документы налоговой, в комментарии которых номера управленки нет.
+        # Их не с чем сверять — это розница на физлиц («ИНН Иванова») и
+        # документы с комментарием вроде «Подгузники».
+        "unlinked": len(no_link),
+        "unlinked_qty": round(sum(e["qty"] for e in no_link), 1),
     }

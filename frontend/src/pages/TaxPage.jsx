@@ -394,6 +394,105 @@ function CompareTable({ title, data, note }) {
   )
 }
 
+
+// Сверка по номерам управленки, вписанным в комментарий налогового документа.
+// Это единственная прямая связь между контурами: GUID у баз свои, контрагенты
+// разные — в управленке точка, в налоговой юрлицо или ИП.
+function ByCommentCard() {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [onlyDiff, setOnlyDiff] = useState(false)
+  const [open, setOpen] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    setData(null)
+    api.taxByComment(onlyDiff)
+      .then((d) => alive && setData(d)).catch((e) => alive && setError(e.message))
+    return () => { alive = false }
+  }, [onlyDiff])
+
+  if (error) return <div className="error">{error}</div>
+  if (!data) return <div className="chart-card"><div className="muted">Загрузка…</div></div>
+
+  const num = (v) => Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })
+  const dt = (iso) => iso.split('-').reverse().join('.')
+
+  return (
+    <div className="chart-card">
+      <div className="rc-col-title">Сверка по номерам из комментария</div>
+      <p className="muted">
+        Сошлось <b>{data.matched}</b> групп из <b>{data.total_groups}</b>
+        {data.diff_qty !== 0 && <> · расхождение <b>{num(data.diff_qty)}</b> шт</>}
+        {' '}· без номера в комментарии <b>{data.unlinked}</b> документов
+        на {num(data.unlinked_qty)} шт — это розница на физлиц, сверять не с чем.
+      </p>
+      <label className="sc-check">
+        <input type="checkbox" checked={onlyDiff}
+          onChange={(e) => setOnlyDiff(e.target.checked)} />
+        только расхождения
+      </label>
+      <div className="table-wrap rc-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Дата</th><th>Документы управленки</th><th>Клиент</th>
+              <th className="num">Частей</th>
+              <th className="num">Упр, шт</th><th className="num">Налог, шт</th>
+              <th className="num">Разница</th><th className="num">Цена</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.groups.map((g, i) => {
+              const bad = Math.abs(g.diff_qty) >= 1
+              return (
+                <>
+                  <tr key={i} className="rc-clickable"
+                    onClick={() => setOpen(open === i ? null : i)}>
+                    <td>{dt(g.date)}</td>
+                    <td>{g.upr_numbers.join(' / ')}</td>
+                    <td>{g.client || '—'}</td>
+                    <td className="num">{g.tax_docs.length}</td>
+                    <td className="num">{num(g.upr_qty)}</td>
+                    <td className="num">{num(g.tax_qty)}</td>
+                    <td className={`num ${bad ? 'sc-bad' : 'sc-ok'}`}>
+                      {bad ? num(g.diff_qty) : '✓'}
+                    </td>
+                    <td className="num">
+                      {g.price_pct == null ? '—' : `${g.price_pct > 0 ? '+' : ''}${g.price_pct}%`}
+                    </td>
+                  </tr>
+                  {open === i && (
+                    <tr key={`${i}-d`}>
+                      <td colSpan={8}>
+                        <div className="rc-note">
+                          {g.tax_docs.map((d, j) => (
+                            <div key={j}>
+                              №{d.number} от {dt(d.date)} · {d.counterparty} ·{' '}
+                              {num(d.qty)} шт · {num(d.amount)} сом
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted">
+        Одну отгрузку управленки в налоговой разбивают на несколько документов
+        по разным ИП, поэтому сходиться должны итоги группы, а не отдельные
+        строки. Колонка «Цена» — насколько налоговая сумма отличается от
+        управленческой при тех же штуках: это трансфертная наценка, а не
+        ошибка, и обычно она около −15%.
+      </p>
+    </div>
+  )
+}
+
 export default function TaxPage() {
   const { can } = useAuth()
   const [data, setData] = useState(null)
@@ -464,6 +563,8 @@ export default function TaxPage() {
           продажи проведены на юрлица), поэтому сверяем помесячные агрегаты.
           НАЛ/УПР — доля официально проведённого оборота, Δ SD — расхождение
           SalesDoc с управленкой. */}
+      {data && kinds.length > 0 && <ByCommentCard />}
+
       {data && kinds.length > 0 && <TaxLinksPanel onChanged={() => { load(); setLinksVer((v) => v + 1) }} />}
 
       {data && kinds.length > 0 && <TaxGroupsPanel refreshKey={linksVer} />}

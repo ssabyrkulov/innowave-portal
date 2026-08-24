@@ -781,6 +781,11 @@ class TaxOperation(Base):
     # документом «Поступление товары», что и подгузники, и по одному
     # количеству их не отличить.
     account: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Комментарий документа. В нём бухгалтер вписывает номера документов
+    # управленки, которые этот налоговый документ покрывает: «0000-000760/
+    # 0000-000761». Это единственная прямая связь между контурами — GUID у
+    # баз свои, контрагенты разные, а номера проставлены руками.
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
