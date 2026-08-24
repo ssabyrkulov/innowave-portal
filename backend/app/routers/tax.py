@@ -932,6 +932,31 @@ def tax_summary(
 _UPR_NUMBER = re.compile(r"\d{4}-\d{6}")
 
 
+def _pick_twin(dates: dict, tax_doc: dict):
+    """Из одноимённых документов управленки выбирает тот, что имеет в виду
+    налоговый.
+
+    Номера повторяются по годам — у Хайджина 391 номер из 988 встречается с
+    разными датами. Одной близости даты мало: «0000-000061» есть 20.01.2025
+    (Булак, 20 шт на 10 710) и 05.02.2026 (Чынар оптомаркет, 100 шт на
+    37 170), и до налогового документа от 31.07.2025 второй ближе на три дня.
+    По дате выбирался он — и отгрузка Булака показывалась расхождением на
+    −80 штук у чужого клиента.
+
+    Поэтому сначала смотрим на деньги и количество: совпавший итог документа
+    — куда более сильный признак, чем несколько дней разницы.
+    """
+    def rank(d):
+        u = dates[d]
+        total = u["doc_total"] if u["doc_total"] is not None else u["amount"]
+        return (
+            abs(total - tax_doc["amount"]) > 0.01,   # сумма совпала — вперёд
+            abs(u["qty"] - tax_doc["qty"]) > 0.01,   # затем количество
+            abs((d - tax_doc["date"]).days),         # и лишь потом дата
+        )
+    return min(dates, key=rank)
+
+
 @router.get("/by-comment")
 def tax_by_comment(
     db: Session = Depends(get_db),
@@ -1011,7 +1036,7 @@ def tax_by_comment(
         for n in nums:
             if n not in upr:
                 continue
-            best = min(upr[n], key=lambda d: abs((d - e["date"]).days))
+            best = _pick_twin(upr[n], e)
             chosen[(n, best)] = upr[n][best]
             union(("T", key), ("U", (n, best)))
             hit = True
