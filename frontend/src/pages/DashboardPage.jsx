@@ -139,39 +139,41 @@ function SalesGroupsCard() {
                 <span className="sg-sum">{shortMoney(g.sum)}</span>
               </div>
               <div className="sg-sub">{Math.round(g.pcs).toLocaleString('ru-RU')} шт</div>
-              <svg viewBox="0 0 460 190" className="dash-chart sg-chart" role="img"
+              <svg viewBox="0 0 1100 240" className="dash-chart sg-chart" role="img"
                 aria-label={`Продажи: ${g.label}`}>
-                {/* Три опорные линии со значениями — без них по высоте столбца
-                    невозможно прикинуть сумму, а подпись есть только в
-                    подсказке при наведении. */}
+                {/* Опорные линии с подписями: по одной высоте столбца сумму
+                    не прикинешь. */}
                 {[1, 0.5].map((k) => (
                   <g key={k}>
-                    <line x1="0" x2="460" y1={150 - k * 130} y2={150 - k * 130}
+                    <line x1="46" x2="1100" y1={196 - k * 150} y2={196 - k * 150}
                       className="sg-grid-line" />
-                    <text x="2" y={150 - k * 130 - 3} className="sg-axis">
+                    <text x="0" y={196 - k * 150 + 4} className="sg-axis">
                       {shortMoney(max * k)}
                     </text>
                   </g>
                 ))}
-                <line x1="0" x2="460" y1="150" y2="150" className="sg-grid-line" />
+                <line x1="46" x2="1100" y1="196" y2="196" className="sg-grid-line" />
                 {pts.map((p, i) => {
-                  const h = Math.max((p.revenue / max) * 130, p.revenue > 0 ? 2 : 0)
-                  const w = 460 / pts.length
+                  const w = (1100 - 46) / pts.length
+                  const x = 46 + i * w
+                  const h = Math.max((p.revenue / max) * 150, p.revenue > 0 ? 2 : 0)
                   return (
                     <g key={p.month}>
-                      <rect x={i * w + 2} y={150 - h} width={Math.max(w - 4, 3)}
-                        height={h} rx="2.5"
+                      <rect x={x + 3} y={196 - h} width={Math.max(w - 6, 3)}
+                        height={h} rx="3"
                         className={i === pts.length - 1 ? 'dash-bar dash-bar-cur' : 'dash-bar'}>
                         <title>{`${monthLabel(p.month)}: ${formatMoney(p.revenue)}`}</title>
                       </rect>
-                      {(i % 2 === 0 || i === pts.length - 1) && (
-                        <text x={i * w + 2 + (w - 4) / 2} y={166} className="dash-tick"
-                          textAnchor="middle">{monthLabel(p.month).split(' ')[0]}</text>
+                      {/* Значение прямо над столбцом — иначе цифру видно
+                          только при наведении, а на телефоне и вовсе никак. */}
+                      {p.revenue > 0 && (
+                        <text x={x + w / 2} y={196 - h - 6} className="sg-val"
+                          textAnchor="middle">{shortMoney(p.revenue)}</text>
                       )}
-                      {(i % 2 === 0 || i === pts.length - 1) && (
-                        <text x={i * w + 2 + (w - 4) / 2} y={182} className="sg-year"
-                          textAnchor="middle">{monthLabel(p.month).split(' ')[1]}</text>
-                      )}
+                      <text x={x + w / 2} y={214} className="dash-tick"
+                        textAnchor="middle">{monthLabel(p.month).split(' ')[0]}</text>
+                      <text x={x + w / 2} y={230} className="sg-year"
+                        textAnchor="middle">{monthLabel(p.month).split(' ')[1]}</text>
                     </g>
                   )
                 })}

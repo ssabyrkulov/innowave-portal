@@ -2965,9 +2965,9 @@ button.summary-card {
 /* Продажи по товарным группам: сетка маленьких графиков на главной. */
 .sg-grid {
   display: grid;
-  /* Два графика в ряд на широком экране, один на узком: при четырёх в ряд
-     столбцы за 18 месяцев сливались в кашу. */
-  grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  /* По одному графику в ряд на всю ширину: только так над каждым столбцом
+     помещается его сумма. В два ряда цифры налезали друг на друга. */
+  grid-template-columns: 1fr;
   gap: 18px;
   margin-top: 12px;
 }
@@ -2982,9 +2982,13 @@ button.summary-card {
 .sg-sub { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
 .sg-chart { width: 100%; height: auto; }
 .sg-grid-line { stroke: var(--border); stroke-width: 1; }
-.sg-axis { font-size: 9px; fill: var(--muted); }
-.sg-year { font-size: 8px; fill: var(--muted); opacity: .75; }
+.sg-axis { font-size: 11px; fill: var(--muted); }
+.sg-val { font-size: 11px; font-weight: 600; fill: var(--text, currentColor); }
+/* В больших графиках по товарам подписи месяцев крупнее общей мелочи. */
+.sg-chart .dash-tick { font-size: 11px; }
+.sg-year { font-size: 10px; fill: var(--muted); opacity: .75; }
 
 @media (max-width: 520px) {
-  .sg-grid { grid-template-columns: 1fr; }
+  .sg-val { font-size: 13px; }
+  .sg-axis, .sg-year { font-size: 12px; }
 }
