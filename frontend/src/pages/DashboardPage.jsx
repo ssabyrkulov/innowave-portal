@@ -97,6 +97,76 @@ function MiniChart({ monthly, height = 64, width = 400 }) {
   )
 }
 
+
+// Продажи по товарным группам: отдельный график на каждую.
+// Галочка «без Байго Трейд» нужна потому, что Байго — это весь StarKid и
+// больше 90% оборота: на общем графике шампуни и бумага превращаются в
+// плоскую линию у нуля, и понять, растут они или падают, невозможно.
+function SalesGroupsCard() {
+  const [data, setData] = useState(null)
+  const [exBaygo, setExBaygo] = useState(false)
+
+  useEffect(() => {
+    api.salesGroups().then(setData).catch(() => setData(null))
+  }, [])
+
+  if (!data || !data.groups.length) return null
+  const field = exBaygo ? 'revenue_ex' : 'revenue'
+  const shown = data.groups
+    .map((g) => ({ ...g, sum: exBaygo ? g.total_ex : g.total,
+                   pcs: exBaygo ? g.qty_ex : g.qty }))
+    .filter((g) => g.sum > 0)
+    .sort((a, b) => b.sum - a.sum)
+
+  return (
+    <div className="chart-card dash-span2">
+      <div className="dash-card-head">
+        <h2 className="chart-title">Продажи по товарам</h2>
+        <label className="sc-check">
+          <input type="checkbox" checked={exBaygo}
+            onChange={(e) => setExBaygo(e.target.checked)} />
+          без {data.excluded}
+        </label>
+      </div>
+      <div className="sg-grid">
+        {shown.map((g) => {
+          const pts = g.monthly.map((p) => ({ month: p.month, revenue: p[field] }))
+          const max = Math.max(...pts.map((p) => p.revenue), 1)
+          return (
+            <div key={g.key} className="sg-item">
+              <div className="sg-head">
+                <span className="sg-name">{g.label}</span>
+                <span className="sg-sum">{shortMoney(g.sum)}</span>
+              </div>
+              <div className="sg-sub">{Math.round(g.pcs).toLocaleString('ru-RU')} шт</div>
+              <svg viewBox="0 0 300 70" className="dash-chart" role="img"
+                aria-label={`Продажи: ${g.label}`}>
+                {pts.map((p, i) => {
+                  const h = Math.max((p.revenue / max) * 52, p.revenue > 0 ? 1.5 : 0)
+                  const w = 300 / pts.length
+                  return (
+                    <g key={p.month}>
+                      <rect x={i * w + 1} y={58 - h} width={Math.max(w - 2, 2)}
+                        height={h} rx="2"
+                        className={i === pts.length - 1 ? 'dash-bar dash-bar-cur' : 'dash-bar'}>
+                        <title>{`${monthLabel(p.month)}: ${formatMoney(p.revenue)}`}</title>
+                      </rect>
+                      {i % 3 === 0 && (
+                        <text x={i * w + 1 + w / 2} y={68} className="dash-tick"
+                          textAnchor="middle">{monthLabel(p.month).split(' ')[0]}</text>
+                      )}
+                    </g>
+                  )
+                })}
+              </svg>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const { user } = useAuth()
   const [data, setData] = useState(null)
@@ -126,6 +196,7 @@ export default function DashboardPage() {
       ) : (
         <DesktopDash data={data} user={user} />
       )}
+      <SalesGroupsCard />
       <StockSourcesCard />
       <CalcStockCard />
     </>

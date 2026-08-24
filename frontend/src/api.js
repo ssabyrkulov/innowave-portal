@@ -183,6 +183,7 @@ export const api = {
   purchasesLines: () => request('/purchases/lines'),
   stockCalc: () => request('/purchases/stock-calc'),
   stockSources: () => request('/balances/stock-sources'),
+  salesGroups: () => request('/dashboard/sales-groups'),
   taxByComment: (onlyDiff) =>
     request(`/tax/by-comment?only_diff=${onlyDiff ? 'true' : 'false'}`),
   stockCompare: () => request('/purchases/stock-compare'),

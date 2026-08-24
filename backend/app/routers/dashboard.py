@@ -184,3 +184,78 @@ def dashboard(
             "in_30": round(in_30, 2),
         },
     }
+
+
+# Товарные группы для графиков продаж. Порядок — как в голове у владельца, а
+# не по алфавиту: подгузники ONE, они же mini, StarKid, бумажная группа,
+# шампуни, остальное.
+_SALES_GROUPS = (
+    ("one", "Подгузники ONE", (1,)),
+    ("one_mini", "Подгузники ONE mini", (2,)),
+    ("starkid", "Подгузники StarKid", (3,)),
+    # Туалетная бумага, полотенца и салфетки — один товарный поток, смотреть
+    # их по отдельности смысла нет.
+    ("paper", "Бумага, полотенца, салфетки", (4, 5)),
+    ("splash", "Шампуни SPLASH", (6,)),
+    ("other", "Прочее", (7,)),
+)
+
+
+@router.get("/sales-groups")
+def sales_groups(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
+    months: int = Query(default=18, le=60),
+):
+    """Продажи по месяцам в разрезе товарных групп.
+
+    Каждая группа отдаётся двумя рядами: со всеми клиентами и без Байго
+    Трейд. Байго — это больше половины оборота, и на общем графике остальные
+    товары превращаются в плоскую линию у нуля: понять по нему, растут ли
+    продажи шампуня, невозможно.
+    """
+    from .purchases import _group_of
+
+    big = "байго"
+    sales = models.org_scope(db.query(models.Sale), models.Sale, org).all()
+    by_group: dict[str, dict] = {}
+    for key, label, _codes in _SALES_GROUPS:
+        by_group[key] = {"key": key, "label": label,
+                         "m": defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])}
+    code_to_key = {c: key for key, _l, codes in _SALES_GROUPS for c in codes}
+
+    seen_months: set = set()
+    for s in sales:
+        key = code_to_key.get(_group_of(s.product), "other")
+        month = s.date.strftime("%Y-%m")
+        seen_months.add(month)
+        cell = by_group[key]["m"][month]
+        amount, qty = float(s.amount or 0), float(s.qty or 0)
+        cell[0] += amount
+        cell[1] += qty
+        if big not in (s.client or "").lower():
+            cell[2] += amount
+            cell[3] += qty
+
+    period = sorted(seen_months)[-months:]
+    out = []
+    for key, label, _codes in _SALES_GROUPS:
+        g = by_group[key]
+        series = [
+            {"month": m,
+             "revenue": round(g["m"][m][0], 2), "qty": round(g["m"][m][1], 1),
+             "revenue_ex": round(g["m"][m][2], 2), "qty_ex": round(g["m"][m][3], 1)}
+            for m in period
+        ]
+        total = round(sum(p["revenue"] for p in series), 2)
+        total_ex = round(sum(p["revenue_ex"] for p in series), 2)
+        # Пустые группы не показываем: «Прочее» у Innowave пустое, и карточка
+        # с нулевым графиком только занимает место.
+        if total or total_ex:
+            out.append({"key": key, "label": label, "monthly": series,
+                        "total": total, "total_ex": total_ex,
+                        "qty": round(sum(p["qty"] for p in series), 1),
+                        "qty_ex": round(sum(p["qty_ex"] for p in series), 1)})
+    out.sort(key=lambda g: -g["total"])
+    return {"months": period, "groups": out, "excluded": "Байго Трейд"}
