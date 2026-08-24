@@ -139,21 +139,38 @@ function SalesGroupsCard() {
                 <span className="sg-sum">{shortMoney(g.sum)}</span>
               </div>
               <div className="sg-sub">{Math.round(g.pcs).toLocaleString('ru-RU')} шт</div>
-              <svg viewBox="0 0 300 70" className="dash-chart" role="img"
+              <svg viewBox="0 0 460 190" className="dash-chart sg-chart" role="img"
                 aria-label={`Продажи: ${g.label}`}>
+                {/* Три опорные линии со значениями — без них по высоте столбца
+                    невозможно прикинуть сумму, а подпись есть только в
+                    подсказке при наведении. */}
+                {[1, 0.5].map((k) => (
+                  <g key={k}>
+                    <line x1="0" x2="460" y1={150 - k * 130} y2={150 - k * 130}
+                      className="sg-grid-line" />
+                    <text x="2" y={150 - k * 130 - 3} className="sg-axis">
+                      {shortMoney(max * k)}
+                    </text>
+                  </g>
+                ))}
+                <line x1="0" x2="460" y1="150" y2="150" className="sg-grid-line" />
                 {pts.map((p, i) => {
-                  const h = Math.max((p.revenue / max) * 52, p.revenue > 0 ? 1.5 : 0)
-                  const w = 300 / pts.length
+                  const h = Math.max((p.revenue / max) * 130, p.revenue > 0 ? 2 : 0)
+                  const w = 460 / pts.length
                   return (
                     <g key={p.month}>
-                      <rect x={i * w + 1} y={58 - h} width={Math.max(w - 2, 2)}
-                        height={h} rx="2"
+                      <rect x={i * w + 2} y={150 - h} width={Math.max(w - 4, 3)}
+                        height={h} rx="2.5"
                         className={i === pts.length - 1 ? 'dash-bar dash-bar-cur' : 'dash-bar'}>
                         <title>{`${monthLabel(p.month)}: ${formatMoney(p.revenue)}`}</title>
                       </rect>
-                      {i % 3 === 0 && (
-                        <text x={i * w + 1 + w / 2} y={68} className="dash-tick"
+                      {(i % 2 === 0 || i === pts.length - 1) && (
+                        <text x={i * w + 2 + (w - 4) / 2} y={166} className="dash-tick"
                           textAnchor="middle">{monthLabel(p.month).split(' ')[0]}</text>
+                      )}
+                      {(i % 2 === 0 || i === pts.length - 1) && (
+                        <text x={i * w + 2 + (w - 4) / 2} y={182} className="sg-year"
+                          textAnchor="middle">{monthLabel(p.month).split(' ')[1]}</text>
                       )}
                     </g>
                   )
