@@ -776,6 +776,11 @@ class TaxOperation(Base):
     # GUID документа 1С: в новом формате есть у всех документов, и это точный
     # ключ сверки налоговой с управленкой вместо совпадения по дате и сумме.
     doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Счёт учёта строки. Без него в остатках товаров оказывались бензин,
+    # дизтопливо и офисная мебель: в налоговой базе они приходуются тем же
+    # документом «Поступление товары», что и подгузники, и по одному
+    # количеству их не отличить.
+    account: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

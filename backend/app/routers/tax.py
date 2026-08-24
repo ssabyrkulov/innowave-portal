@@ -235,6 +235,7 @@ def _parse(content: bytes, filename: str) -> tuple[str, list[dict]]:
                 "product": str(first("Номенклатура", "НоменклатураНаименование")
                                or "").strip() or None,
                 "qty": _num(first("Количество", "КоличествоФакт", "КоличествоУчет")),
+                "account": str(first("СчетУчетаБУ", "СчетУчета") or "").strip() or None,
             })
         else:
             out.append({

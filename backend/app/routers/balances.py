@@ -462,6 +462,13 @@ def stock_sources(
         src = (op.source or "").lower()
         if "услуг" in src or "доп расход" in src:
             continue
+        # Товары для перепродажи — счета 161x–164x. Бензин, дизтопливо и
+        # мебель приходуются тем же документом «Поступление товары», но на
+        # счета материалов (1710) и МБП (1750): в остатках товаров им не
+        # место, а по количеству от подгузников их не отличить.
+        acc = str(op.account or "")
+        if acc and not acc.startswith(("161", "162", "163", "164")):
+            continue
         e = cell(op.product)
         e["nal"] = (e["nal"] or 0.0) + SIGN[op.kind] * float(op.qty or 0)
 
