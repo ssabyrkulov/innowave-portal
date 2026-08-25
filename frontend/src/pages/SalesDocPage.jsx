@@ -863,10 +863,6 @@ function ReconcileDetailModal({ row, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row, dr])
 
-  // Какая оплата раскрыта «сырым ответом» — чтобы посмотреть, есть ли в ней
-  // вообще хоть какой-то признак фирмы.
-  const [rawPay, setRawPay] = useState(null)
-
   // 1С за тот же период, что и SD — для сопоставимости.
   const cShip = (oneC?.shipments || []).filter((s) => inRange(s.date, dr))
   const cPay = (oneC?.payments || []).filter((p) => inRange(p.date, dr))
@@ -1038,13 +1034,6 @@ function ReconcileDetailModal({ row, onClose }) {
                         : `без заказа · ${shortId(p.sd_id)}`),
                 warn: isFuture(p.date) || payPairs.rightUnpaired(i),
                 muted: !p.counted,
-                action: (
-                  <button className="store-stat store-stat-link sd-raw-btn"
-                    title="Показать сырой ответ SalesDoc"
-                    onClick={() => setRawPay(rawPay === p.sd_id ? null : p.sd_id)}>
-                    {rawPay === p.sd_id ? '×' : '{ }'}
-                  </button>
-                ),
               }) }, 3)}
               head={['Дата', 'Вид', 'Сумма']}  twoLine />
             {/* Оплата без связи с заказами к фирме не относится никак —
@@ -1066,7 +1055,6 @@ function ReconcileDetailModal({ row, onClose }) {
                 показываются в обеих.
               </div>
             )}
-            {rawPay && <PaymentRaw sdId={rawPay} />}
             {sd?.payments && sd.payments.matched === 0 && (
               <div className="muted sd-pay-diag">
                 {sd.payments.scanned > 0
@@ -1345,7 +1333,6 @@ function RcSection({ title, total, count, rows, head, twoLine }) {
                 // идентификаторы SalesDoc длинные и выдавливали сумму за край.
                 const note = !Array.isArray(r) && r.note
                 const warn = !Array.isArray(r) && r.warn
-                const action = !Array.isArray(r) && r.action
                 return (
                   <tr key={i} className={`${muted ? 'rc-row-muted' : ''}${blank ? ' rc-row-blank' : ''}`}>
                     {cells.map((c, j) => (
@@ -1354,27 +1341,20 @@ function RcSection({ title, total, count, rows, head, twoLine }) {
                             иначе строка-заполнитель ниже соседней на целую
                             строку текста, и колонки снова разъезжаются. */}
                         {(j === 0 ? fdate(c) : c) || (c === 0 ? c : ' ')}
-                        {/* Заметка и кнопка «сырой ответ SD» — одной строкой.
-                            Кнопка своей строкой добавляла третий этаж каждой
-                            строке таблицы, и два столбца сверки переставали
-                            совпадать по высоте: сравнивать их приходилось
-                            прокруткой, а не глазом. */}
                         {/* twoLine: место под подпись держим всегда, даже
                             когда её нет. Иначе строка без подписи ниже
                             строки с подписью, и колонки сверки съезжают —
                             подбирать высоту в CSS бесполезно, разница
                             вылезает при первой же длинной строке. */}
-                        {j === 0 && twoLine && !note && !action && (
+                        {j === 0 && twoLine && !note && (
                           <div className="rc-note">&nbsp;</div>
                         )}
-                        {j === 0 && (note || action) && (
+                        {j === 0 && note && (
                           <div className={`rc-note ${warn ? 'rc-note-warn' : ''}`}
                             title={note === 'дата в будущем!'
                               ? 'Скорее всего опечатка в годе — в SalesDoc такая запись не видна из-за фильтра по периоду, но баланс двигает'
                               : note || undefined}>
                             {note}
-                            {note && action ? ' · ' : null}
-                            {action}
                           </div>
                         )}
                       </td>
@@ -4420,63 +4400,6 @@ function StoreOrders({ storeId }) {
       <div className="muted store-orders-total">
         Отгружено: <b>{money(data.amount)}</b> · всего документов {data.count}
       </div>
-    </div>
-  )
-}
-
-// Сырой ответ SalesDoc по оплате: список полей операции целиком. Ответ на
-// вопрос «есть ли в оплате хоть какой-то признак фирмы» — только тут.
-function PaymentRaw({ sdId }) {
-  const [data, setData] = useState(null)
-  const [error, setError] = useState(null)
-
-  useEffect(() => {
-    let alive = true
-    setData(null); setError(null)
-    api.salesdocPaymentRaw(sdId)
-      .then((d) => alive && setData(d)).catch((e) => alive && setError(e.message))
-    return () => { alive = false }
-  }, [sdId])
-
-  if (error) return <div className="error">{error}</div>
-  if (!data) return <div className="muted store-orders">Спрашиваю SalesDoc…</div>
-  return (
-    <div className="order-raw">
-      <div>
-        <b>В зеркале:</b> {money(data.mirror.amount)}, вид {data.mirror.txn},
-        способ {data.mirror.type_name || '—'}, касса{' '}
-        <code>{data.mirror.cashbox_name || data.mirror.cashbox_sd_id || 'не задана'}</code>
-      </div>
-      {/* Главное в ответе — какие заказы гасит оплата: склада у неё нет, а у
-          заказа есть, и это единственный признак фирмы. */}
-      <div>
-        <b>Гасит заказы:</b>{' '}
-        {data.linked.length === 0
-          ? <span className="muted">ни одного — оплата ни к чему не привязана,
-              поделить её по фирмам нечем</span>
-          : null}
-      </div>
-      {data.linked.length > 0 && (
-        <ul className="order-raw-sib">
-          {data.linked.map((o, i) => (
-            <li key={i}>
-              {o.found
-                ? <>{fdateShort(o.date)} · склад <b>{o.store || '—'}</b> · {o.status} · {money(o.amount)}</>
-                : <span className="muted">{o.sd_id} — заказа нет в зеркале</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-      <div>
-        <b>Поля операции в SalesDoc:</b>{' '}
-        {data.fields.length > 0
-          ? <code>{data.fields.join(', ')}</code>
-          : <span className="muted">операция в ответе не найдена</span>}
-      </div>
-      <details>
-        <summary className="muted">Показать ответ целиком (JSON)</summary>
-        <pre className="order-raw-json">{JSON.stringify(data.raw, null, 2)}</pre>
-      </details>
     </div>
   )
 }
