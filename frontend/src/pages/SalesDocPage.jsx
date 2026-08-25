@@ -1009,7 +1009,9 @@ function ReconcileDetailModal({ row, onClose }) {
                     ? 'нет пары в 1С'
                     : (p.stores?.length
                         ? p.stores.join(', ')
-                        : `без привязки к заказу · ${shortId(p.sd_id)}`),
+                        // Коротко: подпись стоит под датой в узкой колонке,
+                        // и длинная формулировка вылезала за её ширину.
+                        : `без заказа · ${shortId(p.sd_id)}`),
                 warn: isFuture(p.date) || payPairs.rightUnpaired(i),
                 muted: !p.counted,
                 action: (
