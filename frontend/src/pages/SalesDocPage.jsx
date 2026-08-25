@@ -955,7 +955,7 @@ function ReconcileDetailModal({ row, onClose }) {
                       .filter(Boolean).join(' · ') || null),
                 warn: shipPairs.leftUnpaired(i),
               } }, 2)}
-              head={['Дата', 'Сумма']} />
+              head={['Дата', 'Сумма']}  twoLine />
             <RcSection title="Оплаты" total={p1} count={cPay.length}
               // Названия кассы/счёта в выгрузке 1С нет — только вид оплаты
               // (касса или банк), он и стоит в колонке «Тип».
@@ -964,9 +964,9 @@ function ReconcileDetailModal({ row, onClose }) {
                 note: payPairs.leftUnpaired(i) ? 'нет пары в SalesDoc' : null,
                 warn: payPairs.leftUnpaired(i),
               } }, 3)}
-              head={['Дата', 'Тип', 'Сумма']} />
+              head={['Дата', 'Тип', 'Сумма']}  twoLine />
             <RcSection title="Возвраты" total={r1} count={cRet.length}
-              rows={cRet.map((r) => [r.date, money(r.amount)])} head={['Дата', 'Сумма']} />
+              rows={cRet.map((r) => [r.date, money(r.amount)])} head={['Дата', 'Сумма']}  twoLine />
           </div>
 
           {/* ---- SalesDoc ---- */}
@@ -989,7 +989,7 @@ function ReconcileDetailModal({ row, onClose }) {
                   warn: isFuture(o.date) || shipPairs.rightUnpaired(i),
                   muted: !o.counted,
                 }) }, 3)}
-              head={['Дата', 'Статус', 'Сумма']} />
+              head={['Дата', 'Статус', 'Сумма']}  twoLine />
             {sdCancelled.length > 0 && (
               <div className="muted sd-pay-diag">
                 Ещё {sdCancelled.length} отменённых реализаций (в суммы не идут):{' '}
@@ -1046,7 +1046,7 @@ function ReconcileDetailModal({ row, onClose }) {
                   </button>
                 ),
               }) }, 3)}
-              head={['Дата', 'Вид', 'Сумма']} />
+              head={['Дата', 'Вид', 'Сумма']}  twoLine />
             {/* Оплата без связи с заказами к фирме не относится никак —
                 показываем её при любой фирме и говорим об этом прямо, иначе
                 она читается как «заплатили именно этой фирме». */}
@@ -1109,7 +1109,7 @@ function ReconcileDetailModal({ row, onClose }) {
                 cells: [r.date, money(r.amount)],
                 note: shortId(r.sd_id),
               }))}
-              head={['Дата', 'Сумма']} />
+              head={['Дата', 'Сумма']}  twoLine />
           </div>
         </div>
       </div>
@@ -1318,7 +1318,7 @@ function ClientDebug({ row }) {
   )
 }
 
-function RcSection({ title, total, count, rows, head }) {
+function RcSection({ title, total, count, rows, head, twoLine }) {
   const fdate = (v) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v.split('-').reverse().join('.') : v)
   return (
     <div className="rc-section">
@@ -1350,12 +1350,23 @@ function RcSection({ title, total, count, rows, head }) {
                   <tr key={i} className={`${muted ? 'rc-row-muted' : ''}${blank ? ' rc-row-blank' : ''}`}>
                     {cells.map((c, j) => (
                       <td key={j} className={j === cells.length - 1 ? 'num' : ''}>
-                        {j === 0 ? fdate(c) : c}
+                        {/* Пустую ячейку заполняем неразрывным пробелом:
+                            иначе строка-заполнитель ниже соседней на целую
+                            строку текста, и колонки снова разъезжаются. */}
+                        {(j === 0 ? fdate(c) : c) || (c === 0 ? c : ' ')}
                         {/* Заметка и кнопка «сырой ответ SD» — одной строкой.
                             Кнопка своей строкой добавляла третий этаж каждой
                             строке таблицы, и два столбца сверки переставали
                             совпадать по высоте: сравнивать их приходилось
                             прокруткой, а не глазом. */}
+                        {/* twoLine: место под подпись держим всегда, даже
+                            когда её нет. Иначе строка без подписи ниже
+                            строки с подписью, и колонки сверки съезжают —
+                            подбирать высоту в CSS бесполезно, разница
+                            вылезает при первой же длинной строке. */}
+                        {j === 0 && twoLine && !note && !action && (
+                          <div className="rc-note">&nbsp;</div>
+                        )}
                         {j === 0 && (note || action) && (
                           <div className={`rc-note ${warn ? 'rc-note-warn' : ''}`}
                             title={note === 'дата в будущем!'
