@@ -64,6 +64,7 @@ function daysBetween(a, b) {
 function pairLists(left, right, amountOf) {
   const usedR = new Set()
   const pairedL = new Set()
+  const matchOf = new Map()
   // Сначала точные совпадения по дате, потом «в пределах нескольких дней»:
   // иначе близкий по дате чужой документ мог перехватить пару.
   for (const exact of [true, false]) {
@@ -76,13 +77,37 @@ function pairLists(left, right, amountOf) {
         const d = daysBetween(l.date, r.date)
         return exact ? d === 0 : d <= PAIR_TOL_DAYS
       })
-      if (ri >= 0) { usedR.add(ri); pairedL.add(li) }
+      if (ri >= 0) { usedR.add(ri); pairedL.add(li); matchOf.set(li, ri) }
     })
   }
+  // Общая последовательность строк для обеих колонок. Раньше каждая сторона
+  // рисовала свой список, и они разъезжались с первой же записи: списки
+  // разной длины, и третья строка слева была совсем не тем платежом, что
+  // третья справа. Теперь на месте недостающей записи встаёт пустая строка,
+  // и пара всегда стоит напротив пары.
+  const seq = []
+  left.forEach((l, li) => seq.push({
+    li, ri: matchOf.has(li) ? matchOf.get(li) : null, date: l.date,
+  }))
+  right.forEach((r, ri) => {
+    if (!usedR.has(ri)) seq.push({ li: null, ri, date: r.date })
+  })
+  seq.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
   return {
+    seq,
     leftUnpaired: (i) => !pairedL.has(i),
     rightUnpaired: (i) => !usedR.has(i),
   }
+}
+
+// Раскладывает строки одной стороны по общей последовательности пар: где у
+// этой стороны записи нет, встаёт пустая строка-заполнитель.
+function alignRows(seq, side, make, width) {
+  return seq.map((p) => {
+    const i = p[side]
+    if (i == null) return { cells: Array(width).fill(''), blank: true }
+    return make(i)
+  })
 }
 
 // 2025-11-12 → 12.11.2025
@@ -919,7 +944,7 @@ function ReconcileDetailModal({ row, onClose }) {
           <div className="rc-col">
             <div className="rc-col-title">1С {row.in_1c ? '' : '· нет'}</div>
             <RcSection title="Реализации" total={s1} count={cShip.length}
-              rows={cShip.map((s, i) => ({
+              rows={alignRows(shipPairs.seq, 'li', (i) => { const s = cShip[i]; return {
                 cells: [s.date, money(s.amount)],
                 // Номер документа и склад отгрузки: по складу видно, чьей
                 // фирме документ, и почему он мог не сойтись с SalesDoc.
@@ -929,16 +954,16 @@ function ReconcileDetailModal({ row, onClose }) {
                   : ([s.doc_number && `док. ${s.doc_number}`, s.warehouse]
                       .filter(Boolean).join(' · ') || null),
                 warn: shipPairs.leftUnpaired(i),
-              }))}
+              } }, 2)}
               head={['Дата', 'Сумма']} />
             <RcSection title="Оплаты" total={p1} count={cPay.length}
               // Названия кассы/счёта в выгрузке 1С нет — только вид оплаты
               // (касса или банк), он и стоит в колонке «Тип».
-              rows={cPay.map((p, i) => ({
+              rows={alignRows(payPairs.seq, 'li', (i) => { const p = cPay[i]; return {
                 cells: [p.date, p.kind === 'cash' ? 'касса' : 'банк', money(p.amount_kgs)],
                 note: payPairs.leftUnpaired(i) ? 'нет пары в SalesDoc' : null,
                 warn: payPairs.leftUnpaired(i),
-              }))}
+              } }, 3)}
               head={['Дата', 'Тип', 'Сумма']} />
             <RcSection title="Возвраты" total={r1} count={cRet.length}
               rows={cRet.map((r) => [r.date, money(r.amount)])} head={['Дата', 'Сумма']} />
@@ -948,8 +973,7 @@ function ReconcileDetailModal({ row, onClose }) {
           <div className="rc-col">
             <div className="rc-col-title">SalesDoc {row.in_sd ? '' : '· нет'}</div>
             <RcSection title="Реализации" total={sd?.orders?.total} count={sd?.orders?.count}
-              rows={sdShip
-                .map((o, i) => ({
+              rows={alignRows(shipPairs.seq, 'ri', (i) => { const o = sdShip[i]; return ({
                   // Номер обязателен: в один день бывает несколько отгрузок на
                   // равные суммы, и без него не понять, какая из них какой
                   // накладной 1С соответствует. code_1C — номер, присвоенный
@@ -964,7 +988,7 @@ function ReconcileDetailModal({ row, onClose }) {
                       : [orderNote(o), o.store].filter(Boolean).join(' · '),
                   warn: isFuture(o.date) || shipPairs.rightUnpaired(i),
                   muted: !o.counted,
-                }))}
+                }) }, 3)}
               head={['Дата', 'Статус', 'Сумма']} />
             {sdCancelled.length > 0 && (
               <div className="muted sd-pay-diag">
@@ -985,7 +1009,7 @@ function ReconcileDetailModal({ row, onClose }) {
               </div>
             )}
             <RcSection title="Оплаты" total={sd?.payments?.total} count={sd?.payments?.count}
-              rows={sdPay.map((p, i) => ({
+              rows={alignRows(payPairs.seq, 'ri', (i) => { const p = sdPay[i]; return ({
                 // У обычной оплаты пишем только способ («Наличный»): слово
                 // «Оплата» и так следует из названия блока, а длинная подпись
                 // переносилась на вторую строку и ломала выравнивание с 1С.
@@ -1021,7 +1045,7 @@ function ReconcileDetailModal({ row, onClose }) {
                     {rawPay === p.sd_id ? '×' : '{ }'}
                   </button>
                 ),
-              }))}
+              }) }, 3)}
               head={['Дата', 'Вид', 'Сумма']} />
             {/* Оплата без связи с заказами к фирме не относится никак —
                 показываем её при любой фирме и говорим об этом прямо, иначе
@@ -1314,13 +1338,16 @@ function RcSection({ title, total, count, rows, head }) {
               {rows.map((r, i) => {
                 const cells = Array.isArray(r) ? r : r.cells
                 const muted = !Array.isArray(r) && r.muted
+                // Заполнитель: у этой стороны записи нет, но строку занять
+                // надо — иначе соседняя колонка съедет на одну позицию.
+                const blank = !Array.isArray(r) && r.blank
                 // Номер документа — мелкой строкой под датой, а не колонкой:
                 // идентификаторы SalesDoc длинные и выдавливали сумму за край.
                 const note = !Array.isArray(r) && r.note
                 const warn = !Array.isArray(r) && r.warn
                 const action = !Array.isArray(r) && r.action
                 return (
-                  <tr key={i} className={muted ? 'rc-row-muted' : ''}>
+                  <tr key={i} className={`${muted ? 'rc-row-muted' : ''}${blank ? ' rc-row-blank' : ''}`}>
                     {cells.map((c, j) => (
                       <td key={j} className={j === cells.length - 1 ? 'num' : ''}>
                         {j === 0 ? fdate(c) : c}

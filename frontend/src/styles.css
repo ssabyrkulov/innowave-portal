@@ -3015,3 +3015,9 @@ button.summary-card {
   padding: 0 3px;
 }
 .sd-raw-btn:hover { opacity: 1; text-decoration: none; }
+
+/* Строка-заполнитель в сверке: у этой стороны записи нет. Показываем
+   пустой полосой, чтобы пара напротив пары не съезжала. */
+.rc-row-blank td { background: repeating-linear-gradient(
+    -45deg, transparent, transparent 5px,
+    var(--border) 5px, var(--border) 6px); opacity: .25; }
