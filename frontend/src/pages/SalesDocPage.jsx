@@ -4345,7 +4345,6 @@ function StoreMapping() {
 function StoreOrders({ storeId }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
-  const [raw, setRaw] = useState(null)
 
   useEffect(() => {
     let alive = true
@@ -4378,15 +4377,6 @@ function StoreOrders({ storeId }) {
                 <td>{fdateShort(r.date)}</td>
                 <td>
                   {r.doc_number || <span className="muted">{shortId(r.sd_id)}</span>}
-                  {/* Когда портал и интерфейс SalesDoc показывают разный склад,
-                      спор решает только сырой ответ getOrder. Прячем его за
-                      значком в той же строке: своей строкой он удваивал
-                      высоту реестра. */}
-                  <button className="store-stat store-stat-link sd-raw-btn"
-                    title="Показать сырой ответ SalesDoc"
-                    onClick={() => setRaw(raw === r.sd_id ? null : r.sd_id)}>
-                    {raw === r.sd_id ? '×' : '{ }'}
-                  </button>
                 </td>
                 <td>{r.client}</td>
                 <td>{r.status_label}</td>
@@ -4396,63 +4386,9 @@ function StoreOrders({ storeId }) {
           </tbody>
         </table>
       </div>
-      {raw && <OrderRaw sdId={raw} />}
       <div className="muted store-orders-total">
         Отгружено: <b>{money(data.amount)}</b> · всего документов {data.count}
       </div>
-    </div>
-  )
-}
-
-// Сырой ответ SalesDoc по документу: слева то, что лежит у нас в зеркале,
-// ниже — то, что прямо сейчас отдаёт метод getOrder. Если склады разные,
-// видно сразу, чья это правда.
-function OrderRaw({ sdId }) {
-  const [data, setData] = useState(null)
-  const [error, setError] = useState(null)
-
-  useEffect(() => {
-    let alive = true
-    setData(null); setError(null)
-    api.salesdocOrderRaw(sdId)
-      .then((d) => alive && setData(d)).catch((e) => alive && setError(e.message))
-    return () => { alive = false }
-  }, [sdId])
-
-  if (error) return <div className="error">{error}</div>
-  if (!data) return <div className="muted store-orders">Спрашиваю SalesDoc…</div>
-
-  const store = (o) => (o?.store || {}).name || (o?.store || {}).SD_id || '—'
-  return (
-    <div className="order-raw">
-      <div>
-        <b>В зеркале:</b> склад <code>{data.mirror.store_sd_id || '—'}</code>,
-        статус {data.mirror.status}, {money(data.mirror.amount)},
-        обновлено {data.mirror.synced_at || '—'}
-      </div>
-      <div>
-        <b>Сейчас в SalesDoc:</b>{' '}
-        {data.raw ? <>склад <code>{store(data.raw)}</code>, статус {data.raw.status}</>
-          : <span className="muted">документ в ответе не найден</span>}
-      </div>
-      {data.siblings?.length > 0 && (
-        <div className="order-raw-sib">
-          Документы этой точки за соседние дни:
-          <ul>
-            {data.siblings.map((o, i) => (
-              <li key={i}>
-                {o.dateDocument || o.dateCreate} · {o.SD_id || o.CS_id} · склад{' '}
-                <b>{store(o)}</b> · статус {o.status} ·{' '}
-                {money(Number(o.totalSummaAfterDiscount || o.totalSumma || 0))}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      <details>
-        <summary className="muted">Показать ответ целиком (JSON)</summary>
-        <pre className="order-raw-json">{JSON.stringify(data.raw, null, 2)}</pre>
-      </details>
     </div>
   )
 }
