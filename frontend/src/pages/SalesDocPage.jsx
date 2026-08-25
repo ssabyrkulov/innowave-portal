@@ -1013,9 +1013,10 @@ function ReconcileDetailModal({ row, onClose }) {
                 warn: isFuture(p.date) || payPairs.rightUnpaired(i),
                 muted: !p.counted,
                 action: (
-                  <button className="store-stat store-stat-link"
+                  <button className="store-stat store-stat-link sd-raw-btn"
+                    title="Показать сырой ответ SalesDoc"
                     onClick={() => setRawPay(rawPay === p.sd_id ? null : p.sd_id)}>
-                    {rawPay === p.sd_id ? 'скрыть ответ SD' : 'сырой ответ SD'}
+                    {rawPay === p.sd_id ? '×' : '{ }'}
                   </button>
                 ),
               }))}
@@ -1321,15 +1322,21 @@ function RcSection({ title, total, count, rows, head }) {
                     {cells.map((c, j) => (
                       <td key={j} className={j === cells.length - 1 ? 'num' : ''}>
                         {j === 0 ? fdate(c) : c}
-                        {j === 0 && note && (
+                        {/* Заметка и кнопка «сырой ответ SD» — одной строкой.
+                            Кнопка своей строкой добавляла третий этаж каждой
+                            строке таблицы, и два столбца сверки переставали
+                            совпадать по высоте: сравнивать их приходилось
+                            прокруткой, а не глазом. */}
+                        {j === 0 && (note || action) && (
                           <div className={`rc-note ${warn ? 'rc-note-warn' : ''}`}
                             title={note === 'дата в будущем!'
                               ? 'Скорее всего опечатка в годе — в SalesDoc такая запись не видна из-за фильтра по периоду, но баланс двигает'
-                              : note}>
+                              : note || undefined}>
                             {note}
+                            {note && action ? ' · ' : null}
+                            {action}
                           </div>
                         )}
-                        {j === 0 && action}
                       </td>
                     ))}
                   </tr>
@@ -4352,10 +4359,13 @@ function StoreOrders({ storeId }) {
                 <td>
                   {r.doc_number || <span className="muted">{shortId(r.sd_id)}</span>}
                   {/* Когда портал и интерфейс SalesDoc показывают разный склад,
-                      спор решает только сырой ответ метода getOrder. */}
-                  <button className="store-stat store-stat-link"
+                      спор решает только сырой ответ getOrder. Прячем его за
+                      значком в той же строке: своей строкой он удваивал
+                      высоту реестра. */}
+                  <button className="store-stat store-stat-link sd-raw-btn"
+                    title="Показать сырой ответ SalesDoc"
                     onClick={() => setRaw(raw === r.sd_id ? null : r.sd_id)}>
-                    {raw === r.sd_id ? 'скрыть ответ SD' : 'сырой ответ SD'}
+                    {raw === r.sd_id ? '×' : '{ }'}
                   </button>
                 </td>
                 <td>{r.client}</td>

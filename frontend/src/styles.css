@@ -2992,3 +2992,14 @@ button.summary-card {
   .sg-val { font-size: 13px; }
   .sg-axis, .sg-year { font-size: 12px; }
 }
+
+/* «Сырой ответ SD» — значком в строке заметки, а не отдельной строкой:
+   раньше он добавлял каждой строке третий этаж, и столбцы сверки
+   переставали совпадать по высоте. */
+.sd-raw-btn {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  opacity: .55;
+  padding: 0 3px;
+}
+.sd-raw-btn:hover { opacity: 1; text-decoration: none; }
