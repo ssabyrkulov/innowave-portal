@@ -140,7 +140,16 @@ def _import_stock_matrix(db: Session, rows, header_idx: int,
     if itogo_idx is None:
         raise HTTPException(status_code=400,
                             detail="В матричном отчёте не нашлась колонка ИТОГО")
-    warehouses = [(j, header[j]) for j in range(1, itogo_idx) if header[j]]
+    # НоменклатураGUID в матричном отчёте пока не приходит — остаток
+    # единственная выгрузка без него, и позицию приходится узнавать по
+    # названию. Колонку ждём заранее по двум причинам: с ней склейка
+    # перестанет зависеть от написания, а без этой строчки она сломала бы
+    # импорт — встав между номенклатурой и складами, GUID был бы прочитан
+    # как ещё один склад с нечисловым остатком.
+    guid_idx = next((j for j, c in enumerate(header)
+                     if c and "GUID" in c.upper()), None)
+    warehouses = [(j, header[j]) for j in range(1, itogo_idx)
+                  if header[j] and j != guid_idx]
 
     parsed: list[models.StockBalance] = []
     for row in rows[header_idx + 1:]:
@@ -169,6 +178,8 @@ def _import_stock_matrix(db: Session, rows, header_idx: int,
                 amount = 0.0
             parsed.append(models.StockBalance(
                 organization=org, product=name, warehouse=wh,
+                product_guid=(str(cell(guid_idx) or "").strip().lower()
+                              or None),
                 qty=q, amount=round(amount, 2),
             ))
 
