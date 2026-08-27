@@ -216,6 +216,11 @@ export default function ChecksPage() {
                     <td data-label="Последний">
                       {new Date(r.last_at + 'Z').toLocaleDateString('ru-RU')}
                       <span className="muted"> · {r.last_file}</span>
+                      {r.columns && (
+                        <span className="muted skipped-cols">
+                          колонки: {r.columns}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}

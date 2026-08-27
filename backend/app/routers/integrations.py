@@ -323,6 +323,30 @@ def _headers(content: bytes) -> set[str]:
     return out
 
 
+def _probe_columns(content: bytes) -> str:
+    """Строка заголовков файла — чтобы понять, из чего писать импортёр.
+
+    Берём среди первых 20 строк ту, где больше всего непустых текстовых
+    ячеек: у выгрузок 1С шапка бывает не первой строкой, зато она всегда
+    самая «словесная» — ниже идут даты и числа. Сам файл нигде не оседает,
+    в журнал попадают только названия колонок."""
+    try:
+        wb = xlsx.load_workbook(content)
+    except Exception:
+        return ""
+    ws = wb[wb.sheetnames[0]]
+    best: list[str] = []
+    for i, row in enumerate(ws.iter_rows(values_only=True)):
+        if i >= 20:
+            break
+        cells = [str(c).strip() for c in row
+                 if c is not None and str(c).strip()
+                 and not isinstance(c, (int, float))]
+        if len(cells) > len(best):
+            best = cells
+    return ", ".join(best[:40])
+
+
 def _is_line_doc(content: bytes) -> bool:
     """True — выгрузка построчная (по товарам), False — документная (по шапкам).
 
@@ -440,6 +464,7 @@ async def inbox(
             db.add(models.ImportLog(
                 filename=logged, user_id=_robot_user(db).id,
                 added=0, skipped=0, errors_count=0, file_hash=file_hash,
+                columns=_probe_columns(content) or None,
             ))
             db.commit()
         return {
@@ -590,12 +615,13 @@ def skipped_kinds(
         label, moves = unsupported_kind(l.filename)
         g = groups.setdefault(label, {
             "kind": label, "moves_stock": moves, "files": 0,
-            "last_at": None, "last_file": None,
+            "last_at": None, "last_file": None, "columns": None,
         })
         g["files"] += 1
         if g["last_at"] is None:  # выборка уже отсортирована по убыванию
             g["last_at"] = l.created_at.isoformat()
             g["last_file"] = l.filename.split("] ")[-1]
+            g["columns"] = l.columns
     rows = sorted(groups.values(),
                   key=lambda g: (not g["moves_stock"], -g["files"]))
     return {

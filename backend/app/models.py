@@ -822,6 +822,11 @@ class ImportLog(Base):
     replace_period: Mapped[bool] = mapped_column(Boolean, default=False)
     # SHA-256 содержимого файла — автоприём не обрабатывает один файл дважды
     file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Заголовки колонок файла — заполняются для выгрузок, которые портал пока
+    # не грузит. Без импортёра файл исчезает бесследно, и написать импортёр
+    # не по чему: структуру видно только изнутри файла. Колонки в журнале
+    # снимают эту слепоту, не сохраняя сам файл.
+    columns: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship()
