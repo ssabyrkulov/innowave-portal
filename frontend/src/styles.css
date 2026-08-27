@@ -2878,7 +2878,12 @@ button.summary-card {
 .an-warn { color: var(--out); }
 .an-sub { font-weight: 700; margin: 12px 0 4px; font-size: 13px; }
 .an-store { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
-.sd-reconnect-msg { font-size: 12.5px; align-self: center; }
+.sd-reconnect-msg { font-size: 12.5px; align-self: center; margin: 0 0 10px; }
+/* Итог проверки связи: зелёным — токен принят, оранжевым — нет.
+   Текст ошибки от SalesDoc длинный, поэтому строка идёт под шапкой,
+   а не внутри ряда кнопок. */
+.sd-check-ok { color: var(--in); }
+.sd-check-bad { color: var(--warn); font-weight: 600; }
 /* Пояснение под блоком (скрытые реализации, ненайденные оплаты). Нужен отступ
    снизу: без него текст вплотную налезал на заголовок следующего раздела. */
 .sd-pay-diag {

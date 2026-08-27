@@ -123,7 +123,15 @@ function fmtClock(epoch) {
 }
 
 export default function SalesDocPage() {
+  // Проверка связи меняет состояние интеграции, поэтому кнопка — только тем,
+  // кому её доверили: те же роли, что и у ручки на сервере.
+  const { can } = useAuth()
   const [configured, setConfigured] = useState(null)
+  // Режим входа: 'static' — портал живёт на токене 1С, 'login' — сам
+  // логинится. От этого зависит, безопасна ли проверка связи.
+  const [mode, setMode] = useState(null)
+  const [checking, setChecking] = useState(false)
+  const [checkMsg, setCheckMsg] = useState(null)
   const [range, setRange] = useState(monthRange())
   const [period, setPeriod] = useState(null)
   const [debt, setDebt] = useState(null)
@@ -179,6 +187,7 @@ export default function SalesDocPage() {
     api.salesdocStatus()
       .then((s) => {
         setConfigured(s.configured)
+        setMode(s.mode || null)
         if (s.configured) loadAll(range, onlyDiff)
       })
       .catch((e) => setError(e.message))
@@ -301,8 +310,40 @@ export default function SalesDocPage() {
               await api.salesdocMirrorSync(true).catch(() => {})
               reloadSoon(range, onlyDiff)
             }}>обновить всё</button>
+          {can.editPayments && (
+            <button className="btn btn-ghost btn-sm" disabled={checking}
+              title={mode === 'login'
+                ? 'Портал войдёт в SalesDoc заново и получит новый токен. Токен 1С при этом погаснет.'
+                : 'Лёгкий запрос текущим токеном: проверить, принимает ли его SalesDoc.'}
+              onClick={async () => {
+                if (mode === 'login' && !confirm(
+                  'Портал войдёт в SalesDoc заново.\n\nУ SalesDoc один токен ' +
+                  'на аккаунт, поэтому токен интеграции 1С после этого ' +
+                  'перестанет работать — 1С придётся перелогинить.\n\nПродолжить?'
+                )) return
+                setChecking(true)
+                setCheckMsg(null)
+                try {
+                  await api.salesdocReconnect()
+                  setCheckMsg({ ok: true, text: mode === 'login'
+                    ? 'Вход выполнен, связь есть' : 'Токен принят, связь есть' })
+                } catch (e) {
+                  setCheckMsg({ ok: false, text: e.message })
+                } finally {
+                  setChecking(false)
+                }
+              }}>
+              {checking ? 'Проверяю…' : 'проверить связь'}
+            </button>
+          )}
         </div>
       </div>
+
+      {checkMsg && (
+        <p className={`sd-reconnect-msg ${checkMsg.ok ? 'sd-check-ok' : 'sd-check-bad'}`}>
+          {checkMsg.ok ? '✓ ' : '⚠ '}{checkMsg.text}
+        </p>
+      )}
 
       <p className="note-readonly">
         Клиенты связываются по ИД SalesDoc (из имени контрагента), затем по коду

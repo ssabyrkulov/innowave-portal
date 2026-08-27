@@ -37,7 +37,19 @@ can_edit = require_roles(models.Role.admin, models.Role.accountant)
 
 @router.get("/status")
 def status(_: models.User = Depends(can_view)):
-    return {"configured": salesdoc.is_configured()}
+    """Подключена ли интеграция и на чём держится вход.
+
+    Режим отдаём наружу, потому что от него зависит цена проверки связи: на
+    статическом токене она безобидна, а вход по логину выдаёт порталу свежий
+    токен и гасит токен 1С — у SalesDoc он один на аккаунт. Человек должен
+    знать это до того, как нажмёт, а не после. Ни токен, ни логин наружу не
+    уходят — только название режима."""
+    configured = salesdoc.is_configured()
+    return {
+        "configured": configured,
+        "mode": (("static" if salesdoc._static_mode() else "login")
+                 if configured else None),
+    }
 
 
 @router.post("/reconnect")

@@ -150,6 +150,9 @@ export const api = {
   stockBalances: () => request('/balances/stock'),
 
   salesdocStatus: () => request('/salesdoc/status'),
+  // Проверка связи с SalesDoc. В режиме логина это ПОЛНОЦЕННЫЙ вход,
+  // который погасит токен 1С, — спрашивать подтверждение обязательно.
+  salesdocReconnect: () => request('/salesdoc/reconnect', { method: 'POST' }),
   // Причина расхождения считается всегда (из зеркала — бесплатно), поэтому
   // отдельный флаг не нужен: сервер включает её по умолчанию.
   salesdocDebt: (onlyDiff = false, refresh = false) => {
