@@ -25,6 +25,7 @@ from .routers import (
     integrations,
     operations,
     payments,
+    products,
     receipts,
     returns,
     purchases,
@@ -343,6 +344,7 @@ app.include_router(tax.router)
 app.include_router(purchases.router)
 app.include_router(writeoffs.router)
 app.include_router(stock_receipts.router)
+app.include_router(products.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

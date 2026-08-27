@@ -38,6 +38,9 @@ HEADER_MAP = {
     "СкладНаименование": "warehouse",
     "НоменклатураНаименование": "product",
     "Номенклатура": "product",
+    # GUID номенклатуры: точный ключ товара. Колонка необязательная — файлы
+    # прежнего образца грузятся как раньше, просто без него.
+    "НоменклатураGUID": "product_guid",
     "ЕдИзм": "unit",
     "Валюта": "currency",
     "Ответственный": "responsible",
@@ -191,6 +194,8 @@ def parse_sales_workbook(content: bytes) -> tuple[list[dict], list[str]]:
             "account": str(data.get("account") or "").strip() or None,
             "responsible": str(data.get("responsible") or "").strip() or None,
             "doc_guid": str(data.get("doc_guid") or "").strip() or None,
+            "product_guid": (str(data.get("product_guid") or "").strip().lower()
+                             or None),
         }
         missing = [f for f in REQUIRED_FIELDS if parsed.get(f) is None]
         if missing:

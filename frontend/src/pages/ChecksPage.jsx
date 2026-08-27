@@ -40,18 +40,23 @@ export default function ChecksPage() {
   // Что 1С присылает, а портал не грузит: отчёт объясняет расхождение
   // остатков лучше любой догадки — документ был, импортёра не было.
   const [skipped, setSkipped] = useState(null)
+  // На чём держится склейка номенклатуры. Пока строки без ключа есть,
+  // «продано то, чего не закупали» будет появляться снова.
+  const [coverage, setCoverage] = useState(null)
 
   async function load() {
     setError(null)
     try {
-      const [d, logs, sk] = await Promise.all([
+      const [d, logs, sk, cov] = await Promise.all([
         api.checks({ rule, include_acked: showAcked }),
         api.importLog(),
         api.skippedKinds().catch(() => null),
+        api.guidCoverage().catch(() => null),
       ])
       setData(d)
       setImports(logs)
       setSkipped(sk)
+      setCoverage(cov)
     } catch (err) {
       setError(err.message)
     }
@@ -179,6 +184,54 @@ export default function ChecksPage() {
                     </tr>
                   )
                 })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {coverage?.sources?.length > 0 && (
+        <>
+          <h2 className="section-title">На чём держится склейка номенклатуры</h2>
+          <p className="muted">
+            {coverage.products > 0
+              ? `Справочник 1С загружен: ${coverage.products} позиций.`
+              : 'Справочник номенклатуры не загружен — товары склеиваются '
+                + 'только по названию, как раньше.'}
+            {' '}Строки «без ключа» — те, где совпадение остаётся догадкой по
+            написанию: именно они дают отрицательные остатки и «продано то,
+            чего не закупали».
+          </p>
+          <div className="table-wrap cards">
+            <table>
+              <thead>
+                <tr>
+                  <th>Источник</th>
+                  <th className="num">Строк</th>
+                  <th className="num">GUID из выгрузки</th>
+                  <th className="num">Через справочник</th>
+                  <th className="num">Без ключа</th>
+                  <th>Чаще всего не опознано</th>
+                </tr>
+              </thead>
+              <tbody>
+                {coverage.sources.map((r) => (
+                  <tr key={r.source}>
+                    <td data-label="Источник">{r.source}</td>
+                    <td className="num" data-label="Строк">{r.rows}</td>
+                    <td className="num sc-ok" data-label="GUID">{r.direct || '—'}</td>
+                    <td className="num" data-label="Справочник">{r.bridged || '—'}</td>
+                    <td className={`num ${r.orphan ? 'sc-diff' : 'muted'}`}
+                      data-label="Без ключа">{r.orphan || '—'}</td>
+                    <td data-label="Не опознано">
+                      {r.top_unmatched?.length ? (
+                        <span className="muted skipped-cols">
+                          {r.top_unmatched.map(([n, k]) => `${n} (${k})`).join(', ')}
+                        </span>
+                      ) : '—'}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

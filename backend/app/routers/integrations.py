@@ -148,7 +148,6 @@ UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
     ("Счёт на оплату", ("счет на оплату", "счёт на оплату",
                         "schet na oplatu"), False, ""),
     ("Справочник контрагентов", ("контрагент", "kontragent"), False, ""),
-    ("Справочник номенклатуры", ("номенклатур", "nomenklatur"), False, ""),
     ("Оборотно-сальдовая ведомость", ("оборотно", "oborotno"), False, ""),
     ("ГТД", ("гтд", "gtd"), False, ""),
     ("Журнал проводок", ("журнал проводок", "jurnal provodok",
@@ -256,6 +255,12 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # поставщика (излишки инвентаризации, возврат из эксплуатации).
     if has("оприходован", "oprihodovan"):
         return "stock_receipts"
+    # Справочник номенклатуры. Правило обязано стоять раньше блока
+    # неподдерживаемых: там «номенклатур» до сих пор значился как вид без
+    # импортёра. Товарные выгрузки сюда не попадают — у них в имени вид
+    # документа («Реализация», «Поступление»), а не слово «Номенклатура».
+    if has("номенклатур", "nomenklatur"):
+        return "products"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
@@ -564,6 +569,10 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         from .stock_receipts import import_stock_receipts_workbook
         result = import_stock_receipts_workbook(db, content, auto_name,
                                                 robot.id, org=org)
+    elif kind == "products":
+        from .products import import_products_workbook
+        result = import_products_workbook(db, content, auto_name, robot.id,
+                                          org=org)
     elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":

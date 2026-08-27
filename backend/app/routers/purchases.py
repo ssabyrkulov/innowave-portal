@@ -28,6 +28,7 @@ HEADERS = {
     "Склад": "warehouse",
     "НоменклатураНаименование": "product",
     "Номенклатура": "product",
+    "НоменклатураGUID": "product_guid",
     "ЕдИзм": "unit",
     "Валюта": "currency",
     "Количество": "qty",
@@ -91,6 +92,8 @@ def import_purchases_workbook(db: Session, content: bytes, filename: str,
             supplier=supplier,
             warehouse=str(cell(row, "warehouse") or "").strip() or None,
             product=str(cell(row, "product") or "").strip() or None,
+            product_guid=(str(cell(row, "product_guid") or "").strip().lower()
+                          or None),
             qty=_num(cell(row, "qty")),
             price=_num(cell(row, "price")),
             amount_kgs=amount,
@@ -179,7 +182,50 @@ def _size_of(name: str) -> int:
     return 99  # без размера — после размерных
 
 
-def _calc_stock(db: Session, org: str, until: date | None = None) -> dict[str, dict]:
+def _product_keys(db: Session):
+    """Возвращает функцию «(название, GUID) → ключ товара» и каноничные имена.
+
+    Ключ выбирается по убыванию надёжности:
+      1. GUID из самой выгрузки — точное совпадение, как его понимает 1С;
+      2. GUID, найденный в справочнике по названию — мост для строк,
+         загруженных до того, как портал начал читать НоменклатураGUID;
+      3. нормализованное название — как было раньше, когда больше не на что
+         опереться (справочник не загружен, позиции в нём нет).
+
+    Смешивать эти три уровня в одном отчёте безопасно именно потому, что мост
+    приводит их к одному значению: строка с GUID и строка без него сходятся,
+    если справочник знает такое имя."""
+    by_name: dict[str, str] = {}
+    canon: dict[str, str] = {}
+    for p in db.query(models.Product.guid, models.Product.name,
+                      models.Product.name_full, models.Product.is_group).all():
+        if p.is_group:
+            continue  # папка справочника, в движениях не встречается
+        canon[p.guid] = p.name or p.name_full or ""
+        for candidate in (p.name, p.name_full):
+            if candidate:
+                by_name.setdefault(_norm_product(candidate), p.guid)
+
+    if not by_name:
+        # Справочник не загружен — ключом остаётся название, как было всегда.
+        # Иначе получилось бы хуже, чем раньше: строка с GUID и строка без
+        # него — а часть выгрузок его не отдаёт и часть истории загружена до
+        # того, как портал начал его читать, — разъехались бы в две позиции
+        # там, где нормализация имени их успешно склеивала. Моста, который
+        # сводит их обратно, без справочника нет.
+        return (lambda product, guid=None: _norm_product(product)), canon
+
+    def key_of(product: str | None, guid: str | None = None) -> str:
+        g = (guid or "").strip().lower()
+        if not g:
+            g = by_name.get(_norm_product(product), "")
+        return g or _norm_product(product)
+
+    return key_of, canon
+
+
+def _calc_stock(db: Session, org: str, until: date | None = None,
+                key_of=None) -> dict[str, dict]:
     """Расчётные остатки по нормализованной номенклатуре — «как должно быть».
 
     Считается по фирме ЦЕЛИКОМ, по всем складам сразу: перемещения между
@@ -198,8 +244,11 @@ def _calc_stock(db: Session, org: str, until: date | None = None) -> dict[str, d
 
     agg: dict[str, dict] = {}
 
-    def entry(product):
-        key = _norm_product(product)
+    if key_of is None:
+        key_of, _ = _product_keys(db)
+
+    def entry(product, guid=None):
+        key = key_of(product, guid)
         e = agg.get(key)
         if e is None:
             e = agg[key] = {"name": product or "(без названия)",
@@ -209,21 +258,21 @@ def _calc_stock(db: Session, org: str, until: date | None = None) -> dict[str, d
         return e
 
     for p in scope(db.query(models.Purchase), models.Purchase).all():
-        e = entry(p.product)
+        e = entry(p.product, p.product_guid)
         e["purchased"] += float(p.qty or 0)
         e["has_purchase"] = True
         e["name"] = p.product or e["name"]  # имя из закупки — каноничное
     for s in scope(db.query(models.Sale), models.Sale).all():
-        entry(s.product)["sold"] += float(s.qty or 0)
+        entry(s.product, s.product_guid)["sold"] += float(s.qty or 0)
     for r in scope(db.query(models.ReturnLine), models.ReturnLine).all():
-        entry(r.product)["returned"] += float(r.qty or 0)
+        entry(r.product, r.product_guid)["returned"] += float(r.qty or 0)
     for w in scope(db.query(models.WriteOff), models.WriteOff).all():
-        entry(w.product)["written_off"] += float(w.qty or 0)
+        entry(w.product, w.product_guid)["written_off"] += float(w.qty or 0)
     # Оприходование — приход без поставщика: излишки инвентаризации, возврат
     # из эксплуатации. Держим отдельно от закупки: смешать значило бы
     # спрятать в «поступило» то, что закупкой не является.
     for r in scope(db.query(models.StockReceipt), models.StockReceipt).all():
-        entry(r.product)["received"] += float(r.qty or 0)
+        entry(r.product, r.product_guid)["received"] += float(r.qty or 0)
     return agg
 
 
@@ -241,7 +290,11 @@ def stock_calc(
     не выгружаются, так что расхождение с фактическими остатками теперь
     показывает именно их. Продажи Innowave выгружаются документами без
     товарных строк — расчёт работает там, где продажи построчные."""
-    agg = _calc_stock(db, org)
+    # Ключ товара считаем один раз и отдаём обеим сторонам сверки: если
+    # движения склеены по GUID, а снапшот 1С по названию, строки разъедутся
+    # и расхождение окажется выдуманным.
+    key_of, canon = _product_keys(db)
+    agg = _calc_stock(db, org, key_of=key_of)
 
     # Правая сторона сверки — отчёт 1С по остаткам (снапшот ВыгрузкаОст).
     # Слева наша математика из движений, справа то, что говорит учёт.
@@ -249,7 +302,7 @@ def stock_calc(
     onec_at = None
     for r in models.org_scope(db.query(models.StockBalance),
                               models.StockBalance, org).all():
-        e = onec.setdefault(_norm_product(r.product),
+        e = onec.setdefault(key_of(r.product, r.product_guid),
                             {"qty": 0.0, "amount": 0.0, "name": r.product})
         e["qty"] += float(r.qty or 0)
         e["amount"] += float(r.amount or 0)
@@ -259,7 +312,7 @@ def stock_calc(
     # Δ против 1С считаем НА ДАТУ снапшота: движения позже него (в т.ч.
     # документы завтрашней датой) — не расхождение, а разные даты среза.
     cut = onec_at.date() if onec_at else None
-    agg_at = _calc_stock(db, org, until=cut) if cut else agg
+    agg_at = _calc_stock(db, org, until=cut, key_of=key_of) if cut else agg
 
     def qty_of(e):
         return (e["purchased"] + e["received"] - e["sold"]
@@ -276,7 +329,10 @@ def stock_calc(
         calc_at = round(qty_of(at), 1) if at is not None else None
         o = onec.pop(key, None)
         rows.append({
-            "product": e["name"],
+            # Каноничное имя из справочника 1С, если товар в нём есть: иначе
+            # строка называлась бы так, как её написали в первой попавшейся
+            # выгрузке, и одна позиция звалась бы по-разному день ото дня.
+            "product": canon.get(key) or e["name"],
             "purchased": round(e["purchased"], 1),
             "received": round(e["received"], 1),
             "sold": round(e["sold"], 1),
@@ -294,9 +350,9 @@ def stock_calc(
     # Позиции, которые есть в отчёте 1С, но не встречались в движениях
     # (например, канцтовары до первой закупки в выгрузке) — тоже показываем:
     # «в учёте есть, в математике нет» — это находка, а не мусор.
-    for o in onec.values():
+    for okey, o in onec.items():
         rows.append({
-            "product": o["name"], "purchased": 0, "received": 0, "sold": 0,
+            "product": canon.get(okey) or o["name"], "purchased": 0, "received": 0, "sold": 0,
             "returned": 0, "written_off": 0, "calc_qty": None,
             "onec_qty": round(o["qty"], 1), "onec_amount": round(o["amount"], 2),
             "diff_onec": None, "unmatched": False,
@@ -349,7 +405,8 @@ def stock_moves(
 
     days — окно в днях от сегодня. По умолчанию месяц: расхождения ищут по
     свежим документам, а полная история товара живёт в столбцах карточки."""
-    key = _norm_product(product)
+    key_of, _ = _product_keys(db)
+    key = key_of(product)
     since = date.today() - timedelta(days=max(1, min(days, 3650)))
 
     moves: list[dict] = []
@@ -358,7 +415,7 @@ def stock_moves(
         rows = models.org_scope(db.query(model), model, org).filter(
             model.date >= since).all()
         for r in rows:
-            if _norm_product(r.product) != key:
+            if key_of(r.product, r.product_guid) != key:
                 continue
             qty = float(r.qty or 0)
             moves.append({
@@ -416,7 +473,8 @@ def stock_compare(
 
     Знак расхождения — диагноз: расчёт больше факта — недостача или
     неучтённое списание; меньше — неоприходованный приход или пересорт."""
-    calc = _calc_stock(db, org)
+    key_of, canon = _product_keys(db)
+    calc = _calc_stock(db, org, key_of=key_of)
 
     # Факт 1С (снапшот ВыгрузкаОст). Пустая таблица — не «нулевые остатки»,
     # а «выгрузки ещё не было»: эти состояния различаем флагом has_onec.
@@ -428,7 +486,7 @@ def stock_compare(
     guid_to_key: dict[str, str] = {}
     for r in models.org_scope(db.query(models.StockBalance),
                               models.StockBalance, org).all():
-        key = _norm_product(r.product)
+        key = key_of(r.product, r.product_guid)
         e = onec.setdefault(key, {"qty": 0.0, "amount": 0.0})
         e["qty"] += float(r.qty or 0)
         e["amount"] += float(r.amount or 0)
@@ -456,7 +514,7 @@ def stock_compare(
             continue
         sd_rows += 1
         key = (guid_to_key.get(sd_guid.get(r.product_sd_id or "", ""))
-               or _norm_product(r.product_name))
+               or key_of(r.product_name))
         sd[key] = sd.get(key, 0.0) + float(r.quantity or 0)
         sd_names.setdefault(key, r.product_name)
 
@@ -465,7 +523,8 @@ def stock_compare(
         c = calc.get(key)
         calc_qty = (round(c["purchased"] + c["received"] - c["sold"]
                           + c["returned"] - c["written_off"], 1) if c else None)
-        name = (c and c["name"]) or onec_names.get(key) or sd_names.get(key) or "—"
+        name = (canon.get(key) or (c and c["name"]) or onec_names.get(key)
+                or sd_names.get(key) or "—")
         onec_qty = round(onec[key]["qty"], 1) if key in onec else None
         sd_qty = round(sd[key], 1) if key in sd else None
         rows.append({

@@ -93,6 +93,9 @@ export const api = {
   importLog: () => request('/sales/imports'),
   // Виды выгрузок, которые 1С присылает, а портал пока не грузит.
   skippedKinds: () => request('/integrations/skipped-kinds'),
+  // На чём держится склейка товаров: GUID из выгрузки, мост по
+  // справочнику или всё ещё догадка по названию.
+  guidCoverage: () => request('/products/coverage'),
 
   receivables: () => request('/receipts/receivables'),
   listReceipts: () => request('/receipts'),

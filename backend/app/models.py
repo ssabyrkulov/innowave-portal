@@ -89,6 +89,9 @@ class Sale(Base):
     client: Mapped[str] = mapped_column(String, nullable=False, index=True)
     warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
     product: Mapped[str] = mapped_column(String, nullable=False)
+    # GUID номенклатуры 1С — точный ключ товара. Названия в закупке, продаже
+    # и возврате пишутся по-разному, и склейка по имени всегда была догадкой.
+    product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
     price: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
@@ -124,6 +127,7 @@ class Purchase(Base):
     supplier: Mapped[str] = mapped_column(String, nullable=False, index=True)
     warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
     product: Mapped[str | None] = mapped_column(String, nullable=True)
+    product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
     price: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
     amount_kgs: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
@@ -156,6 +160,7 @@ class WriteOff(Base):
     doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
     product: Mapped[str | None] = mapped_column(String, nullable=True)
+    product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
     unit: Mapped[str | None] = mapped_column(String, nullable=True)
     account: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -188,6 +193,41 @@ class Receipt(Base):
     # дате с допуском, который рвётся от любой правки документа.
     doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Product(Base):
+    """Справочник номенклатуры 1С — источник правды о товаре.
+
+    До него товары в портале склеивались по нормализованному названию: та же
+    позиция в закупке называется «Подгузники StarKid размер L*4», а в продаже
+    «Детские подгузники StarKid размер L». Догадка по строке работала не
+    всегда — отсюда позиции с отрицательным расчётным остатком и строки
+    «продано то, чего не закупали».
+
+    Справочник даёт GUID (точный ключ), каноничное название, группу и признак
+    услуги. Загружается заменой целиком: это снимок справочника, а не журнал
+    операций, и фирме не принадлежит — номенклатура общая."""
+
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    guid: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    code: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    name_full: Mapped[str | None] = mapped_column(String, nullable=True)
+    article: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Группа справочника («Подгузники», «Шампуни») — своя классификация 1С,
+    # в отличие от порядка вывода на главной, заданного вручную.
+    group_name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    parent_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Папка справочника, а не товар: в движениях не встречается.
+    is_group: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Услуга остатка иметь не может — по ней нечего сверять со складом.
+    is_service: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    country: Mapped[str | None] = mapped_column(String, nullable=True)
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -239,6 +279,7 @@ class ReturnLine(Base):
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     client: Mapped[str | None] = mapped_column(String, nullable=True)
     product: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
     amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     # GUID документа 1С. SalesDoc отдаёт его же в поле code_1C, поэтому

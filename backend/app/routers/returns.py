@@ -60,7 +60,7 @@ def import_return_lines_workbook(
         db.add(models.ReturnLine(
             organization=org, date=p["date"], client=p.get("client"),
             product=p.get("product"), qty=p.get("qty"), amount=p.get("amount"),
-            doc_guid=p.get("doc_guid"),
+            doc_guid=p.get("doc_guid"), product_guid=p.get("product_guid"),
         ))
     db.flush()
     seen_docs: set = set()
