@@ -134,6 +134,9 @@ export default function DebtPage() {
   const [data, setData] = useState(null)
   const [receipts, setReceipts] = useState([])
   const [showReceipts, setShowReceipts] = useState(false)
+  // Сети из справочника контрагентов. Свёрнуто по умолчанию: обычная
+  // работа идёт по точкам, сеть нужна для разговора с головным офисом.
+  const [showNetworks, setShowNetworks] = useState(false)
   const [error, setError] = useState(null)
   const [aliasDraft, setAliasDraft] = useState({})
   const [tab, setTab] = useState('active') // active | bad
@@ -522,6 +525,47 @@ export default function DebtPage() {
               onRemove={removeFlag}
               onOpen={setDetailClient}
             />
+          )}
+
+          {/* Долг по сетям. Отдельным блоком, а не заменой таблицы: работать
+              всё равно приходится с точкой — задачу ставят агенту по ней, —
+              а разговаривать с сетью удобнее одной цифрой. Считается из тех
+              же строк, что и таблица, поэтому итоги сходятся по определению. */}
+          {data.networks?.length > 0 && (
+            <>
+              <h2 className="section-title">
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => setShowNetworks((v) => !v)}
+                >
+                  {showNetworks ? '▾' : '▸'} Долг по сетям ({data.networks.length})
+                </button>
+              </h2>
+              {showNetworks && (
+                <div className="table-wrap compact">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Сеть</th>
+                        <th className="num">Точек</th>
+                        <th className="num">Долг</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.networks.map((n) => (
+                        <tr key={n.name}>
+                          <td data-label="Сеть">{n.name}</td>
+                          <td className="num" data-label="Точек">{n.clients}</td>
+                          <td className="num neg" data-label="Долг">
+                            {formatMoney(n.debt)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
 
           <h2 className="section-title">
