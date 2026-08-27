@@ -369,6 +369,14 @@ def stock_calc(
     # строка, которая всегда будет расходиться и всегда безрезультатно.
     # Прячем, но не молча: сколько именно спрятано, карточка называет.
     services_hidden = 0
+    # Итоги двух колонок считаются по РАЗНЫМ наборам строк, и это сбивает с
+    # толку сильнее всего: Δ по каждой строке ноль, а «Итого» расходятся.
+    # Позиция, которой нет в снапшоте, всё равно попадает в левый итог, а
+    # позиция без движений — в правый. Считаем обе части отдельно, чтобы
+    # карточка могла показать, из чего складывается разница, а не оставлять
+    # человека гадать.
+    only_calc = 0.0   # есть в движениях, нет в снапшоте 1С
+    only_onec = 0.0   # есть в снапшоте, нет в движениях
     for key, e in agg.items():
         if pinfo.get(key, {}).get("service"):
             services_hidden += 1
@@ -377,6 +385,8 @@ def stock_calc(
         at = agg_at.get(key)
         calc_at = round(qty_of(at), 1) if at is not None else None
         o = onec.pop(key, None)
+        if o is None and at is not None:
+            only_calc += qty_of(at)
         rows.append({
             # Каноничное имя из справочника 1С, если товар в нём есть: иначе
             # строка называлась бы так, как её написали в первой попавшейся
@@ -407,6 +417,7 @@ def stock_calc(
         if pinfo.get(okey, {}).get("service"):
             services_hidden += 1
             continue
+        only_onec += o["qty"]
         rows.append({
             "product": canon.get(okey) or o["name"],
             "group": pinfo.get(okey, {}).get("group"), "purchased": 0, "received": 0, "sold": 0,
@@ -431,6 +442,11 @@ def stock_calc(
         # Услуги, убранные из сверки склада: молчать о них нельзя — иначе
         # непонятно, почему позиция из справочника в карточке не видна.
         "services_hidden": services_hidden,
+        # Разбор разницы итогов. Тождество, которое должно сходиться:
+        # Σрасчёт − Σ1С = движения после снапшота + Δ + только-в-расчёте
+        #                 − только-в-1С.
+        "only_calc_qty": round(only_calc, 1),
+        "only_onec_qty": round(only_onec, 1),
         "rows": rows,
         "totals": {
             "purchased": round(sum(r["purchased"] for r in rows), 1),

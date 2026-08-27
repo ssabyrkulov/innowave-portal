@@ -525,6 +525,25 @@ function CalcStockCard() {
           {showAll ? 'Свернуть' : `Показать все ${rows.length}`}
         </button>
       )}
+      {/* Итоги двух колонок считаются по разным наборам строк: позиция без
+          снапшота попадает только в левый, позиция без движений — только в
+          правый. Раскладываем разницу, иначе «Δ везде ноль, а Итого
+          расходятся» выглядит как ошибка портала. */}
+      {Math.abs(data.totals.calc_qty - data.totals.onec_qty) >= 1 && (
+        <p className="muted">
+          Расчётный {fmt(data.totals.calc_qty)} и остаток 1С{' '}
+          {fmt(data.totals.onec_qty)} различаются на{' '}
+          <b>{fmt(data.totals.calc_qty - data.totals.onec_qty)}</b>, потому что
+          складываются по разным строкам:
+          {' '}Δ на дату снапшота {fmt(data.totals.diff_onec)}
+          {Math.abs(data.future_excluded_qty || 0) >= 1 &&
+            ` · движения после снапшота ${fmt(data.future_excluded_qty)}`}
+          {' '}· есть в движениях, но нет в снапшоте{' '}
+          {fmt(data.only_calc_qty)} · есть в снапшоте, но нет в движениях{' '}
+          {fmt(data.only_onec_qty)}. Строка с прочерком в одной из колонок в Δ
+          не входит — сравнивать там не с чем.
+        </p>
+      )}
       {data.services_hidden > 0 && (
         <p className="muted">
           Из сверки убрано услуг: {data.services_hidden}. Остатка у услуги быть
