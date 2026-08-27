@@ -190,8 +190,22 @@ def call(method: str, params: dict | None = None, _retry: bool = True,
 
     status, resp = _raw_post(payload)
     if not (isinstance(resp, dict) and resp.get("status")):
-        code = str(resp.get("code")) if isinstance(resp, dict) else ""
-        is_401 = code == "401" or status == 401
+        # Код и текст ошибки SalesDoc кладёт то на верхний уровень, то внутрь
+        # «error», а HTTP при этом отвечает 200. Раньше смотрели только
+        # верхний уровень — и настоящий отказ по токену
+        # ({"error": {"code": 401, "message": "Invalid token"}}) не
+        # опознавался: вместо подсказки про SALESDOC_TOKEN человек получал
+        # дамп словаря. Смотрим оба уровня и текст сообщения.
+        err = resp.get("error") if isinstance(resp, dict) else None
+        if not isinstance(err, dict):
+            err = {}
+        code = str((resp.get("code") if isinstance(resp, dict) else None)
+                   or err.get("code") or "")
+        message = str((resp.get("message") if isinstance(resp, dict) else None)
+                      or err.get("message") or "")
+        is_401 = (code == "401" or status == 401
+                  or "invalid token" in message.lower()
+                  or "unauthorized" in message.lower())
         if is_401 and _static_mode():
             # Статический токен устарел (вероятно, 1С перелогинилась и сменила
             # токен). Логиниться нельзя — погасим токен 1С. Просим обновить.
@@ -205,8 +219,8 @@ def call(method: str, params: dict | None = None, _retry: bool = True,
         if _retry and is_401:
             _refresh_if_stale(token)
             return call(method, params, _retry=False)
-        msg = (resp or {}).get("message") or (resp or {}).get("error") or resp
-        raise SalesDocError(f"SalesDoc: ошибка метода {method}: {msg}")
+        raise SalesDocError(
+            f"SalesDoc: ошибка метода {method}: {message or err or resp}")
     return (resp.get("result") or {}), resp.get("pagination")
 
 
