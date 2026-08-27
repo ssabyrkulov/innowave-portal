@@ -211,6 +211,9 @@ export default function ChecksPage() {
                     <td data-label="Влияние"
                       className={r.moves_stock ? 'sc-diff' : 'muted'}>
                       {r.moves_stock ? 'двигает склад' : 'на остаток не влияет'}
+                      {r.note && (
+                        <span className="muted skipped-cols">{r.note}</span>
+                      )}
                     </td>
                     <td className="num" data-label="Файлов">{r.files}</td>
                     <td data-label="Последний">

@@ -191,6 +191,40 @@ class Receipt(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class StockReceipt(Base):
+    """Оприходование товаров (ВыгрузкаОприх) — приход, не связанный с закупкой.
+
+    Излишки инвентаризации, возврат из эксплуатации, ввод начальных остатков.
+    Для склада это такой же приход, как поступление от поставщика, но
+    поставщика у него нет — есть основание (чаще всего документ
+    инвентаризации) и счёт оприходования.
+
+    Без этих строк расчёт «поступило − продано + возвраты − списано» видит
+    только половину картины: недостачи (списания) в нём есть, а излишки нет,
+    и расчётный остаток систематически занижен против 1С."""
+
+    __tablename__ = "stock_receipts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    price: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # «Основание» — документ, по которому оприходовали. У излишков это
+    # инвентаризация, и по нему видно природу прихода.
+    basis: Mapped[str | None] = mapped_column(String, nullable=True)
+    account: Mapped[str | None] = mapped_column(String, nullable=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ReturnLine(Base):
     """Товарная строка возврата от покупателя (из построчного ТовВозв).
 

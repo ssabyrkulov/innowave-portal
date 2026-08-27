@@ -121,43 +121,62 @@ def org_from_name(filename: str) -> str | None:
 # 1С. Документ товар подвинул, а наша математика его не видела, потому что
 # файл был пропущен молча. Флаг moves_stock отделяет их от справочников и
 # бухгалтерских регистров, которые на остаток не влияют вообще.
-UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool], ...] = (
-    ("Оприходование товаров", ("оприходован", "oprihodovan"), True),
-    ("Инвентаризация", ("инвентариз", "inventariz"), True),
-    ("Корректировка", ("корректировк", "korrektirovk"), True),
-    ("Перемещение товаров", ("перемещен", "peremeshen", "peremeshch"), True),
+UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
+    # «Возврат товаров поставщику» выгружается только по налоговому контуру;
+    # управленческого файла нет, поэтому расход со склада по нему не виден.
     ("Возврат товаров поставщику",
-     ("поставщик", "postavshik", "postavshchik"), True),
-    ("Движение МБП", ("движение мбп", "dvijenie mbp", "dvizhenie mbp"), True),
-    ("Взаимозачёт", ("взаимозач", "vzaimozach"), False),
+     ("поставщик", "postavshik", "postavshchik"), True,
+     "расход со склада, импортёра нет — расчётный остаток завышен"),
+    # Инвентаризация в 1С проводок не делает: она фиксирует отклонение, а
+    # товар двигают созданные на её основании оприходование (излишек) и
+    # списание (недостача). Оба загружаются, поэтому считать ещё и её
+    # значило бы задвоить движение.
+    ("Инвентаризация", ("инвентариз", "inventariz"), False,
+     "проводок не делает: излишки идут оприходованием, недостачи списанием"),
+    ("Перемещение товаров", ("перемещен", "peremeshen", "peremeshch"), False,
+     "между складами одной фирмы; расчёт ведётся по фирме целиком"),
+    ("Движение МБП", ("движение мбп", "dvijenie mbp", "dvizhenie mbp"), False,
+     "малоценка учитывается отдельно от товаров"),
+    ("Корректировка долга", ("корректировка долга", "korrektirovka dolga",
+                             "korrektirovka doljna"), False,
+     "денежная корректировка взаиморасчётов, товара не касается"),
+    ("Корректировка", ("корректировк", "korrektirovk"), True,
+     "меняет уже проведённый документ — может задевать товар"),
+    ("Взаимозачёт", ("взаимозач", "vzaimozach"), False, ""),
     ("Авансовый отчёт", ("авансов", "avansov", "подотчет", "подотчёт",
-                         "podotchet"), False),
+                         "podotchet"), False, ""),
     ("Счёт на оплату", ("счет на оплату", "счёт на оплату",
-                        "schet na oplatu"), False),
-    ("Справочник контрагентов", ("контрагент", "kontragent"), False),
-    ("Справочник номенклатуры", ("номенклатур", "nomenklatur"), False),
-    ("Оборотно-сальдовая ведомость", ("оборотно", "oborotno"), False),
-    ("ГТД", ("гтд", "gtd"), False),
+                        "schet na oplatu"), False, ""),
+    ("Справочник контрагентов", ("контрагент", "kontragent"), False, ""),
+    ("Справочник номенклатуры", ("номенклатур", "nomenklatur"), False, ""),
+    ("Оборотно-сальдовая ведомость", ("оборотно", "oborotno"), False, ""),
+    ("ГТД", ("гтд", "gtd"), False, ""),
     ("Журнал проводок", ("журнал проводок", "jurnal provodok",
-                         "zhurnal provodok"), False),
-    ("Конвертация", ("конвертац", "konvertac"), False),
-    ("Начисление зарплаты", ("начисление зарплат", "nachislenie zarplat"), False),
-    ("Проблемные документы", ("проблемные документ", "problemnye dokument"), False),
-    ("Ручные операции", ("ручные операц", "ruchnye operac"), False),
+                         "zhurnal provodok"), False, ""),
+    ("Конвертация", ("конвертац", "konvertac"), False, ""),
+    ("Начисление зарплаты", ("начисление зарплат", "nachislenie zarplat"),
+     False, ""),
+    ("Проблемные документы", ("проблемные документ", "problemnye dokument"),
+     False, ""),
+    ("Ручные операции", ("ручные операц", "ruchnye operac"), False, ""),
     ("ЭСФ / счета-фактуры", ("эсф", "esf", "счет-фактур", "счёт-фактур",
                              "schet-faktur", "бланки счетов",
-                             "blanki schetov"), False),
-    ("Дополнительные расходы", ("дополнительн", "dopolnitel"), False),
+                             "blanki schetov"), False, ""),
+    ("Дополнительные расходы", ("дополнительн", "dopolnitel"), False, ""),
 )
 
 
-def unsupported_kind(filename: str) -> tuple[str, bool]:
-    """Человеческое имя вида и признак «двигает склад» по имени файла."""
+def unsupported_kind(filename: str) -> tuple[str, bool, str]:
+    """Имя вида, признак «двигает склад» и пояснение — по имени файла.
+
+    Порядок в таблице значим: «Корректировка долга» обязана стоять раньше
+    общей «Корректировки», иначе денежный документ попадёт в товарные и
+    будет зря пугать в отчёте."""
     name = (filename or "").lower()
-    for label, tokens, moves in UNSUPPORTED_KINDS:
+    for label, tokens, moves, note in UNSUPPORTED_KINDS:
         if any(t in name for t in tokens):
-            return label, moves
-    return "Прочее", False
+            return label, moves, note
+    return "Прочее", False, ""
 
 
 def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None:
@@ -233,12 +252,15 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # значилось как вид без импортёра.
     if has("списан", "spisan", "спис", "spis"):
         return "writeoffs"
+    # Оприходование товаров — зеркало списания: приход на склад без
+    # поставщика (излишки инвентаризации, возврат из эксплуатации).
+    if has("оприходован", "oprihodovan"):
+        return "stock_receipts"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
     # поступлений/расходов именно из-за таких пересечений.
-    if has("оприходован", "oprihodovan",
-           "перемещен", "peremeshen", "peremeshch",
+    if has("перемещен", "peremeshen", "peremeshch",
            "инвентариз", "inventariz",
            "взаимозач", "vzaimozach",
            "авансов", "avansov",  # авансовый отчёт подотчётника
@@ -538,6 +560,10 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
     elif kind == "writeoffs":
         from .writeoffs import import_writeoffs_workbook
         result = import_writeoffs_workbook(db, content, auto_name, robot.id, org=org)
+    elif kind == "stock_receipts":
+        from .stock_receipts import import_stock_receipts_workbook
+        result = import_stock_receipts_workbook(db, content, auto_name,
+                                                robot.id, org=org)
     elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":
@@ -612,9 +638,9 @@ def skipped_kinds(
             .all())
     groups: dict[str, dict] = {}
     for l in logs:
-        label, moves = unsupported_kind(l.filename)
+        label, moves, note = unsupported_kind(l.filename)
         g = groups.setdefault(label, {
-            "kind": label, "moves_stock": moves, "files": 0,
+            "kind": label, "moves_stock": moves, "note": note, "files": 0,
             "last_at": None, "last_file": None, "columns": None,
         })
         g["files"] += 1

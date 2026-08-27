@@ -204,7 +204,8 @@ def _calc_stock(db: Session, org: str, until: date | None = None) -> dict[str, d
         if e is None:
             e = agg[key] = {"name": product or "(без названия)",
                             "purchased": 0.0, "sold": 0.0, "returned": 0.0,
-                            "written_off": 0.0, "has_purchase": False}
+                            "written_off": 0.0, "received": 0.0,
+                            "has_purchase": False}
         return e
 
     for p in scope(db.query(models.Purchase), models.Purchase).all():
@@ -218,6 +219,11 @@ def _calc_stock(db: Session, org: str, until: date | None = None) -> dict[str, d
         entry(r.product)["returned"] += float(r.qty or 0)
     for w in scope(db.query(models.WriteOff), models.WriteOff).all():
         entry(w.product)["written_off"] += float(w.qty or 0)
+    # Оприходование — приход без поставщика: излишки инвентаризации, возврат
+    # из эксплуатации. Держим отдельно от закупки: смешать значило бы
+    # спрятать в «поступило» то, что закупкой не является.
+    for r in scope(db.query(models.StockReceipt), models.StockReceipt).all():
+        entry(r.product)["received"] += float(r.qty or 0)
     return agg
 
 
@@ -227,7 +233,7 @@ def stock_calc(
     _: models.User = Depends(get_current_user),
     org: str = "all",
 ):
-    """Расчётные остатки: поступило − продано + возвраты − списано.
+    """Расчётные остатки: поступило + оприходовано − продано + возвраты − списано.
 
     Списания теперь выгружаются (ВыгрузкаСпис) и вычитаются наравне с
     продажами — раньше их приходилось считать невидимой погрешностью, и
@@ -256,7 +262,8 @@ def stock_calc(
     agg_at = _calc_stock(db, org, until=cut) if cut else agg
 
     def qty_of(e):
-        return e["purchased"] - e["sold"] + e["returned"] - e["written_off"]
+        return (e["purchased"] + e["received"] - e["sold"]
+                + e["returned"] - e["written_off"])
 
     future_excluded = round(sum(qty_of(e) for e in agg.values())
                             - sum(qty_of(e) for e in agg_at.values()), 1) \
@@ -271,6 +278,7 @@ def stock_calc(
         rows.append({
             "product": e["name"],
             "purchased": round(e["purchased"], 1),
+            "received": round(e["received"], 1),
             "sold": round(e["sold"], 1),
             "returned": round(e["returned"], 1),
             "written_off": round(e["written_off"], 1),
@@ -288,8 +296,8 @@ def stock_calc(
     # «в учёте есть, в математике нет» — это находка, а не мусор.
     for o in onec.values():
         rows.append({
-            "product": o["name"], "purchased": 0, "sold": 0, "returned": 0,
-            "written_off": 0, "calc_qty": None,
+            "product": o["name"], "purchased": 0, "received": 0, "sold": 0,
+            "returned": 0, "written_off": 0, "calc_qty": None,
             "onec_qty": round(o["qty"], 1), "onec_amount": round(o["amount"], 2),
             "diff_onec": None, "unmatched": False,
         })
@@ -310,6 +318,7 @@ def stock_calc(
         "rows": rows,
         "totals": {
             "purchased": round(sum(r["purchased"] for r in rows), 1),
+            "received": round(sum(r["received"] for r in rows), 1),
             "sold": round(sum(r["sold"] for r in rows), 1),
             "returned": round(sum(r["returned"] for r in rows), 1),
             "written_off": round(sum(r["written_off"] for r in rows), 1),
@@ -363,6 +372,8 @@ def stock_moves(
             })
 
     collect(models.Purchase, "purchase", 1, "supplier")
+    # У оприходования поставщика нет — вместо него основание документа.
+    collect(models.StockReceipt, "receipt", 1, "basis")
     collect(models.Sale, "sale", -1, "client")
     # У возврата покупателя склада нет — 1С его в этой выгрузке не отдаёт.
     collect(models.ReturnLine, "return", 1, "client")
@@ -452,8 +463,8 @@ def stock_compare(
     rows = []
     for key in set(calc) | set(onec) | set(sd):
         c = calc.get(key)
-        calc_qty = (round(c["purchased"] - c["sold"] + c["returned"]
-                          - c["written_off"], 1) if c else None)
+        calc_qty = (round(c["purchased"] + c["received"] - c["sold"]
+                          + c["returned"] - c["written_off"], 1) if c else None)
         name = (c and c["name"]) or onec_names.get(key) or sd_names.get(key) or "—"
         onec_qty = round(onec[key]["qty"], 1) if key in onec else None
         sd_qty = round(sd[key], 1) if key in sd else None

@@ -322,7 +322,8 @@ function StockSourcesCard() {
 // выгрузки остатков из 1С пока нет (файл пустой), поэтому расчёт — единственный
 // источник; когда факт появится, разница с ним покажет пересорт и недостачи.
 const MOVE_KINDS = {
-  purchase: 'приход', sale: 'продажа', return: 'возврат', writeoff: 'списание',
+  purchase: 'закупка', receipt: 'оприходование', sale: 'продажа',
+  return: 'возврат', writeoff: 'списание',
 }
 
 // Документы по товару под раскрытой строкой сверки. Карточка отвечает
@@ -336,8 +337,9 @@ function StockMoves({ moves, days, cut, fmt, onDays }) {
     <>
       <div className="moves-head">
         <span className="muted">
-          За {days} дн.: приход {fmt(t.purchase)} · продажа {fmt(t.sale)} ·
-          возврат {fmt(t.return)} · списание {fmt(t.writeoff)} · итого{' '}
+          За {days} дн.: закупка {fmt(t.purchase)} · оприход. {fmt(t.receipt)} ·
+          продажа {fmt(t.sale)} · возврат {fmt(t.return)} ·
+          списание {fmt(t.writeoff)} · итого{' '}
           <b>{moves.net > 0 ? '+' : ''}{fmt(moves.net)}</b>
         </span>
         {[30, 90, 365].map((d) => (
@@ -430,7 +432,7 @@ function CalcStockCard() {
   // Дата снапшота: движения позже неё в Δ не входят, и в раскрытии их
   // помечаем — иначе «лишний» документ выглядит расхождением.
   const cut = data.onec_updated_at ? data.onec_updated_at.slice(0, 10) : null
-  const cols = 6 + (data.has_onec ? 2 : 0)
+  const cols = 7 + (data.has_onec ? 2 : 0)
   if (rows.length === 0) return null
   return (
     <div className="chart-card">
@@ -450,6 +452,7 @@ function CalcStockCard() {
             <tr>
               <th>Номенклатура</th>
               <th className="num">Поступило</th>
+              <th className="num">Оприход.</th>
               <th className="num">Продано</th>
               <th className="num">Возвраты</th>
               <th className="num">Списано</th>
@@ -467,6 +470,7 @@ function CalcStockCard() {
                     {r.product}
                   </td>
                   <td className="num">{fmt(r.purchased)}</td>
+                  <td className="num">{r.received ? fmt(r.received) : '—'}</td>
                   <td className="num">{fmt(r.sold)}</td>
                   <td className="num">{fmt(r.returned)}</td>
                   <td className="num">{r.written_off ? `−${fmt(r.written_off)}` : '—'}</td>
@@ -500,6 +504,7 @@ function CalcStockCard() {
             <tr>
               <td><b>Итого</b></td>
               <td className="num"><b>{fmt(data.totals.purchased)}</b></td>
+              <td className="num"><b>{fmt(data.totals.received)}</b></td>
               <td className="num"><b>{fmt(data.totals.sold)}</b></td>
               <td className="num"><b>{fmt(data.totals.returned)}</b></td>
               <td className="num"><b>{fmt(data.totals.written_off)}</b></td>
@@ -532,8 +537,8 @@ function CalcStockCard() {
           ⚠ Возвраты без товарных строк: {data.returns_no_lines.missing} из{' '}
           {data.returns_no_lines.docs} документов на{' '}
           {formatMoney(data.returns_no_lines.missing_amount)}. В 1С этот товар
-          вернулся на склад, а в расчёт «поступило − продано + возвраты» не
-          попал: выгрузка пришла документами (дата, сумма, контрагент) без
+          вернулся на склад, а в расчёт остатка не попал: выгрузка пришла
+          документами (дата, сумма, контрагент) без
           номенклатуры. Расчётный остаток по таким позициям занижен, Δ уходит
           в минус. Лечится построчной выгрузкой возвратов.
           {data.returns_no_lines.sample?.length > 0 && (
