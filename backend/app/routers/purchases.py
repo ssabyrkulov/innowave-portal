@@ -154,6 +154,22 @@ def _norm_product(s: str | None) -> str:
 # Порядок как в голове у владельца, а не по алфавиту или объёму:
 # подгузники ONE (обычные, затем mini), StarKid, туалетная бумага,
 # салфетки, Splash, остальное.
+def _norm_product_exact(s: str | None) -> str:
+    """То же, что _norm_product, но фасовка «*N» сохраняется.
+
+    Нужен ровно там, где «*4» и «*6» — разные позиции справочника, а не
+    разное написание одной. StarKid так и живёт: карточку с фасовкой по 4
+    закрыли в феврале, с июня закупают по 6. Общая нормализация склеивает
+    их в одно имя намеренно — она задумывалась как мост между контурами,
+    где фасовку пишут как попало. Для поиска GUID по названию такая склейка
+    губительна: остаток из снапшота уезжает на чужую карточку."""
+    s = (s or "").lower().replace("ё", "е")
+    s = re.sub(r"\b(детские|splash|сплэш|сплеш)\b", " ", s)
+    s = s.translate(_ОДНОЛИКИЕ)
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _group_of(name: str) -> int:
     s = (name or "").lower()
     one = "one" in s
@@ -198,6 +214,13 @@ def _product_keys(db: Session):
     Смешивать эти три уровня в одном отчёте безопасно именно потому, что мост
     приводит их к одному значению: строка с GUID и строка без него сходятся,
     если справочник знает такое имя."""
+    # Два индекса имён. Точный сохраняет фасовку «*N», общий — нет.
+    # Снапшот остатков приходит матрицей по складам и GUID не несёт вовсе,
+    # так что позицию в нём приходится узнавать по названию. Пока индекс был
+    # один, общий, «StarKid размер M*4» и «M*6» сходились в одно имя, и
+    # остаток с новой карточки садился на старую: в сверке появлялась Δ там,
+    # где обе стороны на самом деле совпадают.
+    by_exact: dict[str, str] = {}
     by_name: dict[str, str] = {}
     canon: dict[str, str] = {}
     info: dict[str, dict] = {}
@@ -211,6 +234,7 @@ def _product_keys(db: Session):
         info[p.guid] = {"service": bool(p.is_service), "group": p.group_name}
         for candidate in (p.name, p.name_full):
             if candidate:
+                by_exact.setdefault(_norm_product_exact(candidate), p.guid)
                 by_name.setdefault(_norm_product(candidate), p.guid)
 
     if not by_name:
@@ -233,7 +257,10 @@ def _product_keys(db: Session):
         if g and g not in canon:
             g = ""
         if not g:
-            g = by_name.get(_norm_product(product), "")
+            # Сначала точное имя с фасовкой, и только потом общее. Порядок
+            # решает: обратный склеил бы разные карточки одной марки.
+            g = (by_exact.get(_norm_product_exact(product))
+                 or by_name.get(_norm_product(product), ""))
         return g or _norm_product(product)
 
     return key_of, canon, info
