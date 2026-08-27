@@ -172,10 +172,12 @@ def guid_coverage(
     from .purchases import _norm_product
 
     by_name: dict[str, str] = {}
+    known_guids: set[str] = set()
     goods = 0
     for p in db.query(models.Product).filter(
             models.Product.is_group.is_(False)).all():
         goods += 1
+        known_guids.add(p.guid)
         for candidate in (p.name, p.name_full):
             if candidate:
                 by_name.setdefault(_norm_product(candidate), p.guid)
@@ -184,10 +186,12 @@ def guid_coverage(
     # выгрузка — GUID. Разные сущности, но вопрос один — на чём держится
     # склейка, и держать ответы в двух разных отчётах незачем.
     parties_by_name: dict[str, str] = {}
+    party_guids: set[str] = set()
     parties = 0
     for c in db.query(models.Counterparty).filter(
             models.Counterparty.is_group.is_(False)).all():
         parties += 1
+        party_guids.add(c.guid)
         for candidate in (c.name, c.name_full):
             if candidate:
                 parties_by_name.setdefault(_norm_product(candidate), c.guid)
@@ -209,14 +213,20 @@ def guid_coverage(
                parties_by_name),
               ("Поставщик · закупки", models.Purchase, "supplier",
                "supplier_guid", parties_by_name))
+    guid_index = {id(by_name): known_guids, id(parties_by_name): party_guids}
     for label, model, name_field, guid_field, index in MODELS:
+        known = guid_index[id(index)]
         rows = models.org_scope(
             db.query(getattr(model, name_field), getattr(model, guid_field)),
             model, org).all()
         direct = bridged = orphan = 0
         unmatched: dict[str, int] = {}
         for name, guid in rows:
-            if guid:
+            # GUID засчитывается точным ключом, только если справочник его
+            # знает: незнакомый ключом не становится (иначе позиция разъедется
+            # надвое), и писать про него «GUID из выгрузки» значило бы
+            # показывать надёжность, которой нет.
+            if guid and guid in known:
                 direct += 1
             elif index and _norm_product(name) in index:
                 bridged += 1
