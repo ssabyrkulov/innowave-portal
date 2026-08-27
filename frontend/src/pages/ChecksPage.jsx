@@ -37,16 +37,21 @@ export default function ChecksPage() {
   const [rule, setRule] = useState('')
   const [showAcked, setShowAcked] = useState(false)
   const [imports, setImports] = useState([])
+  // Что 1С присылает, а портал не грузит: отчёт объясняет расхождение
+  // остатков лучше любой догадки — документ был, импортёра не было.
+  const [skipped, setSkipped] = useState(null)
 
   async function load() {
     setError(null)
     try {
-      const [d, logs] = await Promise.all([
+      const [d, logs, sk] = await Promise.all([
         api.checks({ rule, include_acked: showAcked }),
         api.importLog(),
+        api.skippedKinds().catch(() => null),
       ])
       setData(d)
       setImports(logs)
+      setSkipped(sk)
     } catch (err) {
       setError(err.message)
     }
@@ -174,6 +179,46 @@ export default function ChecksPage() {
                     </tr>
                   )
                 })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {skipped?.rows?.length > 0 && (
+        <>
+          <h2 className="section-title">Что 1С присылает, а портал не ведёт</h2>
+          <p className="muted">
+            Эти файлы приходят в папку выгрузок и пропускаются: импортёров для
+            них нет. Виды, помеченные «двигает склад», — прямая причина того,
+            что расчётный остаток не сходится с 1С: документ товар подвинул, а
+            в наших движениях его нет вообще.
+          </p>
+          <div className="table-wrap cards">
+            <table>
+              <thead>
+                <tr>
+                  <th>Вид выгрузки</th>
+                  <th>Влияние на остаток</th>
+                  <th className="num">Файлов</th>
+                  <th>Последний</th>
+                </tr>
+              </thead>
+              <tbody>
+                {skipped.rows.map((r) => (
+                  <tr key={r.kind}>
+                    <td data-label="Вид">{r.kind}</td>
+                    <td data-label="Влияние"
+                      className={r.moves_stock ? 'sc-diff' : 'muted'}>
+                      {r.moves_stock ? 'двигает склад' : 'на остаток не влияет'}
+                    </td>
+                    <td className="num" data-label="Файлов">{r.files}</td>
+                    <td data-label="Последний">
+                      {new Date(r.last_at + 'Z').toLocaleDateString('ru-RU')}
+                      <span className="muted"> · {r.last_file}</span>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

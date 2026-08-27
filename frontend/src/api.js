@@ -91,6 +91,8 @@ export const api = {
   deletePayment: (id) => request(`/payments/${id}`, { method: 'DELETE' }),
 
   importLog: () => request('/sales/imports'),
+  // Виды выгрузок, которые 1С присылает, а портал пока не грузит.
+  skippedKinds: () => request('/integrations/skipped-kinds'),
 
   receivables: () => request('/receipts/receivables'),
   listReceipts: () => request('/receipts'),

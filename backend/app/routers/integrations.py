@@ -18,7 +18,7 @@ from .. import models
 from ..services import xlsx
 from ..config import settings
 from ..database import get_db
-from ..deps import require_roles
+from ..deps import get_current_user, require_roles
 from ..security import hash_password
 from .balances import (
     import_cash_balances_workbook,
@@ -115,6 +115,51 @@ def org_from_name(filename: str) -> str | None:
     return None
 
 
+# Виды выгрузок, которые 1С кладёт в папку, а портал пока не ведёт. Список
+# нужен не для маршрутизации (её делает classify_by_name), а для отчёта: те
+# виды, что двигают склад, — прямая причина расхождения расчётного остатка с
+# 1С. Документ товар подвинул, а наша математика его не видела, потому что
+# файл был пропущен молча. Флаг moves_stock отделяет их от справочников и
+# бухгалтерских регистров, которые на остаток не влияют вообще.
+UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool], ...] = (
+    ("Оприходование товаров", ("оприходован", "oprihodovan"), True),
+    ("Инвентаризация", ("инвентариз", "inventariz"), True),
+    ("Корректировка", ("корректировк", "korrektirovk"), True),
+    ("Перемещение товаров", ("перемещен", "peremeshen", "peremeshch"), True),
+    ("Возврат товаров поставщику",
+     ("поставщик", "postavshik", "postavshchik"), True),
+    ("Движение МБП", ("движение мбп", "dvijenie mbp", "dvizhenie mbp"), True),
+    ("Взаимозачёт", ("взаимозач", "vzaimozach"), False),
+    ("Авансовый отчёт", ("авансов", "avansov", "подотчет", "подотчёт",
+                         "podotchet"), False),
+    ("Счёт на оплату", ("счет на оплату", "счёт на оплату",
+                        "schet na oplatu"), False),
+    ("Справочник контрагентов", ("контрагент", "kontragent"), False),
+    ("Справочник номенклатуры", ("номенклатур", "nomenklatur"), False),
+    ("Оборотно-сальдовая ведомость", ("оборотно", "oborotno"), False),
+    ("ГТД", ("гтд", "gtd"), False),
+    ("Журнал проводок", ("журнал проводок", "jurnal provodok",
+                         "zhurnal provodok"), False),
+    ("Конвертация", ("конвертац", "konvertac"), False),
+    ("Начисление зарплаты", ("начисление зарплат", "nachislenie zarplat"), False),
+    ("Проблемные документы", ("проблемные документ", "problemnye dokument"), False),
+    ("Ручные операции", ("ручные операц", "ruchnye operac"), False),
+    ("ЭСФ / счета-фактуры", ("эсф", "esf", "счет-фактур", "счёт-фактур",
+                             "schet-faktur", "бланки счетов",
+                             "blanki schetov"), False),
+    ("Дополнительные расходы", ("дополнительн", "dopolnitel"), False),
+)
+
+
+def unsupported_kind(filename: str) -> tuple[str, bool]:
+    """Человеческое имя вида и признак «двигает склад» по имени файла."""
+    name = (filename or "").lower()
+    for label, tokens, moves in UNSUPPORTED_KINDS:
+        if any(t in name for t in tokens):
+            return label, moves
+    return "Прочее", False
+
+
 def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None:
     """Тип выгрузки по имени файла — самый надёжный сигнал. None → sniff_kind.
 
@@ -137,6 +182,16 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # (analiz, nalichnie), и как подстрока опасно.
     if has("налог", "nalog", "[nal]", "[нал]", "_nal_", "_нал_"):
         return "tax"
+
+    # Корректировки — раньше всех предметных правил. «Корректировка
+    # реализации» содержит «реализац» и уезжала в импортёр продаж, а
+    # «Корректировка поступления товаров» — в импортёр закупок. Это не просто
+    # чужой файл в чужой таблице: корректировка меняет уже проведённый
+    # документ, и загруженная как самостоятельная продажа она завышает
+    # проданное, а как закупка — поступившее. Оба перекоса бьют ровно по той
+    # арифметике, которой считается расчётный остаток.
+    if has("корректировк", "korrektirovk"):
+        return "unsupported"
 
     # --- Новая схема имён: «Фирма_Управленка_ТипВыгрузки» полными словами ---
     # Понимаем кириллицу и транслит. Эти правила стоят РАНЬШЕ старых коротких
@@ -185,7 +240,6 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     if has("оприходован", "oprihodovan",
            "перемещен", "peremeshen", "peremeshch",
            "инвентариз", "inventariz",
-           "корректировк", "korrektirovk",
            "взаимозач", "vzaimozach",
            "авансов", "avansov",  # авансовый отчёт подотчётника
            "подотчет", "подотчёт", "podotchet",
@@ -369,6 +423,25 @@ async def inbox(
             return {"type": "tax_skip", "status": "skipped",
                     "detail": f"Налоговый файл не загружен: {e.detail}"}
     if kind == "unsupported":
+        # Раньше такой файл исчезал бесследно, и понять, что 1С присылает
+        # оприходования с инвентаризациями, было неоткуда — а именно они
+        # объясняют расхождение остатков. Отмечаем приход в журнале: один
+        # раз на файл, повторную отправку того же содержимого не дублируем.
+        file_hash = hashlib.sha256(content).hexdigest()
+        logged = f"[авто:{org}] [не ведём] {filename}"
+        # Повтор ловим по паре «имя + содержимое». Одного хэша мало: две
+        # разные пустые выгрузки бывают побайтово одинаковыми, и по хэшу
+        # второй вид молча слился бы с первым — в отчёте пропал бы целый вид.
+        known = (db.query(models.ImportLog)
+                 .filter(models.ImportLog.file_hash == file_hash,
+                         models.ImportLog.filename == logged)
+                 .first())
+        if known is None:
+            db.add(models.ImportLog(
+                filename=logged, user_id=_robot_user(db).id,
+                added=0, skipped=0, errors_count=0, file_hash=file_hash,
+            ))
+            db.commit()
         return {
             "type": kind,
             "status": "skipped",
@@ -493,6 +566,43 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
 
 
 admin_only = require_roles(models.Role.admin)
+
+
+@router.get("/skipped-kinds")
+def skipped_kinds(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Виды выгрузок, которые 1С присылает, а портал не грузит.
+
+    Отчёт отвечает на вопрос, который иначе некуда задать: почему расчётный
+    остаток не сходится с 1С. Часть присланных документов двигает склад —
+    оприходования, инвентаризации, корректировки, возвраты поставщику, — но
+    импортёров для них нет, файлы пропускаются, и в математике этих движений
+    просто не существует. Пока такой документ не загружен, расхождение по
+    товару объяснить нечем: в наших движениях его нет ни в каком виде."""
+    logs = (db.query(models.ImportLog)
+            .filter(models.ImportLog.filename.like("%[не ведём]%"))
+            .order_by(models.ImportLog.created_at.desc())
+            .all())
+    groups: dict[str, dict] = {}
+    for l in logs:
+        label, moves = unsupported_kind(l.filename)
+        g = groups.setdefault(label, {
+            "kind": label, "moves_stock": moves, "files": 0,
+            "last_at": None, "last_file": None,
+        })
+        g["files"] += 1
+        if g["last_at"] is None:  # выборка уже отсортирована по убыванию
+            g["last_at"] = l.created_at.isoformat()
+            g["last_file"] = l.filename.split("] ")[-1]
+    rows = sorted(groups.values(),
+                  key=lambda g: (not g["moves_stock"], -g["files"]))
+    return {
+        "rows": rows,
+        "files": len(logs),
+        "moving_files": sum(g["files"] for g in rows if g["moves_stock"]),
+    }
 
 
 @router.post("/reset")
