@@ -165,6 +165,31 @@ function isExcel(f) {
   );
 }
 
+// Отправка с повтором. Повторяем только то, что лечится ожиданием: обрыв
+// связи и ответы 5xx (сервис поднимается). Ошибку самого портала — 400 «не
+// тот формат», 401 «неверный токен» — повторять бессмысленно, она от паузы
+// не изменится, а прогон затянется втрое.
+function fetchWithRetry(options) {
+  const DELAYS = [2000, 5000];  // третья попытка идёт сразу после второй паузы
+  let lastError = null;
+  for (let attempt = 0; attempt <= DELAYS.length; attempt++) {
+    if (attempt > 0) Utilities.sleep(DELAYS[attempt - 1]);
+    try {
+      const res = UrlFetchApp.fetch(ENDPOINT, options);
+      const code = res.getResponseCode();
+      if (code < 500) return res;   // ответ портала — повтор не поможет
+      lastError = 'HTTP ' + code;
+    } catch (e) {
+      lastError = e;                // связи нет — как раз тот случай
+    }
+    if (attempt < DELAYS.length) {
+      console.log('  попытка ' + (attempt + 1) + ' не удалась (' + lastError +
+                  '), повторяю');
+    }
+  }
+  throw new Error('после 3 попыток: ' + lastError);
+}
+
 function syncNewFiles() {
   const props = PropertiesService.getScriptProperties();
   let seen = 0, sent = 0, known = 0, failed = 0;
@@ -195,7 +220,12 @@ function syncNewFiles() {
       if (props.getProperty(key) === mod) { known++; return; }  // не менялся
 
       try {
-        const res = UrlFetchApp.fetch(ENDPOINT, {
+        // Портал живёт на Render, а тот перезапускает сервис на каждом
+        // деплое. Файлы уходят по одному, прогон идёт минутами, и в окно
+        // перезапуска попадает случайная горстка: раньше они просто падали
+        // с «Address unavailable» и ждали следующего часа. Три попытки с
+        // нарастающей паузой закрывают перезапуск целиком.
+        const res = fetchWithRetry({
           method: 'post',
           headers: { Authorization: 'Bearer ' + TOKEN },
           // fname — имя файла отдельным полем (кириллица в заголовке multipart
