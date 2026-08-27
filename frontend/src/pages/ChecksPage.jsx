@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
+import { formatMoney } from '../utils'
 
 export default function ChecksPage() {
   const { can, user } = useAuth()
@@ -43,20 +44,26 @@ export default function ChecksPage() {
   // На чём держится склейка номенклатуры. Пока строки без ключа есть,
   // «продано то, чего не закупали» будет появляться снова.
   const [coverage, setCoverage] = useState(null)
+  // Что 1С сама считает недоделанным: непроведённое и помеченное на
+  // удаление. Список её собственный — портал только сверяет его со своими
+  // таблицами.
+  const [problems, setProblems] = useState(null)
 
   async function load() {
     setError(null)
     try {
-      const [d, logs, sk, cov] = await Promise.all([
+      const [d, logs, sk, cov, pr] = await Promise.all([
         api.checks({ rule, include_acked: showAcked }),
         api.importLog(),
         api.skippedKinds().catch(() => null),
         api.guidCoverage().catch(() => null),
+        api.problemDocs().catch(() => null),
       ])
       setData(d)
       setImports(logs)
       setSkipped(sk)
       setCoverage(cov)
+      setProblems(pr)
     } catch (err) {
       setError(err.message)
     }
@@ -284,6 +291,96 @@ export default function ChecksPage() {
                   </tr>
                 ))}
               </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {problems?.total_rows > 0 && (
+        <>
+          <h2 className="section-title">Проблемные документы 1С</h2>
+          <p className="muted">
+            Список составляет сама 1С: непроведённые документы и помеченные на
+            удаление. В учёте они не работают, но существуют — незакрытый
+            авансовый отчёт, реализация, которую решили удалить, платёжка,
+            которую не провели. Всего <b>{problems.total_rows}</b>.
+          </p>
+
+          {problems.leaked_total > 0 ? (
+            <>
+              <p className="sc-diff">
+                В расчёты портала всё-таки попали{' '}
+                <b>{problems.leaked_total} шт.</b> — эти строки считаются, хотя
+                не должны:
+              </p>
+              <div className="table-wrap cards">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Дата</th><th>Документ</th><th>Статус</th>
+                      <th>Контрагент</th><th className="num">Сумма</th>
+                      <th>Где у нас</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {problems.leaked.map((r, i) => (
+                      <tr key={`leak-${i}`}>
+                        <td data-label="Дата">{r.date.split('-').reverse().join('.')}</td>
+                        <td data-label="Документ">
+                          {r.kind}
+                          <span className="muted"> {r.doc_number || ''}</span>
+                        </td>
+                        <td data-label="Статус" className="sc-diff">{r.status}</td>
+                        <td data-label="Контрагент">{r.counterparty || '—'}</td>
+                        <td className="num" data-label="Сумма">
+                          {r.amount == null ? '—' : formatMoney(r.amount, '')}
+                        </td>
+                        <td data-label="Где у нас">{r.in_portal.join(', ')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <p className="sc-ok">
+              Ни один из них в расчёты портала не попал — импортёры отсекли их
+              все.
+            </p>
+          )}
+
+          <p className="muted">Из чего состоит список:</p>
+          <div className="table-wrap cards">
+            <table>
+              <thead>
+                <tr>
+                  <th>Вид документа</th>
+                  <th className="num">Документов</th>
+                  <th className="num">На сумму</th>
+                </tr>
+              </thead>
+              <tbody>
+                {problems.by_kind.map((r) => (
+                  <tr key={r.kind}>
+                    <td data-label="Вид">{r.kind}</td>
+                    <td className="num" data-label="Документов">{r.docs}</td>
+                    <td className="num" data-label="Сумма">
+                      {r.amount ? formatMoney(r.amount, '') : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td>
+                    {problems.by_status.map((s) => `${s.status}: ${s.docs}`).join(' · ')}
+                  </td>
+                  <td className="num">{problems.total_rows}</td>
+                  <td className="num">
+                    {formatMoney(problems.by_kind.reduce((a, r) => a + r.amount, 0), '')}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </>

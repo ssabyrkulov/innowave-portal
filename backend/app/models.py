@@ -261,6 +261,35 @@ class StockTransfer(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ProblemDoc(Base):
+    """Документ 1С, который сама 1С считает проблемным.
+
+    Выгрузка «Проблемные документы» — это список непроведённых и помеченных
+    на удаление документов: незакрытый авансовый отчёт, реализация, которую
+    решили удалить, платёжка, которую не провели. В учёте они не работают, но
+    существуют, и половина расхождений начинается именно с них.
+
+    Портал держит их снимком отдельно от рабочих таблиц: это не операции, а
+    список вопросов к бухгалтерии. Ценность — не в самом списке, а в сверке:
+    если документ помечен на удаление, а его ДокументGUID лежит у нас в
+    продажах или оплатах, значит он всё-таки просочился в расчёты."""
+
+    __tablename__ = "problem_docs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    kind: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    status: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    counterparty: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    author: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ImportCost(Base):
     """Строка ГТД по импорту: таможенная часть себестоимости партии.
 

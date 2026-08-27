@@ -151,8 +151,6 @@ UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
     ("Конвертация", ("конвертац", "konvertac"), False, ""),
     ("Начисление зарплаты", ("начисление зарплат", "nachislenie zarplat"),
      False, ""),
-    ("Проблемные документы", ("проблемные документ", "problemnye dokument"),
-     False, ""),
     ("Ручные операции", ("ручные операц", "ruchnye operac"), False, ""),
     ("ЭСФ / счета-фактуры", ("эсф", "esf", "счет-фактур", "счёт-фактур",
                              "schet-faktur", "бланки счетов",
@@ -269,6 +267,10 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # остаток отдельного склада посчитать нечем.
     if has("перемещен", "peremeshen", "peremeshch"):
         return "stock_transfers"
+    # Проблемные документы — не операции, а список того, что 1С считает
+    # недоделанным: непроведённое и помеченное на удаление.
+    if has("проблемные документ", "problemnye dokument"):
+        return "problem_docs"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
@@ -289,7 +291,6 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
            "журнал проводок", "jurnal provodok", "zhurnal provodok",
            "конвертац", "konvertac",
            "начисление зарплат", "nachislenie zarplat",
-           "проблемные документ", "problemnye dokument",
            "ручные операц", "ruchnye operac",
            "движение мбп", "dvijenie mbp", "dvizhenie mbp",
            "эсф", "esf", "счет-фактур", "счёт-фактур", "schet-faktur",
@@ -595,6 +596,10 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         from .landed_cost import import_extra_costs_workbook
         result = import_extra_costs_workbook(db, content, auto_name, robot.id,
                                              org=org)
+    elif kind == "problem_docs":
+        from .problem_docs import import_problem_docs_workbook
+        result = import_problem_docs_workbook(db, content, auto_name, robot.id,
+                                              org=org)
     elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":
