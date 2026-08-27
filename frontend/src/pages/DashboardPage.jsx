@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
@@ -321,14 +321,104 @@ function StockSourcesCard() {
 // Расчётные остатки: поступило − продано + возвраты − списано. Фактической
 // выгрузки остатков из 1С пока нет (файл пустой), поэтому расчёт — единственный
 // источник; когда факт появится, разница с ним покажет пересорт и недостачи.
+const MOVE_KINDS = {
+  purchase: 'приход', sale: 'продажа', return: 'возврат', writeoff: 'списание',
+}
+
+// Документы по товару под раскрытой строкой сверки. Карточка отвечает
+// «сколько», раскрытие — «из чего»: движение за движением, с пометкой тех,
+// что прошли уже после снапшота 1С и потому в Δ не входят.
+function StockMoves({ moves, days, cut, fmt, onDays }) {
+  if (!moves) return <p className="muted">Загружаю движения…</p>
+  if (moves.error) return <p className="muted">Не удалось загрузить: {moves.error}</p>
+  const t = moves.totals || {}
+  return (
+    <>
+      <div className="moves-head">
+        <span className="muted">
+          За {days} дн.: приход {fmt(t.purchase)} · продажа {fmt(t.sale)} ·
+          возврат {fmt(t.return)} · списание {fmt(t.writeoff)} · итого{' '}
+          <b>{moves.net > 0 ? '+' : ''}{fmt(moves.net)}</b>
+        </span>
+        {[30, 90, 365].map((d) => (
+          <button key={d} className="btn btn-ghost btn-sm"
+            disabled={d === days}
+            onClick={(e) => { e.stopPropagation(); onDays(d) }}>
+            {d === 365 ? 'год' : `${d} дн`}
+          </button>
+        ))}
+      </div>
+      {moves.moves.length === 0 ? (
+        <p className="muted">Движений за период нет.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Дата</th><th>Что</th><th className="num">Кол-во</th>
+              <th>Документ</th><th>Контрагент / куда</th><th>Склад</th>
+            </tr>
+          </thead>
+          <tbody>
+            {moves.moves.map((m, i) => (
+              <tr key={i}>
+                <td>
+                  {fmtDate(m.date)}
+                  {cut && m.date > cut && (
+                    <span className="muted"> · после снапшота</span>
+                  )}
+                </td>
+                <td>{MOVE_KINDS[m.kind] || m.kind}</td>
+                <td className={`num ${m.delta < 0 ? 'neg' : ''}`}>
+                  {m.delta > 0 ? '+' : '−'}{fmt(Math.abs(m.delta))}
+                </td>
+                <td>{m.doc || '—'}</td>
+                <td>{m.party || '—'}</td>
+                <td>{m.warehouse || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {moves.shown < moves.total_moves && (
+        <p className="muted">
+          Показаны первые {moves.shown} движений из {moves.total_moves}.
+        </p>
+      )}
+    </>
+  )
+}
+
 function CalcStockCard() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [showAll, setShowAll] = useState(false)
+  // Раскрытая строка и её движения: карточка отвечает «сколько», раскрытие —
+  // «из каких документов», иначе расхождение видно, а причина нет.
+  const [open, setOpen] = useState(null)
+  const [moves, setMoves] = useState(null)
+  const [days, setDays] = useState(30)
 
   useEffect(() => {
     api.stockCalc().then(setData).catch((e) => setError(e.message))
   }, [])
+
+  const load = (product, d) => {
+    setMoves(null)
+    setDays(d)
+    api.stockMoves(product, d)
+      .then(setMoves)
+      .catch((e) => setMoves({ error: e.message }))
+  }
+
+  const toggle = (product) => {
+    if (open === product) {
+      setOpen(null)
+      setMoves(null)
+      return
+    }
+    setOpen(product)
+    load(product, 30)
+  }
 
   if (error || !data) return null
   const rows = data.rows.filter((r) => !r.unmatched)
@@ -337,6 +427,10 @@ function CalcStockCard() {
   // группы. Показываем целиком, сворачивание оставляем на крайний случай.
   const shown = showAll || rows.length <= 25 ? rows : rows.slice(0, 25)
   const fmt = (v) => Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })
+  // Дата снапшота: движения позже неё в Δ не входят, и в раскрытии их
+  // помечаем — иначе «лишний» документ выглядит расхождением.
+  const cut = data.onec_updated_at ? data.onec_updated_at.slice(0, 10) : null
+  const cols = 6 + (data.has_onec ? 2 : 0)
   if (rows.length === 0) return null
   return (
     <div className="chart-card">
@@ -366,27 +460,40 @@ function CalcStockCard() {
           </thead>
           <tbody>
             {shown.map((r, i) => (
-              <tr key={i}>
-                <td>{r.product}</td>
-                <td className="num">{fmt(r.purchased)}</td>
-                <td className="num">{fmt(r.sold)}</td>
-                <td className="num">{fmt(r.returned)}</td>
-                <td className="num">{r.written_off ? `−${fmt(r.written_off)}` : '—'}</td>
-                <td className={`num ${(r.calc_qty ?? 0) < 0 ? 'neg' : ''}`}>
-                  <b>{r.calc_qty == null ? '—' : fmt(r.calc_qty)}</b>
-                </td>
-                {data.has_onec && (
-                  <td className={`num ${(r.onec_qty ?? 0) < 0 ? 'neg' : ''}`}>
-                    {r.onec_qty == null ? '—' : fmt(r.onec_qty)}
+              <Fragment key={i}>
+                <tr className="doc-row" onClick={() => toggle(r.product)}>
+                  <td>
+                    <span className="muted">{open === r.product ? '▾ ' : '▸ '}</span>
+                    {r.product}
                   </td>
-                )}
-                {data.has_onec && (
-                  <td className={`num ${r.diff_onec == null ? 'muted'
-                    : Math.abs(r.diff_onec) < 1 ? 'sc-ok' : 'sc-diff'}`}>
-                    {r.diff_onec == null ? '—' : fmt(r.diff_onec)}
+                  <td className="num">{fmt(r.purchased)}</td>
+                  <td className="num">{fmt(r.sold)}</td>
+                  <td className="num">{fmt(r.returned)}</td>
+                  <td className="num">{r.written_off ? `−${fmt(r.written_off)}` : '—'}</td>
+                  <td className={`num ${(r.calc_qty ?? 0) < 0 ? 'neg' : ''}`}>
+                    <b>{r.calc_qty == null ? '—' : fmt(r.calc_qty)}</b>
                   </td>
+                  {data.has_onec && (
+                    <td className={`num ${(r.onec_qty ?? 0) < 0 ? 'neg' : ''}`}>
+                      {r.onec_qty == null ? '—' : fmt(r.onec_qty)}
+                    </td>
+                  )}
+                  {data.has_onec && (
+                    <td className={`num ${r.diff_onec == null ? 'muted'
+                      : Math.abs(r.diff_onec) < 1 ? 'sc-ok' : 'sc-diff'}`}>
+                      {r.diff_onec == null ? '—' : fmt(r.diff_onec)}
+                    </td>
+                  )}
+                </tr>
+                {open === r.product && (
+                  <tr>
+                    <td className="doc-lines" colSpan={cols}>
+                      <StockMoves moves={moves} days={days} cut={cut} fmt={fmt}
+                        onDays={(d) => load(r.product, d)} />
+                    </td>
+                  </tr>
                 )}
-              </tr>
+              </Fragment>
             ))}
           </tbody>
           <tfoot>
@@ -418,6 +525,23 @@ function CalcStockCard() {
           по названию — они не в счёте. Отрицательный остаток обычно значит,
           что продано больше, чем закуплено по этому имени (разные написания
           номенклатуры), либо не выгружены списания.
+        </p>
+      )}
+      {data.returns_no_lines?.missing > 0 && (
+        <p className="sc-diff">
+          ⚠ Возвраты без товарных строк: {data.returns_no_lines.missing} из{' '}
+          {data.returns_no_lines.docs} документов на{' '}
+          {formatMoney(data.returns_no_lines.missing_amount)}. В 1С этот товар
+          вернулся на склад, а в расчёт «поступило − продано + возвраты» не
+          попал: выгрузка пришла документами (дата, сумма, контрагент) без
+          номенклатуры. Расчётный остаток по таким позициям занижен, Δ уходит
+          в минус. Лечится построчной выгрузкой возвратов.
+          {data.returns_no_lines.sample?.length > 0 && (
+            <span className="muted">
+              {' '}Например: {data.returns_no_lines.sample
+                .map((d) => `${fmtDate(d.date)} ${d.client}`).join(', ')}.
+            </span>
+          )}
         </p>
       )}
     </div>

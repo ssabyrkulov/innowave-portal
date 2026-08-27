@@ -7,7 +7,7 @@
 """
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from .. import models, onec
 from ..database import get_db
 from ..deps import get_current_user
+from .returns import returns_without_lines
 
 router = APIRouter(prefix="/purchases", tags=["purchases"])
 
@@ -302,6 +303,10 @@ def stock_calc(
         # Сколько штук движений позже снапшота исключено из Δ — чтобы человек
         # видел, почему «расчётный остаток» и Δ могут не биться напрямую.
         "future_excluded_qty": future_excluded,
+        # Возвраты, пришедшие документами без товарных строк: их товар в 1С
+        # на склад вернулся, а в нашей математике нет — прямая причина
+        # отрицательной Δ, и увидеть её больше негде.
+        "returns_no_lines": returns_without_lines(db, org),
         "rows": rows,
         "totals": {
             "purchased": round(sum(r["purchased"] for r in rows), 1),
@@ -314,6 +319,73 @@ def stock_calc(
             "diff_onec": round(sum(r["diff_onec"] or 0 for r in rows), 1),
         },
         "unmatched_count": sum(1 for r in rows if r["unmatched"]),
+    }
+
+
+@router.get("/stock-moves")
+def stock_moves(
+    product: str,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "all",
+    days: int = 30,
+):
+    """Движения по одному товару — из чего сложился его расчётный остаток.
+
+    Сверка показывает расхождение, но не его причину. Чтобы понять, откуда
+    взялась Δ, нужно смотреть сами документы: какой приход не пришёл, какое
+    списание задвоилось, что прошло уже после снапшота 1С. Товар ищем по
+    тому же нормализованному ключу, что и сверка, — иначе строка карточки и
+    её раскрытие показывали бы разные вещи.
+
+    days — окно в днях от сегодня. По умолчанию месяц: расхождения ищут по
+    свежим документам, а полная история товара живёт в столбцах карточки."""
+    key = _norm_product(product)
+    since = date.today() - timedelta(days=max(1, min(days, 3650)))
+
+    moves: list[dict] = []
+
+    def collect(model, kind, sign, party_attr):
+        rows = models.org_scope(db.query(model), model, org).filter(
+            model.date >= since).all()
+        for r in rows:
+            if _norm_product(r.product) != key:
+                continue
+            qty = float(r.qty or 0)
+            moves.append({
+                "kind": kind,
+                "date": r.date.isoformat(),
+                "qty": round(qty, 1),
+                "delta": round(sign * qty, 1),
+                "doc": getattr(r, "doc_number", None),
+                "party": getattr(r, party_attr, None) if party_attr else None,
+                "warehouse": getattr(r, "warehouse", None),
+            })
+
+    collect(models.Purchase, "purchase", 1, "supplier")
+    collect(models.Sale, "sale", -1, "client")
+    # У возврата покупателя склада нет — 1С его в этой выгрузке не отдаёт.
+    collect(models.ReturnLine, "return", 1, "client")
+    # У списания вместо контрагента — субконто: видно, куда ушёл товар.
+    collect(models.WriteOff, "writeoff", -1, "subconto")
+
+    moves.sort(key=lambda m: (m["date"], m["kind"]), reverse=True)
+
+    totals: dict[str, float] = defaultdict(float)
+    for m in moves:
+        totals[m["kind"]] += m["qty"]
+    # Длинный хвост режем, но молча — нельзя: обрезанный список выглядит как
+    # полный, и по нему считают выводы.
+    LIMIT = 400
+    return {
+        "product": product,
+        "since": since.isoformat(),
+        "days": days,
+        "moves": moves[:LIMIT],
+        "shown": min(len(moves), LIMIT),
+        "total_moves": len(moves),
+        "totals": {k: round(v, 1) for k, v in totals.items()},
+        "net": round(sum(m["delta"] for m in moves), 1),
     }
 
 

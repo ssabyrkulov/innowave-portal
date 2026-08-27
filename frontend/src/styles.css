@@ -2813,6 +2813,13 @@ button.summary-card {
 .doc-row:hover td { background: var(--primary-soft, #f4f6ff); }
 .doc-lines { padding: 0 0 8px 24px !important; background: var(--bg-soft, #fafafa); }
 .doc-lines table { width: 100%; font-size: 12.5px; }
+/* Шапка раскрытых движений: итоги слева, переключатель периода справа —
+   в одну строку, чтобы раскрытие не отодвигало таблицу вниз. */
+.moves-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 8px 6px 0;
+}
+.moves-head span:first-child { flex: 1 1 auto; }
 
 .store-name { font-size: 14px; }
 /* Статистика склада — второй строкой, чтобы длина не ломала ряд. */

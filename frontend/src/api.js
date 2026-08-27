@@ -182,6 +182,10 @@ export const api = {
   writeoffsLines: () => request('/writeoffs/lines'),
   purchasesLines: () => request('/purchases/lines'),
   stockCalc: () => request('/purchases/stock-calc'),
+  // Движения по одному товару — раскрытие строки в сверке остатков.
+  stockMoves: (product, days) =>
+    request(`/purchases/stock-moves?product=${encodeURIComponent(product)}`
+      + `&days=${days || 30}`),
   stockSources: () => request('/balances/stock-sources'),
   salesGroups: () => request('/dashboard/sales-groups'),
   taxByComment: (onlyDiff) =>

@@ -231,6 +231,53 @@ def import_returns_workbook(
     }
 
 
+def returns_without_lines(db: Session, org: str) -> dict:
+    """Возвраты, у которых нет товарных строк — их товар не вернулся в расчёт.
+
+    Документный формат выгрузки (ВыгрузкаВозв: дата, сумма, контрагент) даёт
+    только ReturnDoc. Для дебиторки этого хватает, для остатков — нет:
+    расчёт «поступило − продано + возвраты − списано» берёт возвраты из
+    ReturnLine, и документ без строк в него не попадает. Товар при этом в 1С
+    на склад вернулся, поэтому расчётный остаток оказывается занижен, а Δ
+    против 1С — отрицательной. Молчать об этом нельзя: карточка остатков
+    показывает, сколько возвратов прошло мимо товара."""
+    # Тянем только нужные колонки: таблицы возвратов растут всю жизнь портала,
+    # а проверке хватает даты, контрагента и GUID.
+    lines_by_guid: set[str] = set()
+    lines_by_doc: set[tuple] = set()
+    for r in models.org_scope(
+        db.query(models.ReturnLine.date, models.ReturnLine.client,
+                 models.ReturnLine.doc_guid), models.ReturnLine, org
+    ).all():
+        if r.doc_guid:
+            lines_by_guid.add(r.doc_guid.lower())
+        lines_by_doc.add((r.date, (r.client or "").strip()))
+
+    docs = models.org_scope(
+        db.query(models.ReturnDoc.date, models.ReturnDoc.client,
+                 models.ReturnDoc.amount, models.ReturnDoc.doc_guid),
+        models.ReturnDoc, org
+    ).all()
+    missing = []
+    for d in docs:
+        if d.doc_guid and d.doc_guid.lower() in lines_by_guid:
+            continue
+        # Документы без GUID сопоставляем по дате и контрагенту: шапки и
+        # строки приходят из одного файла, так что пара совпадает точно.
+        if (d.date, (d.client or "").strip()) in lines_by_doc:
+            continue
+        missing.append(d)
+    missing.sort(key=lambda d: d.date, reverse=True)
+    return {
+        "docs": len(docs),
+        "missing": len(missing),
+        "missing_amount": round(sum(float(d.amount or 0) for d in missing), 2),
+        "sample": [{"date": d.date.isoformat(), "client": d.client,
+                    "amount": round(float(d.amount or 0), 2)}
+                   for d in missing[:5]],
+    }
+
+
 @router.get("")
 def list_returns(
     db: Session = Depends(get_db),
