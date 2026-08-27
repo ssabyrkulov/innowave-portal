@@ -10,8 +10,13 @@ export default function StockPage() {
   const [q, setQ] = useState('')
   const [wh, setWh] = useState('')
 
+  // Сверка по складам считается отдельной ручкой: остатки на этой странице
+  // — снимок из 1С, а разрез по складам сравнивает его с нашим расчётом.
+  const [byWh, setByWh] = useState(null)
+
   useEffect(() => {
     api.stockBalances().then(setData).catch((e) => setError(e.message))
+    api.stockByWarehouse().then(setByWh).catch(() => setByWh(null))
   }, [])
 
   const warehouses = useMemo(
@@ -59,6 +64,50 @@ export default function StockPage() {
         </div>
       ) : (
         <>
+          {/* Сверка по складам. Раньше расчёт вёлся только по фирме целиком:
+              перемещения между складами не грузились, и разложить остаток
+              было нечем. */}
+          {byWh?.rows?.length > 0 && (
+            <div className="table-wrap compact">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Склад</th>
+                    <th className="num">Наш расчёт</th>
+                    <th className="num">1С</th>
+                    <th className="num">Δ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byWh.rows.map((r) => (
+                    <tr key={r.warehouse}>
+                      <td>{r.warehouse}</td>
+                      <td className={`num ${r.calc_qty < 0 ? 'neg' : ''}`}>
+                        {fmtQty(r.calc_qty)}
+                      </td>
+                      <td className="num">
+                        {r.onec_qty == null ? '—' : fmtQty(r.onec_qty)}
+                      </td>
+                      <td className={`num ${r.diff == null ? 'muted'
+                        : Math.abs(r.diff) < 1 ? 'sc-ok' : 'sc-diff'}`}>
+                        {r.diff == null ? '—' : fmtQty(r.diff)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {byWh?.returns_without_warehouse > 0 && (
+            <p className="muted">
+              Возвраты покупателей приходят из 1С без склада —{' '}
+              {fmtQty(byWh.returns_without_warehouse)} шт собраны строкой
+              «(без склада)». Ровно на столько она завышена, а какой-то
+              реальный склад занижен. Разносить их наугад портал не станет:
+              это исказило бы каждый склад незаметно.
+            </p>
+          )}
+
           <div className="summary-bar">
             <div className="summary-card summary-in">
               <span className="summary-label">Стоимость остатков</span>

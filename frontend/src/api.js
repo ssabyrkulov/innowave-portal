@@ -195,6 +195,8 @@ export const api = {
     request(`/purchases/stock-moves?product=${encodeURIComponent(product)}`
       + `&days=${days || 30}`),
   stockSources: () => request('/balances/stock-sources'),
+  // Остаток по каждому складу: наш расчёт против снапшота 1С.
+  stockByWarehouse: () => request('/stock-transfers/by-warehouse'),
   salesGroups: () => request('/dashboard/sales-groups'),
   taxByComment: (onlyDiff) =>
     request(`/tax/by-comment?only_diff=${onlyDiff ? 'true' : 'false'}`),

@@ -34,6 +34,7 @@ from .routers import (
     sales,
     salesdoc,
     stock_receipts,
+    stock_transfers,
     tax,
     users,
 )
@@ -347,6 +348,7 @@ app.include_router(writeoffs.router)
 app.include_router(stock_receipts.router)
 app.include_router(products.router)
 app.include_router(counterparties.router)
+app.include_router(stock_transfers.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

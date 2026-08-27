@@ -235,6 +235,32 @@ class Counterparty(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class StockTransfer(Base):
+    """Перемещение товара между складами фирмы (ВыгрузкаПерем).
+
+    На итог по фирме не влияет — сколько ушло с одного склада, столько
+    пришло на другой. Нужно ради разреза по складам: без перемещений
+    остаток отдельного склада посчитать нечем, и портал считал только по
+    фирме целиком."""
+
+    __tablename__ = "stock_transfers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    from_warehouse: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    to_warehouse: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Product(Base):
     """Справочник номенклатуры 1С — источник правды о товаре.
 

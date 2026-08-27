@@ -133,8 +133,6 @@ UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
     # значило бы задвоить движение.
     ("Инвентаризация", ("инвентариз", "inventariz"), False,
      "проводок не делает: излишки идут оприходованием, недостачи списанием"),
-    ("Перемещение товаров", ("перемещен", "peremeshen", "peremeshch"), False,
-     "между складами одной фирмы; расчёт ведётся по фирме целиком"),
     ("Движение МБП", ("движение мбп", "dvijenie mbp", "dvizhenie mbp"), False,
      "малоценка учитывается отдельно от товаров"),
     ("Корректировка долга", ("корректировка долга", "korrektirovka dolga",
@@ -265,6 +263,10 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # имени вид документа, а слово «Контрагенты» стоит у самого справочника.
     if has("контрагент", "kontragent"):
         return "counterparties"
+    # Перемещение между складами. На итог по фирме не влияет, но без него
+    # остаток отдельного склада посчитать нечем.
+    if has("перемещен", "peremeshen", "peremeshch"):
+        return "stock_transfers"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
@@ -581,6 +583,10 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         from .counterparties import import_counterparties_workbook
         result = import_counterparties_workbook(db, content, auto_name,
                                                 robot.id, org=org)
+    elif kind == "stock_transfers":
+        from .stock_transfers import import_stock_transfers_workbook
+        result = import_stock_transfers_workbook(db, content, auto_name,
+                                                 robot.id, org=org)
     elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":
