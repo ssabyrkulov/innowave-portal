@@ -151,7 +151,6 @@ UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
     ("Конвертация", ("конвертац", "konvertac"), False, ""),
     ("Начисление зарплаты", ("начисление зарплат", "nachislenie zarplat"),
      False, ""),
-    ("Ручные операции", ("ручные операц", "ruchnye operac"), False, ""),
     ("ЭСФ / счета-фактуры", ("эсф", "esf", "счет-фактур", "счёт-фактур",
                              "schet-faktur", "бланки счетов",
                              "blanki schetov"), False, ""),
@@ -271,6 +270,9 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # недоделанным: непроведённое и помеченное на удаление.
     if has("проблемные документ", "problemnye dokument"):
         return "problem_docs"
+    # Ручные операции и сторно — проводки мимо документов.
+    if has("ручные операц", "ruchnye operac"):
+        return "manual_entries"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
@@ -291,7 +293,6 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
            "журнал проводок", "jurnal provodok", "zhurnal provodok",
            "конвертац", "konvertac",
            "начисление зарплат", "nachislenie zarplat",
-           "ручные операц", "ruchnye operac",
            "движение мбп", "dvijenie mbp", "dvizhenie mbp",
            "эсф", "esf", "счет-фактур", "счёт-фактур", "schet-faktur",
            "бланки счетов", "blanki schetov"):
@@ -600,6 +601,10 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         from .problem_docs import import_problem_docs_workbook
         result = import_problem_docs_workbook(db, content, auto_name, robot.id,
                                               org=org)
+    elif kind == "manual_entries":
+        from .manual_entries import import_manual_entries_workbook
+        result = import_manual_entries_workbook(db, content, auto_name,
+                                                robot.id, org=org)
     elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":

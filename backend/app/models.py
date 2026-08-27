@@ -261,6 +261,40 @@ class StockTransfer(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ManualEntry(Base):
+    """Ручная операция 1С — проводка мимо документов, и сторно.
+
+    Обычный документ 1С рождается из события: продали, оплатили, списали.
+    Ручная операция — это проводка в обход документов: бухгалтер вписал её
+    сам. Иногда это нормально (перенос между счетами), иногда так правят то,
+    что не сходится, и тогда портал видит одну картину, а баланс 1С — другую.
+
+    Отдельный случай — сторно: операция отменяет ранее проведённый документ.
+    Документ при этом остаётся в базе и в выгрузках, и портал считает его
+    целиком, не зная, что 1С его сняла. Поэтому СторноGUID хранится рядом:
+    по нему видно, какой именно документ мы считаем зря."""
+
+    __tablename__ = "manual_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    content: Mapped[str | None] = mapped_column(String, nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    doc_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    typical: Mapped[str | None] = mapped_column(String, nullable=True)
+    fill_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Что именно сторнируется: название документа и его GUID.
+    reversed_doc: Mapped[str | None] = mapped_column(String, nullable=True)
+    reversed_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    responsible: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    author: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ProblemDoc(Base):
     """Документ 1С, который сама 1С считает проблемным.
 

@@ -25,6 +25,7 @@ from .routers import (
     expenses,
     integrations,
     landed_cost,
+    manual_entries,
     operations,
     payments,
     problem_docs,
@@ -353,6 +354,7 @@ app.include_router(counterparties.router)
 app.include_router(stock_transfers.router)
 app.include_router(landed_cost.router)
 app.include_router(problem_docs.router)
+app.include_router(manual_entries.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

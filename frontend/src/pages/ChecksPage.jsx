@@ -48,22 +48,26 @@ export default function ChecksPage() {
   // удаление. Список её собственный — портал только сверяет его со своими
   // таблицами.
   const [problems, setProblems] = useState(null)
+  // Проводки, введённые мимо документов, и сторно.
+  const [manual, setManual] = useState(null)
 
   async function load() {
     setError(null)
     try {
-      const [d, logs, sk, cov, pr] = await Promise.all([
+      const [d, logs, sk, cov, pr, me] = await Promise.all([
         api.checks({ rule, include_acked: showAcked }),
         api.importLog(),
         api.skippedKinds().catch(() => null),
         api.guidCoverage().catch(() => null),
         api.problemDocs().catch(() => null),
+        api.manualEntries().catch(() => null),
       ])
       setData(d)
       setImports(logs)
       setSkipped(sk)
       setCoverage(cov)
       setProblems(pr)
+      setManual(me)
     } catch (err) {
       setError(err.message)
     }
@@ -383,6 +387,67 @@ export default function ChecksPage() {
               </tfoot>
             </table>
           </div>
+        </>
+      )}
+
+      {manual?.total_rows > 0 && (
+        <>
+          <h2 className="section-title">Ручные операции и сторно</h2>
+          <p className="muted">
+            Обычная проводка рождается из документа — продали, оплатили,
+            списали. Эти вписаны в обход документов, и в выгрузках продаж или
+            оплат их не видно вовсе. Всего <b>{manual.total_rows}</b> на{' '}
+            <b>{formatMoney(manual.amount)}</b>.
+          </p>
+
+          {manual.counted_anyway > 0 && (
+            <p className="sc-diff">
+              Из них <b>{manual.counted_anyway} шт.</b> — сторно документов,
+              которые портал всё-таки считает целиком: 1С операцию сняла, а у
+              нас она в расчёте. Это <b>{formatMoney(manual.counted_amount)}</b>{' '}
+              мимо.
+            </p>
+          )}
+
+          <div className="table-wrap cards">
+            <table>
+              <thead>
+                <tr>
+                  <th>Дата</th><th>Содержание</th><th className="num">Сумма</th>
+                  <th>Сторнирует</th><th>Автор</th>
+                </tr>
+              </thead>
+              <tbody>
+                {manual.rows.map((r, i) => (
+                  <tr key={`me-${i}`}>
+                    <td data-label="Дата">{r.date.split('-').reverse().join('.')}</td>
+                    <td data-label="Содержание">
+                      {r.content || r.typical || '—'}
+                      {r.comment && <span className="muted skipped-cols">{r.comment}</span>}
+                    </td>
+                    <td className="num" data-label="Сумма">
+                      {r.amount == null ? '—' : formatMoney(r.amount, '')}
+                    </td>
+                    <td data-label="Сторнирует"
+                      className={r.in_portal.length ? 'sc-diff' : 'muted'}>
+                      {r.reversed_doc || '—'}
+                      {r.in_portal.length > 0 && (
+                        <span className="skipped-cols">
+                          считается у нас: {r.in_portal.join(', ')}
+                        </span>
+                      )}
+                    </td>
+                    <td data-label="Автор" className="muted">{r.author || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {manual.shown < manual.total_rows && (
+            <p className="muted">
+              Показаны {manual.shown} из {manual.total_rows}.
+            </p>
+          )}
         </>
       )}
 
