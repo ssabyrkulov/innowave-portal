@@ -18,11 +18,11 @@ export const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
 export function formatMoney(amount, currency = 'KGS') {
   const value = Number(amount || 0)
-  return (
-    new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value) +
-    ' ' +
-    currency
-  )
+  const text = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value)
+  // Второй аргумент местами передают как false — «в этой колонке валюта не
+  // нужна». Раньше он приклеивался как есть, и в остатках и бюджете суммы
+  // печатались как «1 234 false».
+  return currency ? `${text} ${currency}` : text
 }
 
 // Build an ISO date string (YYYY-MM-DD) without timezone drift.

@@ -197,6 +197,8 @@ export const api = {
   stockSources: () => request('/balances/stock-sources'),
   // Остаток по каждому складу: наш расчёт против снапшота 1С.
   stockByWarehouse: () => request('/stock-transfers/by-warehouse'),
+  // Полная себестоимость импорта: инвойс + таможня из ГТД + доп. расходы.
+  landedCost: () => request('/landed-cost'),
   salesGroups: () => request('/dashboard/sales-groups'),
   taxByComment: (onlyDiff) =>
     request(`/tax/by-comment?only_diff=${onlyDiff ? 'true' : 'false'}`),

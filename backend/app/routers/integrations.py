@@ -146,7 +146,6 @@ UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
     ("Счёт на оплату", ("счет на оплату", "счёт на оплату",
                         "schet na oplatu"), False, ""),
     ("Оборотно-сальдовая ведомость", ("оборотно", "oborotno"), False, ""),
-    ("ГТД", ("гтд", "gtd"), False, ""),
     ("Журнал проводок", ("журнал проводок", "jurnal provodok",
                          "zhurnal provodok"), False, ""),
     ("Конвертация", ("конвертац", "konvertac"), False, ""),
@@ -158,7 +157,6 @@ UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
     ("ЭСФ / счета-фактуры", ("эсф", "esf", "счет-фактур", "счёт-фактур",
                              "schet-faktur", "бланки счетов",
                              "blanki schetov"), False, ""),
-    ("Дополнительные расходы", ("дополнительн", "dopolnitel"), False, ""),
 )
 
 
@@ -232,12 +230,16 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # раньше денежного «поступления», иначе закупки грузились бы как оплаты.
     if has("поступлен", "postuplen") and has("товар", "tovar"):
         return "purchases"
-    # «Дополнительные расходы» — это себестоимость импорта (landed cost),
-    # привязанная к ГТД, а не выплата денег. Правило обязано стоять раньше
-    # общего «расход», иначе 294 строки по Хайджин уехали бы в денежные
-    # расходы и задвоили их.
+    # ГТД по импорту — таможенная часть себестоимости: пошлина, сбор, акциз,
+    # сопровождение, уже разложенные 1С по строкам поступления.
+    if has("гтд", "gtd"):
+        return "gtd"
+    # «Дополнительные расходы» — вторая половина той же себестоимости
+    # (стоянка, доставка, брокер), а не выплата денег. Правило обязано стоять
+    # раньше общего «расход», иначе 294 строки по Хайджин уехали бы в
+    # денежные расходы и задвоили их.
     if has("дополнительн", "dopolnitel") and has("расход", "rashod"):
-        return "unsupported"
+        return "extra_costs"
     # «Платёжный ордер списание ДС» — банковская операция, а не списание
     # товаров. Правило обязано стоять раньше общего «спис», иначе документ
     # уедет в товарный импортёр, где ждут номенклатуру и количество.
@@ -284,7 +286,6 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
            # Ловим их по имени, потому что sniff_kind по колонкам ошибается:
            # «Движение МБП» с колонками Дата/Сумма/Контрагент он принимает за
            # денежный расход и подмешивает движение малоценки к платежам.
-           "гтд", "gtd",
            "журнал проводок", "jurnal provodok", "zhurnal provodok",
            "конвертац", "konvertac",
            "начисление зарплат", "nachislenie zarplat",
@@ -587,6 +588,13 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         from .stock_transfers import import_stock_transfers_workbook
         result = import_stock_transfers_workbook(db, content, auto_name,
                                                  robot.id, org=org)
+    elif kind == "gtd":
+        from .landed_cost import import_gtd_workbook
+        result = import_gtd_workbook(db, content, auto_name, robot.id, org=org)
+    elif kind == "extra_costs":
+        from .landed_cost import import_extra_costs_workbook
+        result = import_extra_costs_workbook(db, content, auto_name, robot.id,
+                                             org=org)
     elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":

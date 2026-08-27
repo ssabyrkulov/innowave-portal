@@ -194,7 +194,138 @@ export default function StockPage() {
 
       <PurchasesPanel />
 
+      <LandedCostPanel />
+
       <WriteoffsPanel />
+    </div>
+  )
+}
+
+
+// Полная себестоимость импорта: инвойс + таможня (ГТД) + дополнительные
+// расходы. Показывает, насколько товар на складе дороже инвойса — и ровно
+// на столько же завышена маржа, пока она считается по сумме поступления.
+function LandedCostPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [q, setQ] = useState('')
+
+  function toggle() {
+    const n = !open
+    setOpen(n)
+    if (n && data === null) api.landedCost().then(setData).catch((e) => setError(e.message))
+  }
+
+  const rows = useMemo(() => {
+    const items = data?.rows || []
+    const s = q.trim().toLowerCase()
+    return s ? items.filter((r) => (r.product || '').toLowerCase().includes(s)) : items
+  }, [data, q])
+
+  const t = data?.totals
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 🚢 Себестоимость импорта (ГТД + доп. расходы)
+      </button>
+      {open && (
+        <div className="store-map-body">
+          {error && <div className="error">{error}</div>}
+          {data === null && !error && <div className="muted">Загрузка…</div>}
+          {data && data.total_rows === 0 && (
+            <div className="muted">
+              Данных пока нет — файлы «ГТД по импорту» и «Дополнительные
+              расходы» подтянутся автосинком.
+            </div>
+          )}
+          {data && data.total_rows > 0 && (
+            <>
+              <p>
+                Инвойс <b>{formatMoney(t.invoice, '')}</b> + таможня{' '}
+                <b>{formatMoney(t.customs, '')}</b> + расходы{' '}
+                <b>{formatMoney(t.extra, '')}</b> = <b>{formatMoney(t.total)}</b>
+                {t.markup_pct != null && <> · товар дороже инвойса на <b>{t.markup_pct}%</b></>}
+              </p>
+              {t.vat > 0 && (
+                <p>
+                  Сверх этого НДС при ввозе — <b>{formatMoney(t.vat)}</b>.
+                  В 1С он отнесён на счёт товара, но у плательщика НДС он
+                  зачётный, поэтому в полную себестоимость здесь не включён.
+                  Если зачёта нет, товар обходится в{' '}
+                  <b>{formatMoney(t.total_with_vat)}</b>
+                  {t.markup_with_vat_pct != null
+                    && <> — на <b>{t.markup_with_vat_pct}%</b> дороже инвойса</>}.
+                </p>
+              )}
+              <p className="muted">
+                Таможня берётся из ГТД, расходы — из документов «Дополнительные
+                расходы»: колонка «ДопРасходы» в самой ГТД — снимок на момент
+                её проведения, и складывать их значило бы посчитать часть
+                дважды. Отчёт ничего не меняет в марже: она по-прежнему
+                считается по сумме поступления, и перевести её на полную
+                себестоимость — отдельное решение.
+              </p>
+              <div className="rc-period">
+                <input className="filter-select" value={q}
+                  placeholder="поиск по товару"
+                  onChange={(e) => setQ(e.target.value)} />
+                <span className="muted">
+                  {rows.length} из {data.total_rows} позиций
+                  {data.shown < data.total_rows && ` · показано ${data.shown}`}
+                </span>
+              </div>
+              <div className="table-wrap rc-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Товар</th>
+                      <th className="num">ГТД</th>
+                      <th className="num">Кол-во</th>
+                      <th className="num">Инвойс</th>
+                      <th className="num">Таможня</th>
+                      <th className="num">Расходы</th>
+                      <th className="num">НДС</th>
+                      <th className="num">Полная</th>
+                      <th className="num">За штуку</th>
+                      <th className="num">+%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 && (
+                      <tr><td colSpan={10} className="muted center">Ничего не найдено</td></tr>
+                    )}
+                    {rows.map((r, i) => (
+                      <tr key={`${r.product}|${i}`}>
+                        <td>{r.product}</td>
+                        <td className="num muted">{r.declarations || '—'}</td>
+                        <td className="num">{fmtQty(r.qty)}</td>
+                        <td className="num">{formatMoney(r.invoice, '')}</td>
+                        <td className="num">{formatMoney(r.customs, '')}</td>
+                        <td className="num">{formatMoney(r.extra, '')}</td>
+                        <td className="num muted">{formatMoney(r.vat, '')}</td>
+                        <td className="num">{formatMoney(r.total, '')}</td>
+                        <td className="num">
+                          {r.unit_total == null ? '—' : (
+                            <>
+                              {formatMoney(r.unit_total, '')}
+                              {r.unit_invoice != null && (
+                                <span className="muted"> ← {formatMoney(r.unit_invoice, '')}</span>
+                              )}
+                            </>
+                          )}
+                        </td>
+                        <td className="num">{r.markup_pct == null ? '—' : `${r.markup_pct}%`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

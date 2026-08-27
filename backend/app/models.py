@@ -261,6 +261,73 @@ class StockTransfer(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ImportCost(Base):
+    """Строка ГТД по импорту: таможенная часть себестоимости партии.
+
+    Товар приходит по инвойсу, но на склад он ложится дороже: пошлина, сбор,
+    акциз, сопровождение. Портал считал маржу по сумме поступления, то есть
+    завышал её на всю таможню и логистику.
+
+    Связь с поступлением — по ПоступлениеGUID, с товаром — по
+    НоменклатураGUID: 1С раскладывает расходы по строкам сама, портал только
+    читает результат и ничего не распределяет заново."""
+
+    __tablename__ = "import_costs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    gtd_number: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    customs: Mapped[str | None] = mapped_column(String, nullable=True)
+    supplier: Mapped[str | None] = mapped_column(String, nullable=True)
+    receipt_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    receipt_doc: Mapped[str | None] = mapped_column(String, nullable=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    invoice_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    duty: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    customs_fee: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    excise: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    escort: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # «ДопРасходы» из ГТД — снимок на момент её проведения. В расчёт не идёт:
+    # документы дополнительных расходов бывают и позже, и полнее, поэтому
+    # берём их из своего источника, иначе часть учлась бы дважды.
+    extra_at_gtd: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    rate: Mapped[float | None] = mapped_column(Numeric(12, 4), nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ExtraCost(Base):
+    """Строка документа «Дополнительные расходы», отнесённая на товар.
+
+    Стоянка в терминале, доставка, услуги брокера — всё, что 1С распределяет
+    на партию после поступления. Считаем именно отсюда, а не из колонки
+    «ДопРасходы» в ГТД: та фиксирует состояние на момент проведения ГТД, а
+    расходы приходят и позже."""
+
+    __tablename__ = "extra_costs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    counterparty: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    kind: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    receipt_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    receipt_doc: Mapped[str | None] = mapped_column(String, nullable=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    goods_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Product(Base):
     """Справочник номенклатуры 1С — источник правды о товаре.
 
