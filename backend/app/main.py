@@ -15,6 +15,7 @@ from .config import settings
 from . import models
 from .database import Base, SessionLocal, database_url, engine
 from .routers import (
+    advances,
     agents,
     auth,
     balances,
@@ -355,6 +356,7 @@ app.include_router(stock_transfers.router)
 app.include_router(landed_cost.router)
 app.include_router(problem_docs.router)
 app.include_router(manual_entries.router)
+app.include_router(advances.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

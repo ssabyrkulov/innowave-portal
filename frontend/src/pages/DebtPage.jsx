@@ -137,6 +137,11 @@ export default function DebtPage() {
   // Сети из справочника контрагентов. Свёрнуто по умолчанию: обычная
   // работа идёт по точкам, сеть нужна для разговора с головным офисом.
   const [showNetworks, setShowNetworks] = useState(false)
+  // Подотчёт: деньги, выданные сотрудникам под отчёт. Такой же долг перед
+  // фирмой, как долг магазина, только берётся из авансовых отчётов.
+  const [adv, setAdv] = useState(null)
+  const [showAdv, setShowAdv] = useState(false)
+  const [advSpend, setAdvSpend] = useState(false)
   const [error, setError] = useState(null)
   const [aliasDraft, setAliasDraft] = useState({})
   const [tab, setTab] = useState('active') // active | bad
@@ -152,6 +157,7 @@ export default function DebtPage() {
     setError(null)
     try {
       setData(await api.receivables())
+      api.advances().then(setAdv).catch(() => setAdv(null))
       if (showReceipts) setReceipts(await api.listReceipts())
     } catch (err) {
       setError(err.message)
@@ -627,6 +633,113 @@ export default function DebtPage() {
       ) : (
         <div className="center muted">Загрузка…</div>
       )}
+
+        {/* Подотчёт. Деньги, выданные сотруднику, — долг перед фирмой
+            ровно до того дня, когда он отчитается чеками. В выгрузках
+            оплат виден только уход денег из кассы, поэтому без авансовых
+            отчётов эта сумма не была видна нигде. */}
+        {adv?.employees?.length > 0 && (
+          <>
+            <h2 className="section-title">
+              <button className="btn btn-ghost" onClick={() => setShowAdv((v) => !v)}>
+                {showAdv ? '▾' : '▸'} Подотчёт · {formatMoney(adv.on_hand)}
+              </button>
+            </h2>
+            {showAdv && (
+              <>
+                <p className="muted">
+                  Выдано под отчёт и пока не закрыто чеками. Берётся остаток
+                  последнего авансового отчёта сотрудника: он накопительный,
+                  и складывать остатки всех отчётов значило бы посчитать одни
+                  и те же деньги по разу на каждый отчёт.
+                  {adv.owed_back > 0 && (
+                    <> Ещё <b>{formatMoney(adv.owed_back)}</b> фирма должна
+                    вернуть сама — там потратили больше выданного.</>
+                  )}
+                </p>
+                <div className="table-wrap compact">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Сотрудник</th>
+                        <th className="num">Отчётов</th>
+                        <th>Последний</th>
+                        <th className="num">Израсходовано</th>
+                        <th className="num">На руках</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adv.employees.map((e, i) => (
+                        <tr key={`adv-${i}`}>
+                          <td data-label="Сотрудник">
+                            {e.employee}
+                            <span className="muted"> · {e.organization}</span>
+                          </td>
+                          <td className="num" data-label="Отчётов">{e.reports}</td>
+                          <td data-label="Последний">
+                            {e.last_date.split('-').reverse().join('.')}
+                            <span className="muted"> №{e.last_doc || '—'}</span>
+                          </td>
+                          <td className="num" data-label="Израсходовано">
+                            {formatMoney(e.spent_total, '')}
+                          </td>
+                          <td className={`num ${e.balance > 0 ? 'neg' : 'muted'}`}
+                            data-label="На руках">
+                            {formatMoney(e.balance, '')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td>Итого на руках</td>
+                        <td className="num"></td>
+                        <td></td>
+                        <td className="num"></td>
+                        <td className="num neg">{formatMoney(adv.on_hand, '')}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+
+                <button className="btn btn-ghost" onClick={() => setAdvSpend((v) => !v)}>
+                  {advSpend ? '▾' : '▸'} На что потрачено ·{' '}
+                  {formatMoney(adv.spending_total)}
+                </button>
+                {advSpend && (
+                  <div className="table-wrap cards">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Дата</th><th>Сотрудник</th><th>Кому / за что</th>
+                          <th className="num">Сумма</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adv.spending.map((r, i) => (
+                          <tr key={`sp-${i}`}>
+                            <td data-label="Дата">{r.date.split('-').reverse().join('.')}</td>
+                            <td data-label="Сотрудник">{r.employee}</td>
+                            <td data-label="Кому / за что">
+                              {r.counterparty || '—'}
+                              {r.content && (
+                                <span className="muted skipped-cols">{r.content}</span>
+                              )}
+                            </td>
+                            <td className="num" data-label="Сумма">
+                              {formatMoney(r.amount, '')}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
+
 
       {detailClient && (
         <ClientDetailModal client={detailClient} onClose={() => setDetailClient(null)} />

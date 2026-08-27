@@ -261,6 +261,55 @@ class StockTransfer(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AdvanceLine(Base):
+    """Строка авансового отчёта: подотчётные деньги и что с ними стало.
+
+    Сотрудник берёт деньги под отчёт — брокеру на таможню, водителю на
+    дорогу, директору на билеты, — а потом отчитывается чеками. Пока он не
+    отчитался, это долг перед фирмой, такой же настоящий, как дебиторка
+    магазина, только его нигде не видно: в выгрузках оплат виден лишь уход
+    денег из кассы.
+
+    1С отдаёт отчёт построчно, и строки разного смысла — колонка ТипСтроки:
+    «Документ выдачи» (чем выдали), «Оплата» и «Прочее» (на что потратил),
+    «Сводка» (итог: остаток на начало, аванс, израсходовано, остаток на
+    конец). Сводка — накопительная: её остаток на конец и есть сумма,
+    которая сейчас на руках."""
+
+    __tablename__ = "advance_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    employee: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    account: Mapped[str | None] = mapped_column(String, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    line_type: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Сводка: накопительный итог по подотчётному лицу на дату отчёта.
+    opening: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    advance: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    spent: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    closing: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # Документ выдачи: чем именно выдали деньги.
+    issue_doc: Mapped[str | None] = mapped_column(String, nullable=True)
+    issue_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    issue_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    issue_left: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # Оплата / Прочее: на что потрачено.
+    counterparty: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    content: Mapped[str | None] = mapped_column(String, nullable=True)
+    purpose: Mapped[str | None] = mapped_column(String, nullable=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    author: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ManualEntry(Base):
     """Ручная операция 1С — проводка мимо документов, и сторно.
 

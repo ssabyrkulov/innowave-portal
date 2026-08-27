@@ -141,8 +141,6 @@ UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
     ("Корректировка", ("корректировк", "korrektirovk"), True,
      "меняет уже проведённый документ — может задевать товар"),
     ("Взаимозачёт", ("взаимозач", "vzaimozach"), False, ""),
-    ("Авансовый отчёт", ("авансов", "avansov", "подотчет", "подотчёт",
-                         "podotchet"), False, ""),
     ("Счёт на оплату", ("счет на оплату", "счёт на оплату",
                         "schet na oplatu"), False, ""),
     ("Оборотно-сальдовая ведомость", ("оборотно", "oborotno"), False, ""),
@@ -273,6 +271,10 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # Ручные операции и сторно — проводки мимо документов.
     if has("ручные операц", "ruchnye operac"):
         return "manual_entries"
+    # Авансовый отчёт — подотчётные деньги. Пока сотрудник не отчитался,
+    # это долг перед фирмой, и виден он только здесь.
+    if has("авансов", "avansov", "подотчет", "подотчёт", "podotchet"):
+        return "advances"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
@@ -280,8 +282,6 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     if has("перемещен", "peremeshen", "peremeshch",
            "инвентариз", "inventariz",
            "взаимозач", "vzaimozach",
-           "авансов", "avansov",  # авансовый отчёт подотчётника
-           "подотчет", "подотчёт", "podotchet",
            "счет на оплату", "счёт на оплату", "schet na oplatu",
            "контрагент", "kontragent",
            "номенклатур", "nomenklatur",
@@ -605,6 +605,10 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         from .manual_entries import import_manual_entries_workbook
         result = import_manual_entries_workbook(db, content, auto_name,
                                                 robot.id, org=org)
+    elif kind == "advances":
+        from .advances import import_advances_workbook
+        result = import_advances_workbook(db, content, auto_name, robot.id,
+                                          org=org)
     elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":
