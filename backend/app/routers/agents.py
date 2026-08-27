@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..database import get_db
 from ..deps import get_current_user, require_roles
+from .counterparties import client_matcher
 from .receipts import CUSTOMER_PAYMENT_PREFIX, _normalize
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -55,14 +56,20 @@ def _compute(db: Session, org: str = "all") -> dict:
             )
 
     norm_clients = {_normalize(c): c for c in shipped_by_client}
+    # Тот же сопоставитель, что в дебиторке: долг агента и долг в дебиторке —
+    # одна и та же цифра, и считаться она обязана одинаково.
+    guid_clients: dict[str, str] = {}
+    for s_row in sales:
+        if s_row.client_guid:
+            guid_clients.setdefault(s_row.client_guid, s_row.client)
+    resolve_client = client_matcher(db, norm_clients, guid_clients, aliases)
+
     paid_by_client: dict[str, float] = defaultdict(float)
     last_payment_by_client: dict[str, date] = {}
     for r in receipts:
         if not r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
             continue
-        client = aliases.get(r.payer)
-        if client is None:
-            client = r.payer if r.payer in shipped_by_client else norm_clients.get(_normalize(r.payer))
+        client = resolve_client(r.payer, r.payer_guid)
         if client is None:
             continue
         paid_by_client[client] += float(r.amount_kgs)
@@ -71,9 +78,7 @@ def _compute(db: Session, org: str = "all") -> dict:
 
     returned_by_client: dict[str, float] = defaultdict(float)
     for rd in return_docs:
-        client = aliases.get(rd.client)
-        if client is None:
-            client = rd.client if rd.client in shipped_by_client else norm_clients.get(_normalize(rd.client))
+        client = resolve_client(rd.client, rd.client_guid)
         returned_by_client[client or rd.client] += float(rd.amount)
 
     debt_by_client = {

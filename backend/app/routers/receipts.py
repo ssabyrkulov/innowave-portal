@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from .. import models, onec
 from ..services import xlsx
 from ..database import get_db
+from .counterparties import client_matcher, head_by_client
 from ..deps import get_current_user, require_roles
 
 router = APIRouter(prefix="/receipts", tags=["receipts"])
@@ -34,6 +35,9 @@ DEFAULT_RATES = {"KGS": 1.0, "USD": 87.0, "EUR": 95.0, "RUB": 1.1, "KZT": 0.17}
 HEADERS = {"Дата": "date", "Сумма": "amount", "СуммаДокумента": "amount",
            "СуммаПлатежа": "amount", "Валюта": "currency",
            "Контрагент": "payer", "ВидОперации": "operation",
+           # GUID контрагента: точный ключ плательщика. Колонка
+           # необязательная — файлы без неё грузятся как раньше.
+           "КонтрагентGUID": "payer_guid",
            # Необязательная колонка обновлённых выгрузок 1С: GUID документа.
            "ДокументGUID": "doc_guid",
            # Непроведённые и помеченные на удаление — не операции.
@@ -73,6 +77,18 @@ def _biz_key(date, amount, currency, payer, operation) -> tuple:
     """
     return (date, round(float(amount or 0), 2), (currency or "").strip(),
             (payer or "").strip(), (operation or "").strip())
+
+
+def _networks_of(clients: list[dict]) -> dict[str, tuple[int, float]]:
+    """Долг по сетям: головной контрагент → (сколько точек, сумма долга)."""
+    out: dict[str, tuple[int, float]] = {}
+    for c in clients:
+        head = c.get("network")
+        if not head:
+            continue
+        n, d = out.get(head, (0, 0.0))
+        out[head] = (n + 1, d + c["debt"])
+    return out
 
 
 def _normalize(name: str) -> str:
@@ -174,6 +190,8 @@ def import_receipts_workbook(
             "payer": payer,
             "operation": str(data.get("operation") or "").strip() or "Не указан",
             "doc_guid": str(data.get("doc_guid") or "").strip() or None,
+            "payer_guid": (str(data.get("payer_guid") or "").strip().lower()
+                           or None),
         })
 
     line_no = header_idx + 1
@@ -420,11 +438,21 @@ def client_detail(
     target = client.strip()
     norm_target = _normalize(target)
     aliases = {a.payer: a.client for a in db.query(models.ClientAlias).all()}
+    # GUID клиента берём из его же отгрузок: карточка открыта по имени, и
+    # оплата с тем же GUID — это он, как бы она ни была подписана.
+    target_guids = {
+        g for (g,) in models.org_scope(
+            db.query(models.Sale.client_guid).filter(
+                models.Sale.client == target, models.Sale.client_guid.isnot(None)),
+            models.Sale, org).distinct().all()
+    }
 
-    def resolves(name: str) -> bool:
+    def resolves(name: str, guid: str | None = None) -> bool:
         c = aliases.get(name)
         if c is not None:
             return c == target
+        if guid and guid in target_guids:
+            return True
         return name == target or _normalize(name) == norm_target
 
     # --- Отгрузки: сводим строки продаж в документы ---
@@ -485,7 +513,7 @@ def client_detail(
     returns = []
     returned = 0.0
     for rd in models.org_scope(db.query(models.ReturnDoc), models.ReturnDoc, org).all():
-        if resolves(rd.client):
+        if resolves(rd.client, rd.client_guid):
             amt = float(rd.amount)
             returned += amt
             returns.append({"date": rd.date.isoformat(), "amount": round(amt, 2)})
@@ -497,7 +525,7 @@ def client_detail(
     for r in models.org_scope(db.query(models.Receipt), models.Receipt, org).all():
         if not r.operation.startswith(CUSTOMER_PAYMENT_PREFIX):
             continue
-        if not resolves(r.payer):
+        if not resolves(r.payer, r.payer_guid):
             continue
         amt = float(r.amount_kgs)
         paid += amt
@@ -570,6 +598,15 @@ def receivables(
             last_shipment[client] = s.date
 
     norm_clients = {_normalize(c): c for c in shipped}
+    # GUID клиента → как он называется в отгрузках. Дальше по нему находятся
+    # оплаты и возвраты, чьё написание с отгрузкой не совпадает: раньше такие
+    # строки уходили в «нераспознанные» и завышали долг.
+    guid_clients: dict[str, str] = {}
+    for s_row in sales:
+        if s_row.client_guid:
+            guid_clients.setdefault(s_row.client_guid, s_row.client)
+    resolve_client = client_matcher(db, norm_clients, guid_clients, aliases)
+    heads = head_by_client(db)
 
     # Агент точки. Долг взыскивает живой человек, поэтому колонка отвечает не
     # на вопрос «кто когда-то продал», а «кому сегодня ставить задачу»:
@@ -595,9 +632,7 @@ def receivables(
     # Возвраты уменьшают долг клиента (сопоставление имён — как у оплат)
     returned: dict[str, float] = defaultdict(float)
     for rd in return_docs:
-        client = aliases.get(rd.client)
-        if client is None:
-            client = rd.client if rd.client in shipped else norm_clients.get(_normalize(rd.client))
+        client = resolve_client(rd.client, rd.client_guid)
         returned[client or rd.client] += float(rd.amount)
 
     paid: dict[str, float] = defaultdict(float)
@@ -631,12 +666,7 @@ def receivables(
             continue
         k["paid"] += float(r.amount_kgs)
         k["count"] += 1
-        client = aliases.get(r.payer)
-        if client is None:
-            if r.payer in shipped:
-                client = r.payer
-            else:
-                client = norm_clients.get(_normalize(r.payer))
+        client = resolve_client(r.payer, r.payer_guid)
         if client is None:
             # Плательщик, под именем которого в 1С нет ни одной отгрузки.
             # Раньше такая оплата уходила ТОЛЬКО в «не сопоставлено» и в
@@ -680,6 +710,10 @@ def receivables(
             "returned": round(ret, 2),
             "paid": round(pd, 2),
             "debt": round(sh - ret - pd, 2),
+            # Сеть из справочника 1С. Пока справочно, отдельным полем: сложить
+            # долг по сети — решение про деньги, и принимать его молча, за
+            # человека, неправильно.
+            "network": heads.get(_normalize(client)),
             "organization": client_org.get(client),
             "last_shipment": last_shipment.get(client) and last_shipment[client].isoformat(),
             "last_payment": last_payment.get(client) and last_payment[client].isoformat(),
@@ -710,6 +744,13 @@ def receivables(
         "total_paid": round(total_paid, 2),
         "total_debt": round(total_shipped - total_returned - total_paid, 2),
         "clients": clients,
+        # Сети: головной контрагент → долг его точек. Считается из тех же
+        # строк, что и clients, поэтому итог сходится по определению.
+        "networks": sorted(
+            ({"name": h, "clients": n, "debt": round(d, 2)}
+             for h, (n, d) in _networks_of(clients).items()),
+            key=lambda n: -n["debt"],
+        ),
         "unmatched": sorted(unmatched.values(), key=lambda u: -u["paid"]),
         "sales_clients": sorted(shipped.keys()),
         "flags": flags,

@@ -188,6 +188,9 @@ class Receipt(Base):
     rate: Mapped[float] = mapped_column(Numeric(12, 4), default=1, nullable=False)
     amount_kgs: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     payer: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # GUID контрагента 1С. Дебиторка сводит плательщика к клиенту по имени и
+    # ручным алиасам; GUID делает это сопоставление точным там, где пришёл.
+    payer_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     operation: Mapped[str] = mapped_column(String, nullable=False, index=True)
     # Источник денег: банк (ВыгрузкаБанкВх) или касса (ВыгрузкаПКО). Старые
     # записи без вида считаем банком (историю до разделения не пере-размечаем).

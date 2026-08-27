@@ -121,6 +121,77 @@ def import_counterparties_workbook(db: Session, content: bytes, filename: str,
     }
 
 
+def _norm_name(name: str | None) -> str:
+    """Нормализация имени контрагента — та же, что в дебиторке."""
+    import re
+    return re.sub(r"\s+", " ", (name or "").lower().replace("ё", "е")).strip()
+
+
+def client_matcher(db: Session, known_names: dict[str, str],
+                   guid_names: dict[str, str], aliases: dict[str, str]):
+    """Возвращает resolve(имя, GUID) → каноничное имя клиента или None.
+
+    known_names — нормализованное имя → как клиент называется в отгрузках;
+    guid_names — GUID → то же имя; aliases — ручные сопоставления плательщик
+    → клиент.
+
+    Цепочка только дополняет прежнюю, ничего из неё не убирая: ручной алиас,
+    затем GUID, затем точное имя, нормализованное и напоследок мост через
+    справочник (имя → GUID → клиент). Порядок важен дважды. Алиас идёт
+    первым, потому что это решение живого человека, и молча переигрывать его
+    машинным ключом нельзя. Всё остальное — после GUID, потому что имя врёт
+    чаще. Ни одна оплата, которая раньше находила клиента, после этой правки
+    его не потеряет: старые шаги остались на месте, добавились новые.
+
+    Возвращает None, если не нашлось ничего — как и раньше: такая оплата
+    попадает в «нераспознанные», и это честнее, чем повесить её наугад."""
+    by_name: dict[str, str] = {}
+    if guid_names:
+        for c in db.query(models.Counterparty.guid, models.Counterparty.name,
+                          models.Counterparty.name_full,
+                          models.Counterparty.is_group).all():
+            if c.is_group:
+                continue
+            for candidate in (c.name, c.name_full):
+                if candidate:
+                    by_name.setdefault(_norm_name(candidate), c.guid)
+
+    def resolve(name: str | None, guid: str | None = None) -> str | None:
+        if name is not None and name in aliases:
+            return aliases[name]
+        g = (guid or "").strip().lower()
+        if g and g in guid_names:
+            return guid_names[g]
+        norm = _norm_name(name)
+        hit = known_names.get(norm)
+        if hit is not None:
+            return hit
+        # Мост: имени нет среди отгрузок, но справочник знает такой GUID, и
+        # под ним отгрузки есть — значит это тот же клиент, просто написан
+        # иначе (филиал, сокращение, старое название).
+        bridged = by_name.get(norm)
+        if bridged and bridged in guid_names:
+            return guid_names[bridged]
+        return None
+
+
+    return resolve
+
+
+def head_by_client(db: Session) -> dict[str, str]:
+    """Нормализованное имя клиента → головной контрагент (сеть), если есть."""
+    out: dict[str, str] = {}
+    for c in db.query(models.Counterparty.name, models.Counterparty.name_full,
+                      models.Counterparty.head_name,
+                      models.Counterparty.is_group).all():
+        if c.is_group or not c.head_name:
+            continue
+        for candidate in (c.name, c.name_full):
+            if candidate:
+                out.setdefault(_norm_name(candidate), c.head_name)
+    return out
+
+
 @router.get("")
 def list_counterparties(
     db: Session = Depends(get_db),

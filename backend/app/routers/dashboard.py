@@ -8,6 +8,7 @@ from .. import models
 from ..checks import run_checks
 from ..database import get_db
 from ..deps import get_current_user
+from .counterparties import client_matcher
 from .receipts import CUSTOMER_PAYMENT_PREFIX, _normalize
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -53,6 +54,15 @@ def dashboard(
             )
 
     norm_clients = {_normalize(c): c for c in shipped}
+    # Тот же сопоставитель, что в /receipts/receivables: дашборд и дебиторка
+    # обязаны давать одну цифру, а два одинаковых куска логики рано или
+    # поздно расходятся.
+    guid_clients: dict[str, str] = {}
+    for s_row in sales:
+        if s_row.client_guid:
+            guid_clients.setdefault(s_row.client_guid, s_row.client)
+    resolve_client = client_matcher(db, norm_clients, guid_clients, aliases)
+
     paid: dict[str, float] = defaultdict(float)
     month_in = 0.0
     prev_month_in = 0.0
@@ -64,17 +74,13 @@ def dashboard(
             month_in += float(r.amount_kgs)
         elif rm == prev_month:
             prev_month_in += float(r.amount_kgs)
-        client = aliases.get(r.payer)
-        if client is None:
-            client = r.payer if r.payer in shipped else norm_clients.get(_normalize(r.payer))
+        client = resolve_client(r.payer, r.payer_guid)
         if client is not None:
             paid[client] += float(r.amount_kgs)
 
     returned: dict[str, float] = defaultdict(float)
     for rd in return_docs:
-        client = aliases.get(rd.client)
-        if client is None:
-            client = rd.client if rd.client in shipped else norm_clients.get(_normalize(rd.client))
+        client = resolve_client(rd.client, rd.client_guid)
         returned[client or rd.client] += float(rd.amount)
 
     debts = sorted(

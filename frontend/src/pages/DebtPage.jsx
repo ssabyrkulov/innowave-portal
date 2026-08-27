@@ -459,6 +459,9 @@ export default function DebtPage() {
                         <button className="client-link" onClick={() => setDetailClient(c.client)}>
                           {c.client}
                         </button>
+                        {/* Сеть из справочника 1С: филиалы одной сети видно
+                            рядом, хотя долг по-прежнему считается по точке */}
+                        {c.network && <span className="sc-group">{c.network}</span>}
                         {/* на телефоне метку «давно не платил» показываем прямо под именем */}
                         {stale && (
                           <span className="badge badge-overdue debt-stale-inline" title={`Оплат не было больше ${STALE_DAYS} дней`}>
