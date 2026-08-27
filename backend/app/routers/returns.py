@@ -16,7 +16,7 @@ from ..deps import get_current_user
 router = APIRouter(prefix="/returns", tags=["returns"])
 
 HEADERS = {"Дата": "date", "Сумма": "amount", "Валюта": "currency",
-           "Контрагент": "client",
+           "Контрагент": "client", "КонтрагентGUID": "client_guid",
            # Необязательная колонка обновлённых выгрузок 1С: GUID документа.
            "ДокументGUID": "doc_guid"}
 
@@ -61,6 +61,7 @@ def import_return_lines_workbook(
             organization=org, date=p["date"], client=p.get("client"),
             product=p.get("product"), qty=p.get("qty"), amount=p.get("amount"),
             doc_guid=p.get("doc_guid"), product_guid=p.get("product_guid"),
+            client_guid=p.get("client_guid"),
         ))
     db.flush()
     seen_docs: set = set()
@@ -78,6 +79,7 @@ def import_return_lines_workbook(
                 "amount": float(p["doc_total"]),
                 "currency": p.get("currency") or "KGS",
                 "doc_guid": p.get("doc_guid"),
+                "client_guid": p.get("client_guid"),
             })
         else:
             # нет итога документа — копим сумму строк (со скидкой) по клиенту/дате
@@ -86,6 +88,7 @@ def import_return_lines_workbook(
                 "date": p["date"], "client": client, "amount": 0.0,
                 "currency": p.get("currency") or "KGS",
                 "doc_guid": p.get("doc_guid"),
+                "client_guid": p.get("client_guid"),
             })
             f["amount"] += float(p["amount"]) * (1 - float(p.get("discount_pct") or 0) / 100)
     docs.extend(fallback.values())
@@ -98,7 +101,7 @@ def import_return_lines_workbook(
         db.add(models.ReturnDoc(
             date=d["date"], amount=round(d["amount"], 2),
             currency=d["currency"], client=d["client"],
-            doc_guid=d.get("doc_guid"),
+            doc_guid=d.get("doc_guid"), client_guid=d.get("client_guid"),
             organization=org, row_hash=h,
         ))
         added += 1
@@ -186,6 +189,8 @@ def import_returns_workbook(
             "currency": (str(data.get("currency") or "KGS").strip() or "KGS")[:3],
             "client": client,
             "doc_guid": str(data.get("doc_guid") or "").strip() or None,
+            "client_guid": (str(data.get("client_guid") or "").strip().lower()
+                            or None),
         })
 
     line_no = header_idx + 1

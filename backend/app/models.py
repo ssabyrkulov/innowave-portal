@@ -87,6 +87,9 @@ class Sale(Base):
     organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     client: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # GUID контрагента 1С — точный ключ клиента, в отличие от написания
+    # названия, которое в каждой выгрузке своё.
+    client_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
     product: Mapped[str] = mapped_column(String, nullable=False)
     # GUID номенклатуры 1С — точный ключ товара. Названия в закупке, продаже
@@ -125,6 +128,7 @@ class Purchase(Base):
     organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     supplier: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    supplier_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     warehouse: Mapped[str | None] = mapped_column(String, nullable=True)
     product: Mapped[str | None] = mapped_column(String, nullable=True)
     product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
@@ -193,6 +197,38 @@ class Receipt(Base):
     # дате с допуском, который рвётся от любой правки документа.
     doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     row_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Counterparty(Base):
+    """Справочник контрагентов 1С — источник правды о клиенте и поставщике.
+
+    Ту же роль, что Product для товара, играет здесь: GUID вместо склейки по
+    написанию. Сейчас плательщики сводятся к клиентам вручную, через таблицу
+    ClientAlias — кто-то садится и сопоставляет «ОсОО Глобус» с «Глобус
+    ОсОО». GUID делает это сопоставление ненужным там, где он пришёл.
+
+    Отдельно важен head_name: филиалы сети в 1С висят под головным
+    контрагентом, и без него дебиторка считается по каждой точке, а не по
+    сети целиком."""
+
+    __tablename__ = "counterparties"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    guid: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    code: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    name_full: Mapped[str | None] = mapped_column(String, nullable=True)
+    inn: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    okpo: Mapped[str | None] = mapped_column(String, nullable=True)
+    # «Головной контрагент» 1С отдаёт названием, без GUID — сеть собираем
+    # по нему, приведя к тому же ключу, что и обычное имя.
+    head_name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    parent_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Юридическое или физическое лицо — из колонки «ЮрФизЛицо».
+    legal_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_group: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -278,6 +314,7 @@ class ReturnLine(Base):
     organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     client: Mapped[str | None] = mapped_column(String, nullable=True)
+    client_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     product: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     product_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
@@ -323,6 +360,7 @@ class ReturnDoc(Base):
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
     client: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    client_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     # GUID документа 1С. SalesDoc отдаёт его же в поле code_1C, поэтому
     # связка документов по нему точная — в отличие от поиска по сумме и
     # дате с допуском, который рвётся от любой правки документа.

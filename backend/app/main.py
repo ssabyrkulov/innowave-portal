@@ -20,6 +20,7 @@ from .routers import (
     balances,
     budget,
     checks,
+    counterparties,
     dashboard,
     expenses,
     integrations,
@@ -345,6 +346,7 @@ app.include_router(purchases.router)
 app.include_router(writeoffs.router)
 app.include_router(stock_receipts.router)
 app.include_router(products.router)
+app.include_router(counterparties.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

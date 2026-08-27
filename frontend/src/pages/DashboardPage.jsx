@@ -468,6 +468,7 @@ function CalcStockCard() {
                   <td>
                     <span className="muted">{open === r.product ? '▾ ' : '▸ '}</span>
                     {r.product}
+                    {r.group && <span className="sc-group">{r.group}</span>}
                   </td>
                   <td className="num">{fmt(r.purchased)}</td>
                   <td className="num">{r.received ? fmt(r.received) : '—'}</td>
@@ -523,6 +524,12 @@ function CalcStockCard() {
         <button className="btn btn-ghost btn-sm" onClick={() => setShowAll(!showAll)}>
           {showAll ? 'Свернуть' : `Показать все ${rows.length}`}
         </button>
+      )}
+      {data.services_hidden > 0 && (
+        <p className="muted">
+          Из сверки убрано услуг: {data.services_hidden}. Остатка у услуги быть
+          не может, и в складской сверке такая строка расходилась бы всегда.
+        </p>
       )}
       {data.unmatched_count > 0 && (
         <p className="muted">

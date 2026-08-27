@@ -136,7 +136,13 @@ def list_products(
     """Позиции справочника; q — поиск по названию, коду или артикулу."""
     query = db.query(models.Product).filter(models.Product.is_group.is_(False))
     if q.strip():
-        like = f"%{q.strip().lower()}%"
+        # Шаблон берём как есть: ilike сам приводит регистр обеих сторон.
+        # Ручной .lower() здесь всё ломал — на SQLite, где ilike кириллицу не
+        # понижает, запрос «Глобус» превращался в «глобус» и не находил
+        # ничего вообще. На Postgres (там портал и работает) регистр не важен
+        # в любом случае, на SQLite поиск по кириллице теперь чувствителен к
+        # регистру — но находит.
+        like = f"%{q.strip()}%"
         query = query.filter(models.Product.name.ilike(like)
                              | models.Product.code.ilike(like)
                              | models.Product.article.ilike(like))
@@ -156,6 +162,9 @@ def guid_coverage(
 ):
     """Насколько движения опираются на GUID, а не на догадку по названию.
 
+    Считается и по товару, и по контрагенту: вопрос один и тот же, а ответы
+    в двух разных отчётах пришлось бы сводить глазами.
+
     Три состояния у каждой строки: GUID пришёл из выгрузки (точно), GUID
     подобран по справочнику через название (надёжно), не подобран вовсе
     (склейка остаётся догадкой). Последнее — очередь на разбор: именно эти
@@ -171,19 +180,45 @@ def guid_coverage(
             if candidate:
                 by_name.setdefault(_norm_product(candidate), p.guid)
 
+    # Контрагенты меряются тем же способом: справочник даёт мост по имени,
+    # выгрузка — GUID. Разные сущности, но вопрос один — на чём держится
+    # склейка, и держать ответы в двух разных отчётах незачем.
+    parties_by_name: dict[str, str] = {}
+    parties = 0
+    for c in db.query(models.Counterparty).filter(
+            models.Counterparty.is_group.is_(False)).all():
+        parties += 1
+        for candidate in (c.name, c.name_full):
+            if candidate:
+                parties_by_name.setdefault(_norm_product(candidate), c.guid)
+
     out = []
-    MODELS = (("Продажи", models.Sale), ("Закупки", models.Purchase),
-              ("Возвраты", models.ReturnLine), ("Списания", models.WriteOff),
-              ("Оприходования", models.StockReceipt))
-    for label, model in MODELS:
+    MODELS = (("Товар · продажи", models.Sale, "product", "product_guid",
+               by_name),
+              ("Товар · закупки", models.Purchase, "product", "product_guid",
+               by_name),
+              ("Товар · возвраты", models.ReturnLine, "product",
+               "product_guid", by_name),
+              ("Товар · списания", models.WriteOff, "product", "product_guid",
+               by_name),
+              ("Товар · оприходования", models.StockReceipt, "product",
+               "product_guid", by_name),
+              ("Клиент · продажи", models.Sale, "client", "client_guid",
+               parties_by_name),
+              ("Клиент · возвраты", models.ReturnDoc, "client", "client_guid",
+               parties_by_name),
+              ("Поставщик · закупки", models.Purchase, "supplier",
+               "supplier_guid", parties_by_name))
+    for label, model, name_field, guid_field, index in MODELS:
         rows = models.org_scope(
-            db.query(model.product, model.product_guid), model, org).all()
+            db.query(getattr(model, name_field), getattr(model, guid_field)),
+            model, org).all()
         direct = bridged = orphan = 0
         unmatched: dict[str, int] = {}
         for name, guid in rows:
             if guid:
                 direct += 1
-            elif _norm_product(name) in by_name:
+            elif index and _norm_product(name) in index:
                 bridged += 1
             else:
                 orphan += 1
@@ -194,4 +229,5 @@ def guid_coverage(
             "bridged": bridged, "orphan": orphan,
             "top_unmatched": sorted(unmatched.items(), key=lambda kv: -kv[1])[:5],
         })
-    return {"products": goods, "names": len(by_name), "sources": out}
+    return {"products": goods, "names": len(by_name),
+            "counterparties": parties, "sources": out}

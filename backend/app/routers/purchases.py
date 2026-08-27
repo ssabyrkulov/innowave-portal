@@ -24,6 +24,7 @@ HEADERS = {
     "Номер": "doc_number",
     "КонтрагентНаименование": "supplier",
     "Контрагент": "supplier",
+    "КонтрагентGUID": "supplier_guid",
     "СкладНаименование": "warehouse",
     "Склад": "warehouse",
     "НоменклатураНаименование": "product",
@@ -90,6 +91,8 @@ def import_purchases_workbook(db: Session, content: bytes, filename: str,
             organization=org,
             date=d,
             supplier=supplier,
+            supplier_guid=(str(cell(row, "supplier_guid") or "").strip().lower()
+                           or None),
             warehouse=str(cell(row, "warehouse") or "").strip() or None,
             product=str(cell(row, "product") or "").strip() or None,
             product_guid=(str(cell(row, "product_guid") or "").strip().lower()
@@ -197,11 +200,15 @@ def _product_keys(db: Session):
     если справочник знает такое имя."""
     by_name: dict[str, str] = {}
     canon: dict[str, str] = {}
+    info: dict[str, dict] = {}
     for p in db.query(models.Product.guid, models.Product.name,
-                      models.Product.name_full, models.Product.is_group).all():
+                      models.Product.name_full, models.Product.is_group,
+                      models.Product.is_service,
+                      models.Product.group_name).all():
         if p.is_group:
             continue  # папка справочника, в движениях не встречается
         canon[p.guid] = p.name or p.name_full or ""
+        info[p.guid] = {"service": bool(p.is_service), "group": p.group_name}
         for candidate in (p.name, p.name_full):
             if candidate:
                 by_name.setdefault(_norm_product(candidate), p.guid)
@@ -213,7 +220,7 @@ def _product_keys(db: Session):
         # того, как портал начал его читать, — разъехались бы в две позиции
         # там, где нормализация имени их успешно склеивала. Моста, который
         # сводит их обратно, без справочника нет.
-        return (lambda product, guid=None: _norm_product(product)), canon
+        return (lambda product, guid=None: _norm_product(product)), canon, info
 
     def key_of(product: str | None, guid: str | None = None) -> str:
         g = (guid or "").strip().lower()
@@ -221,7 +228,7 @@ def _product_keys(db: Session):
             g = by_name.get(_norm_product(product), "")
         return g or _norm_product(product)
 
-    return key_of, canon
+    return key_of, canon, info
 
 
 def _calc_stock(db: Session, org: str, until: date | None = None,
@@ -245,7 +252,7 @@ def _calc_stock(db: Session, org: str, until: date | None = None,
     agg: dict[str, dict] = {}
 
     if key_of is None:
-        key_of, _ = _product_keys(db)
+        key_of, _, _ = _product_keys(db)
 
     def entry(product, guid=None):
         key = key_of(product, guid)
@@ -293,7 +300,7 @@ def stock_calc(
     # Ключ товара считаем один раз и отдаём обеим сторонам сверки: если
     # движения склеены по GUID, а снапшот 1С по названию, строки разъедутся
     # и расхождение окажется выдуманным.
-    key_of, canon = _product_keys(db)
+    key_of, canon, pinfo = _product_keys(db)
     agg = _calc_stock(db, org, key_of=key_of)
 
     # Правая сторона сверки — отчёт 1С по остаткам (снапшот ВыгрузкаОст).
@@ -323,7 +330,14 @@ def stock_calc(
         if cut else 0.0
 
     rows = []
+    # Услуга остатка иметь не может: «Доставка до клиента» в сверке склада —
+    # строка, которая всегда будет расходиться и всегда безрезультатно.
+    # Прячем, но не молча: сколько именно спрятано, карточка называет.
+    services_hidden = 0
     for key, e in agg.items():
+        if pinfo.get(key, {}).get("service"):
+            services_hidden += 1
+            continue
         calc = qty_of(e)
         at = agg_at.get(key)
         calc_at = round(qty_of(at), 1) if at is not None else None
@@ -333,6 +347,10 @@ def stock_calc(
             # строка называлась бы так, как её написали в первой попавшейся
             # выгрузке, и одна позиция звалась бы по-разному день ото дня.
             "product": canon.get(key) or e["name"],
+            # Группа из справочника 1С — справочно, под названием. Порядок
+            # строк по-прежнему задан вручную: он про то, как владелец
+            # смотрит на товар, а не про то, как 1С его классифицировала.
+            "group": pinfo.get(key, {}).get("group"),
             "purchased": round(e["purchased"], 1),
             "received": round(e["received"], 1),
             "sold": round(e["sold"], 1),
@@ -351,8 +369,12 @@ def stock_calc(
     # (например, канцтовары до первой закупки в выгрузке) — тоже показываем:
     # «в учёте есть, в математике нет» — это находка, а не мусор.
     for okey, o in onec.items():
+        if pinfo.get(okey, {}).get("service"):
+            services_hidden += 1
+            continue
         rows.append({
-            "product": canon.get(okey) or o["name"], "purchased": 0, "received": 0, "sold": 0,
+            "product": canon.get(okey) or o["name"],
+            "group": pinfo.get(okey, {}).get("group"), "purchased": 0, "received": 0, "sold": 0,
             "returned": 0, "written_off": 0, "calc_qty": None,
             "onec_qty": round(o["qty"], 1), "onec_amount": round(o["amount"], 2),
             "diff_onec": None, "unmatched": False,
@@ -371,6 +393,9 @@ def stock_calc(
         # на склад вернулся, а в нашей математике нет — прямая причина
         # отрицательной Δ, и увидеть её больше негде.
         "returns_no_lines": returns_without_lines(db, org),
+        # Услуги, убранные из сверки склада: молчать о них нельзя — иначе
+        # непонятно, почему позиция из справочника в карточке не видна.
+        "services_hidden": services_hidden,
         "rows": rows,
         "totals": {
             "purchased": round(sum(r["purchased"] for r in rows), 1),
@@ -405,7 +430,7 @@ def stock_moves(
 
     days — окно в днях от сегодня. По умолчанию месяц: расхождения ищут по
     свежим документам, а полная история товара живёт в столбцах карточки."""
-    key_of, _ = _product_keys(db)
+    key_of, _, _ = _product_keys(db)
     key = key_of(product)
     since = date.today() - timedelta(days=max(1, min(days, 3650)))
 
@@ -473,7 +498,7 @@ def stock_compare(
 
     Знак расхождения — диагноз: расчёт больше факта — недостача или
     неучтённое списание; меньше — неоприходованный приход или пересорт."""
-    key_of, canon = _product_keys(db)
+    key_of, canon, _ = _product_keys(db)
     calc = _calc_stock(db, org, key_of=key_of)
 
     # Факт 1С (снапшот ВыгрузкаОст). Пустая таблица — не «нулевые остатки»,

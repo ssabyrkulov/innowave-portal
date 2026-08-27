@@ -34,6 +34,8 @@ HEADER_MAP = {
     "Дата": "date",
     "КонтрагентНаименование": "client",
     "Контрагент": "client",
+    # GUID контрагента: точный ключ клиента. Колонка необязательная.
+    "КонтрагентGUID": "client_guid",
     "Склад": "warehouse",
     "СкладНаименование": "warehouse",
     "НоменклатураНаименование": "product",
@@ -196,6 +198,8 @@ def parse_sales_workbook(content: bytes) -> tuple[list[dict], list[str]]:
             "doc_guid": str(data.get("doc_guid") or "").strip() or None,
             "product_guid": (str(data.get("product_guid") or "").strip().lower()
                              or None),
+            "client_guid": (str(data.get("client_guid") or "").strip().lower()
+                            or None),
         }
         missing = [f for f in REQUIRED_FIELDS if parsed.get(f) is None]
         if missing:

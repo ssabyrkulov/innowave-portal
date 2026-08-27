@@ -147,7 +147,6 @@ UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
                          "podotchet"), False, ""),
     ("Счёт на оплату", ("счет на оплату", "счёт на оплату",
                         "schet na oplatu"), False, ""),
-    ("Справочник контрагентов", ("контрагент", "kontragent"), False, ""),
     ("Оборотно-сальдовая ведомость", ("оборотно", "oborotno"), False, ""),
     ("ГТД", ("гтд", "gtd"), False, ""),
     ("Журнал проводок", ("журнал проводок", "jurnal provodok",
@@ -261,6 +260,11 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # документа («Реализация», «Поступление»), а не слово «Номенклатура».
     if has("номенклатур", "nomenklatur"):
         return "products"
+    # Справочник контрагентов. Как и с номенклатурой, правило обязано стоять
+    # раньше блока неподдерживаемых. Документы сюда не попадают: у них в
+    # имени вид документа, а слово «Контрагенты» стоит у самого справочника.
+    if has("контрагент", "kontragent"):
+        return "counterparties"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
@@ -573,6 +577,10 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         from .products import import_products_workbook
         result = import_products_workbook(db, content, auto_name, robot.id,
                                           org=org)
+    elif kind == "counterparties":
+        from .counterparties import import_counterparties_workbook
+        result = import_counterparties_workbook(db, content, auto_name,
+                                                robot.id, org=org)
     elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":
