@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { formatMoney } from '../utils'
@@ -50,17 +50,21 @@ export default function ChecksPage() {
   const [problems, setProblems] = useState(null)
   // Проводки, введённые мимо документов, и сторно.
   const [manual, setManual] = useState(null)
+  // Свежесть выгрузок: молчащий контур не выглядит поломкой — цифры просто
+  // перестают меняться, и вчерашний остаток легко принять за сегодняшний.
+  const [fresh, setFresh] = useState(null)
 
   async function load() {
     setError(null)
     try {
-      const [d, logs, sk, cov, pr, me] = await Promise.all([
+      const [d, logs, sk, cov, pr, me, fr] = await Promise.all([
         api.checks({ rule, include_acked: showAcked }),
         api.importLog(),
         api.skippedKinds().catch(() => null),
         api.guidCoverage().catch(() => null),
         api.problemDocs().catch(() => null),
         api.manualEntries().catch(() => null),
+        api.freshness().catch(() => null),
       ])
       setData(d)
       setImports(logs)
@@ -68,6 +72,7 @@ export default function ChecksPage() {
       setCoverage(cov)
       setProblems(pr)
       setManual(me)
+      setFresh(fr)
     } catch (err) {
       setError(err.message)
     }
@@ -99,6 +104,64 @@ export default function ChecksPage() {
       </div>
 
       {error && <div className="error">{error}</div>}
+
+      {fresh?.rows?.length > 0 && (
+        <div className="fresh-block">
+          <h2 className="section-title">Свежесть выгрузок</h2>
+          {fresh.stale_count > 0 ? (
+            <p className="sc-diff">
+              Молчит контуров: <b>{fresh.stale_count}</b>. Файлы в папке
+              остались старые, автосинк исправно шлёт их снова — цифры на
+              экране просто перестают меняться, и вчерашний остаток легко
+              принять за сегодняшний.
+            </p>
+          ) : (
+            <p className="muted">
+              Все контуры присылали данные меньше {fresh.stale_hours} часов
+              назад.
+            </p>
+          )}
+          <div className="table-wrap compact">
+            <table>
+              <thead>
+                <tr>
+                  <th>Контур</th>
+                  <th>Последний раз</th>
+                  <th className="num">Часов назад</th>
+                  <th className="num">Видов</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fresh.rows.map((r) => (
+                  <Fragment key={`${r.firm}-${r.ledger}`}>
+                    <tr className={r.stale ? 'row-neg' : ''}>
+                      <td>{r.label}</td>
+                      <td>
+                        {new Date(r.last_at + 'Z').toLocaleString('ru-RU')}
+                      </td>
+                      <td className={`num ${r.stale ? 'sc-diff' : 'sc-ok'}`}>
+                        {r.hours_ago}
+                      </td>
+                      <td className="num muted">
+                        {r.in_last_run} из {r.kinds}
+                      </td>
+                    </tr>
+                    {r.silent.length > 0 && (
+                      <tr>
+                        <td colSpan={4} className="muted skipped-cols">
+                          не пришли в последний заход:{' '}
+                          {r.silent.map((s) => `${s.kind} (${s.hours_ago} ч)`).join(' · ')}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
 
       {data && (
         <>

@@ -7,6 +7,8 @@
 
 import hashlib
 import io
+import re
+from datetime import datetime
 import secrets
 import traceback
 
@@ -701,6 +703,113 @@ def skipped_kinds(
         "moving_files": sum(g["files"] for g in rows if g["moves_stock"]),
     }
 
+
+
+# --- Свежесть выгрузок ------------------------------------------------------
+# Контур может замолчать тихо: 1С перестала выгружать, файлы в папке остались
+# старые, автосинк исправно шлёт их снова, и портал не видит разницы. Так
+# Хайджин-управленка молчала сутки, а заметил это человек, а не портал.
+
+# Сколько часов молчания считаем поломкой. Сутки — с запасом: выгрузки ходят
+# по разу в день, и порог в 12 часов давал бы ложную тревогу каждое утро.
+STALE_HOURS = 24
+
+_TAG = re.compile(r"^\s*\[[^\]]*\]\s*")
+
+
+def _source_of(filename: str):
+    """Фирма, контур и вид выгрузки по имени файла из журнала.
+
+    В журнале имя обрастает служебными метками («[авто:hygiene]»,
+    «[ГТД:hygiene]»), поэтому сначала снимаем их все, а разбираем то, что
+    прислала 1С: «Хайджин_УПРАВЛЕНКА_Реализация товаров и услуг.xlsx»."""
+    name = filename or ""
+    while True:
+        m = _TAG.match(name)
+        if not m:
+            break
+        name = name[m.end():]
+    low = name.lower()
+    firm = ("hygiene" if "хайджин" in low or "haydj" in low or "hydj" in low
+            else "innowave" if "инновейв" in low or "innov" in low else None)
+    ledger = ("nal" if "налогов" in low or "nalog" in low
+              else "upr" if "управленк" in low or "upravlenk" in low else None)
+    if not firm or not ledger:
+        return None, None, None
+    parts = name.split("_", 2)
+    kind = (parts[2] if len(parts) > 2 else name).rsplit(".", 1)[0].strip()
+    return firm, ledger, kind or "(без вида)"
+
+
+FIRM_LABEL = {"hygiene": "Хайджин", "innowave": "Инновейв"}
+LEDGER_LABEL = {"upr": "управленка", "nal": "налоговая"}
+
+
+@router.get("/freshness")
+def freshness(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Когда каждый контур 1С присылал данные последний раз.
+
+    Отвечает на вопрос, который иначе задаёт себе только человек и только
+    случайно: а всё ли ещё выгружается? Молчащий контур не выглядит поломкой —
+    цифры на экране просто перестают меняться, и вчерашний остаток легко
+    принять за сегодняшний.
+
+    Считается по журналу загрузок: у каждого файла в имени стоит фирма и
+    контур, а время прихода — время записи в журнал."""
+    logs = (db.query(models.ImportLog.filename, models.ImportLog.created_at)
+            .order_by(models.ImportLog.created_at.desc())
+            .limit(20000).all())
+
+    now = datetime.utcnow()
+    contours: dict[tuple[str, str], dict] = {}
+    for filename, created in logs:
+        firm, ledger, kind = _source_of(filename)
+        if not firm:
+            continue
+        c = contours.setdefault((firm, ledger), {"last": None, "kinds": {}})
+        if c["last"] is None or created > c["last"]:
+            c["last"] = created
+        prev = c["kinds"].get(kind)
+        if prev is None or created > prev:
+            c["kinds"][kind] = created
+
+    def hours(then):
+        return round((now - then).total_seconds() / 3600, 1)
+
+    rows = []
+    for (firm, ledger), c in contours.items():
+        last = c["last"]
+        # Виды, не попавшие в последний заход: остальные файлы контура пришли,
+        # а этот молчит. Так видно поломку одного отчёта, когда контур в целом
+        # жив. Полчаса форы — заход растянут во времени, файлы идут по одному.
+        silent = sorted(
+            ({"kind": k, "last_at": t.isoformat(), "hours_ago": hours(t)}
+             for k, t in c["kinds"].items()
+             if (last - t).total_seconds() > 1800),
+            key=lambda x: -x["hours_ago"])
+        rows.append({
+            "firm": firm, "ledger": ledger,
+            "label": f"{FIRM_LABEL[firm]} · {LEDGER_LABEL[ledger]}",
+            "last_at": last.isoformat(),
+            "hours_ago": hours(last),
+            "stale": hours(last) >= STALE_HOURS,
+            "kinds": len(c["kinds"]),
+            # Сколько видов пришло в последний заход — если контур ожил, но
+            # прислал два файла из двадцати, это тоже поломка.
+            "in_last_run": sum(1 for t in c["kinds"].values()
+                               if (last - t).total_seconds() <= 1800),
+            "silent": silent[:8],
+        })
+    rows.sort(key=lambda r: -r["hours_ago"])
+    return {
+        "rows": rows,
+        "stale_hours": STALE_HOURS,
+        "stale_count": sum(1 for r in rows if r["stale"]),
+        "checked_at": now.isoformat(),
+    }
 
 @router.post("/reset")
 def reset_imported_data(
