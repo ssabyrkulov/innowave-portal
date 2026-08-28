@@ -310,6 +310,63 @@ class AdvanceLine(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class PayrollLine(Base):
+    """Строка начисления зарплаты — ФОТ из 1С.
+
+    Одна строка — один сотрудник в одном документе начисления: оклад,
+    отработанные дни против нормы, результат. Персональные данные, поэтому
+    отчёт по ним отдаётся только администратору."""
+
+    __tablename__ = "payroll_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    employee: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    position: Mapped[str | None] = mapped_column(String, nullable=True)
+    department: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    calc_kind: Mapped[str | None] = mapped_column(String, nullable=True)
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    days_norm: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
+    days_worked: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    author: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class LedgerEntry(Base):
+    """Проводка из журнала 1С: дебет, кредит, сумма.
+
+    Журнал — полная двойная запись фирмы, из него считается
+    оборотно-сальдовая ведомость: по каждому счёту обороты и сальдо. Это
+    первый отчёт в портале, который видит фирму целиком, а не по кускам —
+    и последняя инстанция при расхождениях: если документные выгрузки и
+    проводки говорят разное, врут выгрузки."""
+
+    __tablename__ = "ledger_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    line_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    debit_account: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    debit_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    debit_sub: Mapped[str | None] = mapped_column(String, nullable=True)
+    credit_account: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    credit_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    credit_sub: Mapped[str | None] = mapped_column(String, nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
+    content: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ManualEntry(Base):
     """Ручная операция 1С — проводка мимо документов, и сторно.
 

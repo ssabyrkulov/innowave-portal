@@ -193,8 +193,8 @@ def dashboard(
 
 
 # Товарные группы для графиков продаж. Порядок — как в голове у владельца, а
-# не по алфавиту: подгузники ONE, они же mini, StarKid, бумажная группа,
-# шампуни, остальное.
+# Порядок и склейка резервных групп — если справочник номенклатуры ещё не
+# загружен, товары раскладываются по ключевым словам, как раньше.
 _SALES_GROUPS = (
     ("one", "Подгузники ONE", (1,)),
     ("one_mini", "Подгузники ONE mini", (2,)),
@@ -207,6 +207,32 @@ _SALES_GROUPS = (
 )
 
 
+def _catalog_groups(db):
+    """product_guid → название группы из справочника номенклатуры 1С.
+
+    Группа товара — его родитель в дереве справочника («Подгузники ONE»,
+    «Шампунь SPLASH»), то есть ровно то, как товары сгруппировал сам 1С.
+    Раньше портал угадывал группу по ключевым словам в названии, и каждая
+    новая группа требовала правки кода; теперь новая группа в 1С появляется
+    на графике сама. Возвращает пары (guid → группа) и мост имя → guid для
+    строк, загруженных до появления GUID."""
+    from .purchases import _norm_product, _norm_product_exact
+
+    products = db.query(models.Product).all()
+    name_of = {p.guid: p.name for p in products}
+    group_of: dict = {}
+    by_name: dict = {}
+    for p in products:
+        if p.is_group:
+            continue
+        group_of[p.guid] = name_of.get(p.parent_guid)
+        for candidate in (p.name, p.name_full):
+            if candidate:
+                by_name.setdefault(_norm_product_exact(candidate), p.guid)
+                by_name.setdefault(_norm_product(candidate), p.guid)
+    return group_of, by_name
+
+
 @router.get("/sales-groups")
 def sales_groups(
     db: Session = Depends(get_db),
@@ -214,29 +240,40 @@ def sales_groups(
     org: str = Query(default="all"),
     months: int = Query(default=18, le=60),
 ):
-    """Продажи по месяцам в разрезе товарных групп.
+    """Продажи по месяцам в разрезе товарных групп 1С.
+
+    Группы берутся из справочника номенклатуры — так, как их завёл сам 1С.
+    Ключевые слова остаются запасным ходом для строк, которые справочник не
+    знает: угадывание хуже справочника, но лучше свалки в «Прочее».
 
     Каждая группа отдаётся двумя рядами: со всеми клиентами и без Байго
     Трейд. Байго — это больше половины оборота, и на общем графике остальные
     товары превращаются в плоскую линию у нуля: понять по нему, растут ли
     продажи шампуня, невозможно.
     """
-    from .purchases import _group_of
+    from .purchases import _group_of, _norm_product, _norm_product_exact
 
     big = "байго"
-    sales = models.org_scope(db.query(models.Sale), models.Sale, org).all()
-    by_group: dict[str, dict] = {}
-    for key, label, _codes in _SALES_GROUPS:
-        by_group[key] = {"key": key, "label": label,
-                         "m": defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])}
-    code_to_key = {c: key for key, _l, codes in _SALES_GROUPS for c in codes}
+    group_of, by_name = _catalog_groups(db)
+    fallback = {c: label for _k, label, codes in _SALES_GROUPS for c in codes}
 
+    def label_of(product, guid):
+        g = (guid or "").strip().lower()
+        if g not in group_of:
+            g = (by_name.get(_norm_product_exact(product or ""))
+                 or by_name.get(_norm_product(product or ""), ""))
+        label = group_of.get(g)
+        return label or fallback.get(_group_of(product), "Прочее")
+
+    sales = models.org_scope(db.query(models.Sale), models.Sale, org).all()
+    by_group: dict = {}
     seen_months: set = set()
     for s in sales:
-        key = code_to_key.get(_group_of(s.product), "other")
+        label = label_of(s.product, s.product_guid)
+        g = by_group.setdefault(label, defaultdict(lambda: [0.0, 0.0, 0.0, 0.0]))
         month = s.date.strftime("%Y-%m")
         seen_months.add(month)
-        cell = by_group[key]["m"][month]
+        cell = g[month]
         amount, qty = float(s.amount or 0), float(s.qty or 0)
         cell[0] += amount
         cell[1] += qty
@@ -246,20 +283,19 @@ def sales_groups(
 
     period = sorted(seen_months)[-months:]
     out = []
-    for key, label, _codes in _SALES_GROUPS:
-        g = by_group[key]
+    for label, g in by_group.items():
         series = [
             {"month": m,
-             "revenue": round(g["m"][m][0], 2), "qty": round(g["m"][m][1], 1),
-             "revenue_ex": round(g["m"][m][2], 2), "qty_ex": round(g["m"][m][3], 1)}
+             "revenue": round(g[m][0], 2), "qty": round(g[m][1], 1),
+             "revenue_ex": round(g[m][2], 2), "qty_ex": round(g[m][3], 1)}
             for m in period
         ]
         total = round(sum(p["revenue"] for p in series), 2)
         total_ex = round(sum(p["revenue_ex"] for p in series), 2)
-        # Пустые группы не показываем: «Прочее» у Innowave пустое, и карточка
-        # с нулевым графиком только занимает место.
+        # Пустые группы не показываем: карточка с нулевым графиком только
+        # занимает место.
         if total or total_ex:
-            out.append({"key": key, "label": label, "monthly": series,
+            out.append({"key": label, "label": label, "monthly": series,
                         "total": total, "total_ex": total_ex,
                         "qty": round(sum(p["qty"] for p in series), 1),
                         "qty_ex": round(sum(p["qty_ex"] for p in series), 1)})

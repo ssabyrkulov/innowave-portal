@@ -84,6 +84,7 @@ const SECONDARY = [
   { to: '/salesdoc', icon: '⚖️', label: 'Сверка SD', editOnly: true },
   { to: '/id-match', icon: '🔗', label: 'Сверка по ID', editOnly: true },
   { to: '/tax', icon: '🧾', label: 'Налоговая', editOnly: true },
+  { to: '/accounting', icon: '📚', label: 'Учёт 1С', adminOnly: true },
   { to: '/tools/unit-economics', icon: '🧮', label: 'Юнит-экономика', adminOnly: true },
   { to: '/users', icon: '👥', label: 'Пользователи', adminOnly: true },
 ]

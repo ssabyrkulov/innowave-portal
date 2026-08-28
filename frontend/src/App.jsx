@@ -13,6 +13,7 @@ import UsersPage from './pages/UsersPage'
 import UnitEconomicsPage from './pages/UnitEconomicsPage'
 import BudgetPage from './pages/BudgetPage'
 import StockPage from './pages/StockPage'
+import AccountingPage from './pages/AccountingPage'
 import WorkPage from './pages/WorkPage'
 import OperationsPage from './pages/OperationsPage'
 import SalesDocPage from './pages/SalesDocPage'
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="salesdoc" element={<SalesDocPage />} />
         <Route path="id-match" element={<IdMatchPage />} />
         <Route path="tax" element={<TaxPage />} />
+        <Route path="accounting" element={<AccountingPage />} />
         <Route path="work" element={<WorkPage />} />
         <Route
           path="tools/unit-economics"

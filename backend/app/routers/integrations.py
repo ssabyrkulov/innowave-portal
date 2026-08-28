@@ -146,11 +146,7 @@ UNSUPPORTED_KINDS: tuple[tuple[str, tuple[str, ...], bool, str], ...] = (
     ("Счёт на оплату", ("счет на оплату", "счёт на оплату",
                         "schet na oplatu"), False, ""),
     ("Оборотно-сальдовая ведомость", ("оборотно", "oborotno"), False, ""),
-    ("Журнал проводок", ("журнал проводок", "jurnal provodok",
-                         "zhurnal provodok"), False, ""),
     ("Конвертация", ("конвертац", "konvertac"), False, ""),
-    ("Начисление зарплаты", ("начисление зарплат", "nachislenie zarplat"),
-     False, ""),
     ("ЭСФ / счета-фактуры", ("эсф", "esf", "счет-фактур", "счёт-фактур",
                              "schet-faktur", "бланки счетов",
                              "blanki schetov"), False, ""),
@@ -277,6 +273,14 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
     # это долг перед фирмой, и виден он только здесь.
     if has("авансов", "avansov", "подотчет", "подотчёт", "podotchet"):
         return "advances"
+    # Начисление зарплаты — ФОТ. Персональные данные: отчёт по ним отдаётся
+    # только администратору.
+    if has("начисление зарплат", "nachislenie zarplat"):
+        return "payroll"
+    # Журнал проводок — полная двойная запись, из неё считается
+    # оборотно-сальдовая ведомость.
+    if has("журнал проводок", "jurnal provodok", "zhurnal provodok"):
+        return "ledger"
     # Виды, для которых импортёров пока нет. Ловим по имени осознанно, а не
     # отдаём угадыванию по колонкам: «Оприходование» содержит «приход» и без
     # этого правила уехало бы в денежные поступления. Блок стоит раньше правил
@@ -292,9 +296,7 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
            # Ловим их по имени, потому что sniff_kind по колонкам ошибается:
            # «Движение МБП» с колонками Дата/Сумма/Контрагент он принимает за
            # денежный расход и подмешивает движение малоценки к платежам.
-           "журнал проводок", "jurnal provodok", "zhurnal provodok",
            "конвертац", "konvertac",
-           "начисление зарплат", "nachislenie zarplat",
            "движение мбп", "dvijenie mbp", "dvizhenie mbp",
            "эсф", "esf", "счет-фактур", "счёт-фактур", "schet-faktur",
            "бланки счетов", "blanki schetov"):
@@ -611,6 +613,14 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         from .advances import import_advances_workbook
         result = import_advances_workbook(db, content, auto_name, robot.id,
                                           org=org)
+    elif kind == "payroll":
+        from .payroll import import_payroll_workbook
+        result = import_payroll_workbook(db, content, auto_name, robot.id,
+                                         org=org)
+    elif kind == "ledger":
+        from .ledger import import_ledger_workbook
+        result = import_ledger_workbook(db, content, auto_name, robot.id,
+                                        org=org)
     elif kind == "return_docs" and not _is_line_doc(content):
         result = import_returns_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "cash_balances":

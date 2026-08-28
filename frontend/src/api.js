@@ -92,6 +92,16 @@ export const api = {
 
   importLog: () => request('/sales/imports'),
   // Виды выгрузок, которые 1С присылает, а портал пока не грузит.
+  // ФОТ — только для администратора: персональные данные.
+  payroll: () => request('/payroll'),
+  // Оборотно-сальдовая ведомость и проводки из журнала 1С.
+  ledgerAccounts: () => request('/ledger/accounts'),
+  ledgerEntries: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString()
+    return request(`/ledger/entries${qs ? `?${qs}` : ''}`)
+  },
   // Когда каждый контур 1С присылал данные последний раз.
   freshness: () => request('/integrations/freshness'),
   skippedKinds: () => request('/integrations/skipped-kinds'),

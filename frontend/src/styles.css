@@ -3054,3 +3054,12 @@ button.summary-card {
 .rc-row-blank td { background: repeating-linear-gradient(
     -45deg, transparent, transparent 5px,
     var(--border) 5px, var(--border) 6px); opacity: .25; }
+
+/* ФОТ: полоска месяца относительно максимума */
+.fot-bar {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--accent, #4a7dbd);
+  opacity: 0.65;
+  min-width: 2px;
+}
