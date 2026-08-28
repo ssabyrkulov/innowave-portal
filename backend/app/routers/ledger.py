@@ -103,7 +103,14 @@ def import_ledger_workbook(db: Session, content: bytes, filename: str,
 
     db.query(models.LedgerEntry).filter(
         models.LedgerEntry.organization == org).delete(synchronize_session=False)
-    db.bulk_save_objects(parsed)
+    # Журнал — самый большой файл выгрузки (у Хайджина ~20 тыс. строк).
+    # Пишем порциями: разовый bulk на весь список держит все объекты в
+    # памяти одновременно, и на маленьком инстансе Render этот пик ронял
+    # сервис — соседние запросы автосинка ловили 502.
+    CHUNK = 2000
+    for i in range(0, len(parsed), CHUNK):
+        db.bulk_save_objects(parsed[i:i + CHUNK])
+        db.flush()
     db.add(models.ImportLog(filename=f"[проводки:{org}] {filename}",
                             user_id=user_id, added=len(parsed),
                             skipped=inactive, errors_count=0))
