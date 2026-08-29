@@ -126,10 +126,14 @@ export default function ChecksPage() {
         <div className="fresh-block">
           <h2 className="section-title">Управленка ↔ налоговая: непроведённое</h2>
           <p className="muted">
-            Слева документ есть, справа нет. «Хвост» — документы свежее
-            последнего документа второго контура: обычное отставание,
-            бухгалтерия ещё не дошла. Всё остальное — дыра внутри закрытого
-            периода, её и надо разбирать.
+            Пара ищется по количеству, а не по сумме: штуки в контурах
+            одинаковы, а цены разные — в налоговой трансфертные. Дата тоже
+            своя: документ проводят во второй базе позже, иногда через
+            месяцы. «Хвост» — документы свежее последнего документа второго
+            контура: обычное отставание. «Дыра» — пропуск внутри закрытого
+            периода, вот её и надо разбирать. Где контур ведёт лишь часть
+            документов (у Хайджина налоговая — это ЭСФ на юрлиц и сводные),
+            непарные помечены нейтрально: это устройство учёта, а не потеря.
           </p>
           <div className="table-wrap compact">
             <table>
@@ -138,6 +142,7 @@ export default function ChecksPage() {
                   <th>Фирма</th><th>Документы</th>
                   <th className="num">Только в управленке</th>
                   <th className="num">Только в налоговой</th>
+                  <th>Спарено</th>
                   <th>Последний документ</th>
                 </tr>
               </thead>
@@ -165,13 +170,16 @@ export default function ChecksPage() {
                             {t.gaps_tax > 0 && <> · дыр <b>{t.gaps_tax}</b></>}
                           </td>
                           <td className="muted">
+                            {t.paired} пар · {t.cover_upr}% упр. / {t.cover_tax}% нал.
+                          </td>
+                          <td className="muted">
                             упр. {t.upr_last ? fdate(t.upr_last) : '—'} · нал.{' '}
                             {t.tax_last ? fdate(t.tax_last) : '—'}
                           </td>
                         </tr>
                         {open && (
                           <tr>
-                            <td colSpan={5} className="doc-lines">
+                            <td colSpan={6} className="doc-lines">
                               {[['Только в управленке', t.only_upr],
                                 ['Только в налоговой', t.only_tax]].map(
                                 ([title, rows]) => rows.length > 0 && (
@@ -202,7 +210,9 @@ export default function ChecksPage() {
                                             <td>
                                               {r.tail
                                                 ? <span className="muted">хвост</span>
-                                                : <span className="sc-diff">дыра</span>}
+                                                : r.gap
+                                                  ? <span className="sc-diff">дыра</span>
+                                                  : <span className="muted">нет пары</span>}
                                             </td>
                                           </tr>
                                         ))}

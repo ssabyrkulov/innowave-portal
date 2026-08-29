@@ -1128,7 +1128,10 @@ def tax_unposted(
     # поэтому каждая считается отдельно и показывается своим блоком.
     firms = ([models.normalize_org(org)] if (org or "").lower() in models.ORGS
              else list(models.ORGS))
-    DAY_TOL = 3  # допуск по дате: тот же документ проводят днём-двумя позже
+    # Окно поиска пары. Документ проводят в другой базе не в тот же день:
+    # встречаются и 140 дней позже, и 38 дней раньше. Шире брать нельзя —
+    # одинаковых по количеству отгрузок много, и пары станут случайными.
+    DAY_WINDOW = 150
 
     def tax_docs(o: str, kind: str) -> list[dict]:
         """Документы налогового контура одного вида, собранные из строк."""
@@ -1174,15 +1177,25 @@ def tax_unposted(
             out.append(e)
         return out
 
-    def pair(upr: list[dict], tax: list[dict], by_amount: bool) -> tuple[list, list]:
-        """Разносит документы на пары; возвращает то, что осталось без пары."""
+    def pair(upr: list[dict], tax: list[dict]) -> tuple[list, list, int]:
+        """Разносит документы на пары; возвращает то, что осталось без пары.
+
+        Ключ сверки — количество, а не сумма: штуки в контурах одинаковы, а
+        цены разные (в налоговой трансфертная — у Байго 20 312 шт стоят
+        7,1 млн в управленке и 5,6 млн в налоговой). Дата тоже не совпадает:
+        документ проводят в налоговой базе позже, иногда через два месяца,
+        а иногда раньше — поэтому окно широкое и симметричное, а из
+        нескольких кандидатов берётся ближайший по дате.
+        """
         used_u: set = set()
-        # 1) По номеру управленки из комментария налогового документа.
+        paired_t: set = set()
+
+        # 1) По номеру управленки из комментария налогового документа —
+        #    прямая ссылка, поставленная руками бухгалтера, сильнее догадок.
         by_number: dict = defaultdict(list)
         for i, u in enumerate(upr):
             if u["number"]:
                 by_number[u["number"]].append(i)
-        paired_t: set = set()
         for j, t in enumerate(tax):
             for n in _UPR_NUMBER.findall(t["comment"] or ""):
                 free = [i for i in by_number.get(n, []) if i not in used_u]
@@ -1192,34 +1205,47 @@ def tax_unposted(
                 i = min(free, key=lambda i: abs((upr[i]["date"] - t["date"]).days))
                 used_u.add(i)
                 paired_t.add(j)
-        # 2) Остальное — по дате и сумме (или количеству, если сумм нет).
-        field = "amount" if by_amount else "qty"
-        tol = 1.0 if by_amount else 0.001
-        for j, t in enumerate(tax):
-            if j in paired_t:
-                continue
-            best = None
+
+        # 2) По количеству, а где количества нет (возвраты приходят
+        #    документом, без товарных строк) — по сумме.
+        def greedy(field: str, tol: float) -> None:
+            index: dict = defaultdict(list)
             for i, u in enumerate(upr):
-                if i in used_u:
+                if i not in used_u and u[field]:
+                    index[round(u[field], 3)].append(i)
+            cands = []
+            for j, t in enumerate(tax):
+                if j in paired_t or not t[field]:
                     continue
-                if abs((u["date"] - t["date"]).days) > DAY_TOL:
+                for i in index.get(round(t[field], 3), []):
+                    dist = abs((upr[i]["date"] - t["date"]).days)
+                    if dist > DAY_WINDOW:
+                        continue
+                    # При равном расстоянии по дате вперёд идёт пара, у
+                    # которой сошлась ещё и сумма.
+                    cands.append((dist, abs(upr[i]["amount"] - t["amount"]) > 1,
+                                  i, j))
+            cands.sort()
+            for _, _, i, j in cands:
+                if i in used_u or j in paired_t:
                     continue
-                if abs(u[field] - t[field]) > tol:
+                if abs(upr[i][field] - tax[j][field]) > tol:
                     continue
-                d = abs((u["date"] - t["date"]).days)
-                if best is None or d < best[0]:
-                    best = (d, i)
-            if best:
-                used_u.add(best[1])
+                used_u.add(i)
                 paired_t.add(j)
+
+        greedy("qty", 0.001)
+        greedy("amount", 1.0)
+
+        paired = len(paired_t)
         only_u = [u for i, u in enumerate(upr) if i not in used_u]
         only_t = [t for j, t in enumerate(tax) if j not in paired_t]
-        return only_u, only_t
+        return only_u, only_t, paired
 
     def block(key, label, upr, tax, by_amount=True) -> dict:
         upr_last = max((u["date"] for u in upr), default=None)
         tax_last = max((t["date"] for t in tax), default=None)
-        only_u, only_t = pair(upr, tax, by_amount)
+        only_u, only_t, paired = pair(upr, tax)
 
         def out(rows, other_last):
             res = []
@@ -1240,8 +1266,30 @@ def tax_unposted(
             return res
 
         rows_u, rows_t = out(only_u, tax_last), out(only_t, upr_last)
-        gaps_u = [r for r in rows_u if not r["tail"]]
-        gaps_t = [r for r in rows_t if not r["tail"]]
+        # Пометка строки считается ниже, когда известно, полный ли контур.
+        # Налоговый контур ведёт не всё: у Хайджина на 1 539 отгрузок
+        # управленки приходится 184 налоговых документа — ЭСФ на юрлиц и
+        # сводные. Списывать полторы тысячи документов в «дыры» бессмысленно:
+        # это не потери, а устройство учёта. Поэтому дырами считаем стороны,
+        # которые контур покрывает почти целиком, — там пропуск действительно
+        # означает пропуск.
+        FULL, ENOUGH = 0.7, 20
+        cover_u = paired / len(upr) if upr else 1.0
+        cover_t = paired / len(tax) if tax else 1.0
+        # На горстке документов доля ничего не значит: один непарный из трёх
+        # даст «покрытие 67%» и молча спрячет настоящий пропуск. Считаем
+        # контур неполным только там, где документов достаточно, чтобы это
+        # было свойством учёта, а не случайностью.
+        partial_u = cover_u < FULL and len(upr) >= ENOUGH
+        partial_t = cover_t < FULL and len(tax) >= ENOUGH
+        gaps_u = [] if partial_u else [r for r in rows_u if not r["tail"]]
+        gaps_t = [] if partial_t else [r for r in rows_t if not r["tail"]]
+        # «Дыра» — только там, где контур ведёт документы этого вида
+        # целиком. В частичном контуре отсутствие пары — норма, и строка
+        # помечается нейтрально: «нет пары».
+        for rows, partial in ((rows_u, partial_u), (rows_t, partial_t)):
+            for r in rows:
+                r["gap"] = not r["tail"] and not partial
         return {
             "key": key,
             "label": label,
@@ -1250,6 +1298,13 @@ def tax_unposted(
             "tax_last": tax_last.isoformat() if tax_last else None,
             "upr_docs": len(upr),
             "tax_docs": len(tax),
+            "paired": paired,
+            # Доля документов, у которых пара нашлась. Низкая — контур ведёт
+            # лишь часть, и список «без пары» справочный, а не тревожный.
+            "cover_upr": round(cover_u * 100),
+            "cover_tax": round(cover_t * 100),
+            "partial_upr": partial_u,
+            "partial_tax": partial_t,
             # Контур вообще не ведёт этот вид документов — расхождение
             # структурное, а не потерянный документ.
             "upr_absent": not upr,
