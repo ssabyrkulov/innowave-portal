@@ -601,9 +601,18 @@ def _doc_rows(rows, number_of, party_of, amount_of, qty_of,
 
 
 def _upr_docs(db: Session, org: str, kind: str) -> list[dict]:
-    """Документы управленки того же вида, что и налоговые."""
+    """Документы управленки того же вида, что и налоговые.
+
+    Берём только те колонки, из которых собирается документ: на живой базе
+    продаж десятки тысяч строк, и поднимать их в память объектами ORM —
+    верный способ уронить сервис на маленьком инстансе.
+    """
     if kind == "sale":
-        rows = db.query(models.Sale).filter(models.Sale.organization == org).all()
+        rows = db.query(
+            models.Sale.id, models.Sale.date, models.Sale.doc_number,
+            models.Sale.client, models.Sale.amount, models.Sale.discount_pct,
+            models.Sale.qty, models.Sale.doc_total,
+        ).filter(models.Sale.organization == org).all()
         # Сумма документа — после скидки: в налоговой она такая же. Где итога
         # нет, складываем строки с учётом процента скидки.
         return _doc_rows(rows, lambda r: r.doc_number, lambda r: r.client,
@@ -613,18 +622,26 @@ def _upr_docs(db: Session, org: str, kind: str) -> list[dict]:
                          total_of=lambda r: (float(r.doc_total)
                                              if r.doc_total is not None else None))
     if kind == "return":
-        rows = db.query(models.ReturnDoc).filter(
-            models.ReturnDoc.organization == org).all()
+        rows = db.query(
+            models.ReturnDoc.id, models.ReturnDoc.date,
+            models.ReturnDoc.client, models.ReturnDoc.amount,
+        ).filter(models.ReturnDoc.organization == org).all()
         return _doc_rows(rows, lambda r: None, lambda r: r.client,
                          lambda r: float(r.amount or 0), lambda r: 0.0)
     if kind == "writeoff":
-        rows = db.query(models.WriteOff).filter(
-            models.WriteOff.organization == org).all()
+        rows = db.query(
+            models.WriteOff.id, models.WriteOff.date,
+            models.WriteOff.doc_number, models.WriteOff.subconto,
+            models.WriteOff.qty,
+        ).filter(models.WriteOff.organization == org).all()
         return _doc_rows(rows, lambda r: r.doc_number, lambda r: r.subconto,
                          lambda r: 0.0, lambda r: float(r.qty or 0))
     if kind == "purchase":
-        rows = db.query(models.Purchase).filter(
-            models.Purchase.organization == org).all()
+        rows = db.query(
+            models.Purchase.id, models.Purchase.date,
+            models.Purchase.doc_number, models.Purchase.supplier,
+            models.Purchase.amount_kgs, models.Purchase.qty,
+        ).filter(models.Purchase.organization == org).all()
         return _doc_rows(rows, lambda r: r.doc_number, lambda r: r.supplier,
                          lambda r: float(r.amount_kgs or 0),
                          lambda r: float(r.qty or 0))
@@ -634,9 +651,13 @@ def _upr_docs(db: Session, org: str, kind: str) -> list[dict]:
 def _tax_doc_rows(db: Session, org: str, kind: str) -> list[dict]:
     """Документы налогового контура одного вида, собранные из строк."""
     acc: dict = {}
-    for t in db.query(models.TaxOperation).filter(
-            models.TaxOperation.organization == org,
-            models.TaxOperation.kind == kind).all():
+    for t in db.query(
+            models.TaxOperation.date, models.TaxOperation.doc_number,
+            models.TaxOperation.counterparty, models.TaxOperation.amount,
+            models.TaxOperation.qty, models.TaxOperation.comment,
+            models.TaxOperation.doc_guid,
+    ).filter(models.TaxOperation.organization == org,
+             models.TaxOperation.kind == kind).all():
         key = t.doc_guid or f"{t.doc_number}|{t.date}|{t.counterparty}"
         e = acc.setdefault(key, {
             "date": t.date, "number": t.doc_number, "party": t.counterparty,

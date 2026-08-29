@@ -8,7 +8,7 @@
 import hashlib
 import io
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import secrets
 import traceback
 
@@ -446,13 +446,26 @@ def sniff_kind(content: bytes) -> str:
     return "unknown"
 
 
-def _scan_contours(db) -> dict | None:
-    """Обновляет журнал расхождений контуров после приёма документа.
+# Когда журнал расхождений пересчитывался последний раз. Автосинк присылает
+# файлы пачкой — за прогон их больше сотни, — а пересчёт читает документы обеих
+# фирм целиком. На каждый файл это выливалось в сотню полных пересчётов подряд
+# и клало сервис. Пачку достаточно посчитать один раз.
+_LAST_SCAN: dict = {"at": None}
+_SCAN_EVERY = timedelta(minutes=10)
+
+
+def _scan_contours(db, force: bool = False) -> dict | None:
+    """Обновляет журнал расхождений контуров после приёма документов.
 
     Считать это при открытии страницы поздно: расхождение, возникшее и
-    исчезнувшее между визитами, так и осталось бы незамеченным. Сбой
-    журнала не должен ронять приём файла — он важнее.
+    исчезнувшее между визитами, так и осталось бы незамеченным. Сбой журнала
+    не должен ронять приём файла — файл важнее.
     """
+    now = datetime.utcnow()
+    last = _LAST_SCAN["at"]
+    if not force and last is not None and now - last < _SCAN_EVERY:
+        return None
+    _LAST_SCAN["at"] = now
     try:
         from .tax import scan_contour_events
         return scan_contour_events(db)

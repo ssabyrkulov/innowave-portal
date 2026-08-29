@@ -327,14 +327,31 @@ def dedupe_renamed_money() -> None:
 db_state: dict = {"ready": False, "error": None}
 
 
+def _deferred_migrations() -> None:
+    """Разовые правки данных — уже после того, как сервис начал отвечать."""
+    t0 = time.time()
+    try:
+        unify_clients_by_guid()
+        dedupe_renamed_money()
+        print(f"[startup] отложенные правки данных заняли "
+              f"{time.time() - t0:.1f} c", flush=True)
+    except Exception as err:  # noqa: BLE001 — портал важнее правки
+        print(f"[startup] отложенные правки не прошли: {err}", flush=True)
+
+
 def init_database() -> None:
     """Подготовка схемы и первичных данных (после того, как БД доступна)."""
     Base.metadata.create_all(bind=engine)
     run_mini_migrations()
     backfill_organization()
-    unify_clients_by_guid()
-    dedupe_renamed_money()
     seed_initial_admin()
+    # Разовые правки данных (склейка переименованных клиентов, чистка копий
+    # оплат) читают таблицу продаж целиком и на живой базе идут минутами.
+    # Пока они шли здесь, сервис не отвечал на проверку готовности, Render
+    # считал его мёртвым и перезапускал — а после перезапуска правка
+    # начиналась заново. Поэтому уводим их в фон: они идемпотентны и
+    # помечены в app_migrations, спешить им некуда.
+    threading.Thread(target=_deferred_migrations, daemon=True).start()
     # Зеркало SalesDoc: держим копию журналов в базе и обновляем в фоне
     # (дельта каждые 5 минут, полная выгрузка раз в сутки). Благодаря этому
     # карточка клиента и сверка открываются мгновенно, без запросов к SalesDoc.
