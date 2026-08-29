@@ -16,7 +16,7 @@ import re
 from collections import defaultdict
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -1090,4 +1090,225 @@ def tax_by_comment(
         # документы с комментарием вроде «Подгузники».
         "unlinked": len(no_link),
         "unlinked_qty": round(sum(e["qty"] for e in no_link), 1),
+    }
+
+
+@router.get("/unposted")
+def tax_unposted(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "hygiene",
+    limit: int = Query(default=50, le=500),
+):
+    """Документы, проведённые в одном контуре и не проведённые в другом.
+
+    Две базы 1С живут порознь: одну ведёт управленческий учёт, другую —
+    налоговый, и документ попадает во вторую руками, когда бухгалтер до него
+    дойдёт. Пока он не дошёл, товар в налоговой числится на складе, деньги —
+    не в выручке, и это видно только косвенно: расхождение в остатках, в
+    обороте, в ЭСФ. Причину каждый раз ищут раскопками в выгрузках.
+
+    Здесь она названа прямо: по каждому виду документов — что есть в
+    управленке и нет в налоговой, и наоборот.
+
+    Пара ищется двумя способами. Для реализаций — по номеру управленки,
+    который бухгалтер вписывает в комментарий налогового документа (это
+    единственная прямая связь между базами: GUID у баз свои, контрагенты
+    разные). Если номера нет — по дате и сумме с допуском: контуры ведут
+    один и тот же документ, и совпадение даты с точностью до пары дней и
+    суммы до копейки — надёжный признак.
+
+    Отдельно помечается «хвост» — документы свежее последнего документа
+    другого контура. Это обычное отставание: бухгалтерия ещё не дошла.
+    А вот документ без пары внутри уже закрытого периода — настоящая дыра,
+    и именно он должен попадаться на глаза.
+    """
+    # Фирма берётся из переключателя в шапке. «Обе» — не смесь: базы 1С у
+    # фирм разные, и «нет пары» у Хайджина ничего не говорит про Инновейв,
+    # поэтому каждая считается отдельно и показывается своим блоком.
+    firms = ([models.normalize_org(org)] if (org or "").lower() in models.ORGS
+             else list(models.ORGS))
+    DAY_TOL = 3  # допуск по дате: тот же документ проводят днём-двумя позже
+
+    def tax_docs(o: str, kind: str) -> list[dict]:
+        """Документы налогового контура одного вида, собранные из строк."""
+        acc: dict = {}
+        for t in db.query(models.TaxOperation).filter(
+                models.TaxOperation.organization == o,
+                models.TaxOperation.kind == kind).all():
+            key = t.doc_guid or f"{t.doc_number}|{t.date}|{t.counterparty}"
+            e = acc.setdefault(key, {
+                "date": t.date, "number": t.doc_number, "party": t.counterparty,
+                "amount": 0.0, "qty": 0.0, "comment": ""})
+            # СуммаДокумента повторяется в каждой строке — складываем строки.
+            e["amount"] += float(t.amount or 0)
+            e["qty"] += float(t.qty or 0)
+            if t.comment:
+                e["comment"] = t.comment
+        return list(acc.values())
+
+    def upr_docs(rows, number_of, party_of, amount_of, qty_of,
+                 total_of=None) -> list[dict]:
+        """Документы управленки: строки выгрузки сворачиваются в документ.
+
+        Итог документа (СуммаДокумента) повторяется в каждой строке, поэтому
+        он не складывается, а запоминается один раз: иначе документ из двух
+        строк выглядел бы вдвое дороже, чем он есть."""
+        acc: dict = {}
+        for r in rows:
+            key = (number_of(r) or r.doc_guid or f"~{r.id}", r.date)
+            e = acc.setdefault(key, {
+                "date": r.date, "number": number_of(r), "party": party_of(r),
+                "amount": 0.0, "qty": 0.0, "total": None})
+            e["amount"] += amount_of(r)
+            e["qty"] += qty_of(r)
+            if total_of is not None:
+                t = total_of(r)
+                if t is not None:
+                    e["total"] = t
+        out = []
+        for e in acc.values():
+            if e["total"] is not None:
+                e["amount"] = e["total"]
+            e.pop("total")
+            out.append(e)
+        return out
+
+    def pair(upr: list[dict], tax: list[dict], by_amount: bool) -> tuple[list, list]:
+        """Разносит документы на пары; возвращает то, что осталось без пары."""
+        used_u: set = set()
+        # 1) По номеру управленки из комментария налогового документа.
+        by_number: dict = defaultdict(list)
+        for i, u in enumerate(upr):
+            if u["number"]:
+                by_number[u["number"]].append(i)
+        paired_t: set = set()
+        for j, t in enumerate(tax):
+            for n in _UPR_NUMBER.findall(t["comment"] or ""):
+                free = [i for i in by_number.get(n, []) if i not in used_u]
+                if not free:
+                    continue
+                # Номера повторяются по годам — берём ближайший по дате.
+                i = min(free, key=lambda i: abs((upr[i]["date"] - t["date"]).days))
+                used_u.add(i)
+                paired_t.add(j)
+        # 2) Остальное — по дате и сумме (или количеству, если сумм нет).
+        field = "amount" if by_amount else "qty"
+        tol = 1.0 if by_amount else 0.001
+        for j, t in enumerate(tax):
+            if j in paired_t:
+                continue
+            best = None
+            for i, u in enumerate(upr):
+                if i in used_u:
+                    continue
+                if abs((u["date"] - t["date"]).days) > DAY_TOL:
+                    continue
+                if abs(u[field] - t[field]) > tol:
+                    continue
+                d = abs((u["date"] - t["date"]).days)
+                if best is None or d < best[0]:
+                    best = (d, i)
+            if best:
+                used_u.add(best[1])
+                paired_t.add(j)
+        only_u = [u for i, u in enumerate(upr) if i not in used_u]
+        only_t = [t for j, t in enumerate(tax) if j not in paired_t]
+        return only_u, only_t
+
+    def block(key, label, upr, tax, by_amount=True) -> dict:
+        upr_last = max((u["date"] for u in upr), default=None)
+        tax_last = max((t["date"] for t in tax), default=None)
+        only_u, only_t = pair(upr, tax, by_amount)
+
+        def out(rows, other_last):
+            res = []
+            for r in sorted(rows, key=lambda x: x["date"], reverse=True):
+                res.append({
+                    "date": r["date"].isoformat(),
+                    "number": r["number"],
+                    "party": r["party"],
+                    "amount": round(r["amount"], 2),
+                    "qty": round(r["qty"], 3),
+                    # Свежее последнего документа второго контура — обычное
+                    # отставание, а не потерянный документ. Если во втором
+                    # контуре документов этого вида нет вовсе, он его просто
+                    # не ведёт (налоговая, например, не ведёт списания
+                    # маркетинга) — тогда «дыр» тут тоже нет.
+                    "tail": bool(other_last is None or r["date"] > other_last),
+                })
+            return res
+
+        rows_u, rows_t = out(only_u, tax_last), out(only_t, upr_last)
+        gaps_u = [r for r in rows_u if not r["tail"]]
+        gaps_t = [r for r in rows_t if not r["tail"]]
+        return {
+            "key": key,
+            "label": label,
+            "by_amount": by_amount,
+            "upr_last": upr_last.isoformat() if upr_last else None,
+            "tax_last": tax_last.isoformat() if tax_last else None,
+            "upr_docs": len(upr),
+            "tax_docs": len(tax),
+            # Контур вообще не ведёт этот вид документов — расхождение
+            # структурное, а не потерянный документ.
+            "upr_absent": not upr,
+            "tax_absent": not tax,
+            "only_upr": rows_u[:limit],
+            "only_tax": rows_t[:limit],
+            "only_upr_count": len(rows_u),
+            "only_tax_count": len(rows_t),
+            # Дыры — без учёта хвоста: именно они требуют вмешательства.
+            "gaps_upr": len(gaps_u),
+            "gaps_tax": len(gaps_t),
+            "gaps_upr_amount": round(sum(r["amount"] for r in gaps_u), 2),
+            "gaps_tax_amount": round(sum(r["amount"] for r in gaps_t), 2),
+        }
+
+    def firm_types(o: str) -> list[dict]:
+        """Все виды документов одной фирмы."""
+        sales = db.query(models.Sale).filter(models.Sale.organization == o).all()
+        returns = db.query(models.ReturnDoc).filter(
+            models.ReturnDoc.organization == o).all()
+        writeoffs = db.query(models.WriteOff).filter(
+            models.WriteOff.organization == o).all()
+        purchases = db.query(models.Purchase).filter(
+            models.Purchase.organization == o).all()
+        return [
+            block("sale", "Реализации",
+                  # Сумма документа — после скидки: в налоговой она такая же.
+                  # Где итога нет, складываем строки с учётом процента скидки.
+                  upr_docs(sales, lambda r: r.doc_number, lambda r: r.client,
+                           lambda r: (float(r.amount or 0)
+                                      * (1 - float(r.discount_pct or 0) / 100)),
+                           lambda r: float(r.qty or 0),
+                           total_of=lambda r: (float(r.doc_total)
+                                               if r.doc_total is not None else None)),
+                  tax_docs(o, "sale")),
+            block("return", "Возвраты от покупателей",
+                  upr_docs(returns, lambda r: None, lambda r: r.client,
+                           lambda r: float(r.amount or 0), lambda r: 0.0),
+                  tax_docs(o, "return")),
+            block("writeoff", "Списания",
+                  upr_docs(writeoffs, lambda r: r.doc_number, lambda r: r.subconto,
+                           lambda r: 0.0, lambda r: float(r.qty or 0)),
+                  tax_docs(o, "writeoff"), by_amount=False),
+            block("purchase", "Поступления товаров",
+                  upr_docs(purchases, lambda r: r.doc_number, lambda r: r.supplier,
+                           lambda r: float(r.amount_kgs or 0),
+                           lambda r: float(r.qty or 0)),
+                  tax_docs(o, "purchase")),
+        ]
+
+    out_firms = []
+    for o in firms:
+        out_firms.append({"org": o, "types": firm_types(o)})
+    return {
+        "firms": out_firms,
+        # Сумма дыр по всем фирмам и видам — одно число для «Контроля».
+        "gaps": sum(t["gaps_upr"] + t["gaps_tax"]
+                    for f in out_firms for t in f["types"]),
+        "tail": sum(t["only_upr_count"] - t["gaps_upr"]
+                    + t["only_tax_count"] - t["gaps_tax"]
+                    for f in out_firms for t in f["types"]),
     }

@@ -3,6 +3,9 @@ import { api } from '../api'
 import { useAuth } from '../auth'
 import { formatMoney } from '../utils'
 
+// Даты в этом отчёте читают как в 1С — «27.08.2026», а не «2026-08-27».
+const fdate = (iso) => (iso ? iso.split('-').reverse().join('.') : '—')
+
 export default function ChecksPage() {
   const { can, user } = useAuth()
   const [resetting, setResetting] = useState(false)
@@ -53,11 +56,16 @@ export default function ChecksPage() {
   // Свежесть выгрузок: молчащий контур не выглядит поломкой — цифры просто
   // перестают меняться, и вчерашний остаток легко принять за сегодняшний.
   const [fresh, setFresh] = useState(null)
+  // Документы, проведённые в одном контуре и не проведённые в другом. Пока
+  // их не назвать поимённо, расхождение остатков и оборотов приходится
+  // раскапывать вручную по выгрузкам.
+  const [unposted, setUnposted] = useState(null)
+  const [openType, setOpenType] = useState(null)
 
   async function load() {
     setError(null)
     try {
-      const [d, logs, sk, cov, pr, me, fr] = await Promise.all([
+      const [d, logs, sk, cov, pr, me, fr, un] = await Promise.all([
         api.checks({ rule, include_acked: showAcked }),
         api.importLog(),
         api.skippedKinds().catch(() => null),
@@ -65,6 +73,10 @@ export default function ChecksPage() {
         api.problemDocs().catch(() => null),
         api.manualEntries().catch(() => null),
         api.freshness().catch(() => null),
+        // Контуры сверяются по каждой фирме отдельно: базы 1С разные, и
+        // «нет пары» у Хайджина ничего не говорит про Инновейв. Фирмы
+        // приходят внутри ответа — выбор в шапке эндпоинт учитывает сам.
+        api.taxUnposted().catch(() => null),
       ])
       setData(d)
       setImports(logs)
@@ -73,6 +85,7 @@ export default function ChecksPage() {
       setProblems(pr)
       setManual(me)
       setFresh(fr)
+      setUnposted(un)
     } catch (err) {
       setError(err.message)
     }
@@ -104,6 +117,110 @@ export default function ChecksPage() {
       </div>
 
       {error && <div className="error">{error}</div>}
+
+      {/* Что проведено в одной базе 1С и не проведено в другой. Управленка и
+          налоговая — разные базы, документ попадает во вторую руками; пока
+          он не попал, товар в налоговой числится на складе, а выручки нет.
+          Раньше это было видно только косвенно — расхождением остатков. */}
+      {unposted?.firms?.length > 0 && (
+        <div className="fresh-block">
+          <h2 className="section-title">Управленка ↔ налоговая: непроведённое</h2>
+          <p className="muted">
+            Слева документ есть, справа нет. «Хвост» — документы свежее
+            последнего документа второго контура: обычное отставание,
+            бухгалтерия ещё не дошла. Всё остальное — дыра внутри закрытого
+            периода, её и надо разбирать.
+          </p>
+          <div className="table-wrap compact">
+            <table>
+              <thead>
+                <tr>
+                  <th>Фирма</th><th>Документы</th>
+                  <th className="num">Только в управленке</th>
+                  <th className="num">Только в налоговой</th>
+                  <th>Последний документ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unposted.firms.map((f) => f.types
+                  .filter((t) => t.only_upr_count || t.only_tax_count)
+                  .map((t) => {
+                    const firm = f.org
+                    const id = `${firm}:${t.key}`
+                    const open = openType === id
+                    return (
+                      <Fragment key={id}>
+                        <tr className="doc-row"
+                          onClick={() => setOpenType(open ? null : id)}>
+                          <td>{firm === 'hygiene' ? 'Innowave Hygiene' : 'Innowave'}</td>
+                          <td>{open ? '▾' : '▸'} {t.label}</td>
+                          <td className={`num ${t.gaps_upr ? 'sc-diff' : ''}`}>
+                            {t.upr_absent ? <span className="muted">не ведётся</span>
+                              : t.only_upr_count || '—'}
+                            {t.gaps_upr > 0 && <> · дыр <b>{t.gaps_upr}</b></>}
+                          </td>
+                          <td className={`num ${t.gaps_tax ? 'sc-diff' : ''}`}>
+                            {t.tax_absent ? <span className="muted">не ведётся</span>
+                              : t.only_tax_count || '—'}
+                            {t.gaps_tax > 0 && <> · дыр <b>{t.gaps_tax}</b></>}
+                          </td>
+                          <td className="muted">
+                            упр. {t.upr_last ? fdate(t.upr_last) : '—'} · нал.{' '}
+                            {t.tax_last ? fdate(t.tax_last) : '—'}
+                          </td>
+                        </tr>
+                        {open && (
+                          <tr>
+                            <td colSpan={5} className="doc-lines">
+                              {[['Только в управленке', t.only_upr],
+                                ['Только в налоговой', t.only_tax]].map(
+                                ([title, rows]) => rows.length > 0 && (
+                                  <div key={title}>
+                                    <div className="muted">{title}</div>
+                                    <table>
+                                      <thead>
+                                        <tr>
+                                          <th>Дата</th><th>Документ</th>
+                                          <th>Контрагент</th>
+                                          <th className="num">Кол-во</th>
+                                          <th className="num">Сумма</th>
+                                          <th></th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {rows.map((r, i) => (
+                                          <tr key={i}>
+                                            <td>{fdate(r.date)}</td>
+                                            <td>{r.number || '—'}</td>
+                                            <td>{r.party || '—'}</td>
+                                            <td className="num">
+                                              {r.qty ? r.qty.toLocaleString('ru-RU') : '—'}
+                                            </td>
+                                            <td className="num">
+                                              {t.by_amount ? formatMoney(r.amount, '') : '—'}
+                                            </td>
+                                            <td>
+                                              {r.tail
+                                                ? <span className="muted">хвост</span>
+                                                : <span className="sc-diff">дыра</span>}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                ))}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    )
+                  }))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {fresh?.rows?.length > 0 && (
         <div className="fresh-block">

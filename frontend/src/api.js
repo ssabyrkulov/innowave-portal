@@ -104,6 +104,7 @@ export const api = {
   },
   // Когда каждый контур 1С присылал данные последний раз.
   freshness: () => request('/integrations/freshness'),
+  taxUnposted: () => request('/tax/unposted'),
   skippedKinds: () => request('/integrations/skipped-kinds'),
   // Непроведённые и помеченные на удаление документы 1С — и проверка,
   // не посчитал ли их портал.
