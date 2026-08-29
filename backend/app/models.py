@@ -1186,6 +1186,23 @@ class TaxClientLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AppMigration(Base):
+    """Отметка о выполненной разовой правке данных.
+
+    Недостающие колонки досоздаются при каждом старте (это дёшево), а вот
+    переписывание уже загруженных строк гонять на каждом запуске нельзя:
+    оно читает таблицу продаж целиком. Отметка здесь означает «эта правка
+    прошла» — и больше портал к ней не возвращается.
+    """
+
+    __tablename__ = "app_migrations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ImportLog(Base):
     """Журнал загрузок Excel — кто, когда и что импортировал."""
 

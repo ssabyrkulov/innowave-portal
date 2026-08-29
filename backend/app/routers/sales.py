@@ -97,6 +97,37 @@ def _parse_float(value) -> float | None:
 
 
 def _row_hash(d: dict, org: str = models.DEFAULT_ORG) -> str:
+    """Ключ строки реализации: клиента опознаём по GUID, а не по названию.
+
+    В 1С контрагентов переименовывают — правят пробел, возвращают старое имя
+    точки, вписывают в название ИД SalesDoc. Пока имя входило в ключ, после
+    переименования те же самые строки приходили с другим хэшем и ложились
+    рядом со старыми: один магазин превращался в двух контрагентов, а его
+    история задваивалась. GUID при переименовании не меняется.
+
+    У строк без GUID (выгрузки прежнего образца) ключ прежний, до символа, —
+    иначе вся уже загруженная история приехала бы вторыми экземплярами.
+    """
+    client = d.get("client_guid") or d.get("client", "")
+    key = "|".join(
+        str(d.get(f, "") if f != "client" else client)
+        for f in (
+            "date", "client", "product", "qty", "price",
+            "amount", "doc_number", "warehouse", "doc_total",
+        )
+    )
+    return hashlib.sha256(f"{org}|{key}".encode()).hexdigest()
+
+
+def _legacy_row_hash(d: dict, org: str = models.DEFAULT_ORG) -> str:
+    """Ключ по названию клиента — каким он был до перехода на GUID.
+
+    Нужен разовой склейке (main.unify_clients_by_guid): прежде чем записать
+    строке новый хэш, она проверяет этим хэшем, что значения из базы дают в
+    точности тот ключ, под которым строка лежит. Совпало — округления при
+    записи в базу ничего не потеряли, и новый хэш совпадёт с тем, что
+    посчитает импорт по файлу.
+    """
     key = "|".join(
         str(d.get(f, ""))
         for f in (
@@ -268,6 +299,27 @@ def import_sales_workbook(
         if superseded:
             db.flush()
 
+    # --- Переименования контрагентов 1С ---
+    # Ключ строки — GUID, поэтому переименование больше не плодит дублей. Но
+    # название в базе осталось прежним, а дебиторка и вся отчётность группируют
+    # клиента по названию: без этой правки одна точка так и висела бы двумя
+    # строками — старой и новой. Обновляем разом по GUID, одним UPDATE на
+    # клиента.
+    renamed_clients = 0
+    fresh_names: dict[str, str] = {}
+    for parsed in parsed_rows:
+        if parsed.get("client_guid") and parsed.get("client"):
+            fresh_names[parsed["client_guid"]] = parsed["client"]
+    for guid, fresh in fresh_names.items():
+        renamed_clients += (
+            db.query(models.Sale)
+            .filter(models.Sale.organization == org,
+                    models.Sale.client_guid == guid,
+                    models.Sale.client != fresh)
+            .update({"client": fresh}, synchronize_session=False))
+    if renamed_clients:
+        db.flush()
+
     # --- Фаза 2: вставка с защитой от дублей (хэш учитывает организацию) ---
     existing_hashes = {h for (h,) in db.query(models.Sale.row_hash).all()}
     seen_in_file: set[str] = set()
@@ -315,6 +367,8 @@ def import_sales_workbook(
         # молчать о них нельзя: строки файла есть, а в учёт не пошли.
         "skipped_not_posted": len(not_posted),
         "updated_discounts": updated_discounts,
+        # Сколько строк переехало на новое название контрагента 1С.
+        "renamed_clients": renamed_clients,
         "replaced_rows": replaced,
         "superseded_doc_rows": superseded,
         "errors": errors,

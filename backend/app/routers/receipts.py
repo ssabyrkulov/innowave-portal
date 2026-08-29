@@ -212,6 +212,26 @@ def import_receipts_workbook(
         )
         db.flush()
 
+    # Переименования плательщиков 1С: название меняется, GUID нет. Оплаты
+    # узнаются по дате, сумме и плательщику (время в базе не хранится, пересчёт
+    # хэшей невозможен), поэтому старое название здесь — прямая причина дублей:
+    # платёж «не нашёлся» и лёг вторым. Подтягиваем свежее имя по GUID до того,
+    # как строим ключи.
+    renamed_payers = 0
+    fresh_payers: dict[str, str] = {}
+    for parsed in parsed_rows:
+        if parsed.get("payer_guid") and parsed.get("payer"):
+            fresh_payers[parsed["payer_guid"]] = parsed["payer"]
+    for guid, fresh in fresh_payers.items():
+        renamed_payers += (
+            db.query(models.Receipt)
+            .filter(models.Receipt.organization == org,
+                    models.Receipt.payer_guid == guid,
+                    models.Receipt.payer != fresh)
+            .update({"payer": fresh}, synchronize_session=False))
+    if renamed_payers:
+        db.flush()
+
     existing = {h for (h,) in db.query(models.Receipt.row_hash).all()}
     # Второй ключ — по деловым значениям, а не по хешу. Нужен на переходе со
     # старого формата выгрузок на новый: хеш строится из ДАТЫ СО ВРЕМЕНЕМ,
@@ -269,6 +289,8 @@ def import_receipts_workbook(
         "skipped_duplicates": skipped,
         # Сколько уже загруженных оплат получили ДокументGUID из нового формата.
         "guid_backfilled": adopted,
+        # Строки, переехавшие на новое название плательщика 1С.
+        "renamed_payers": renamed_payers,
         "skipped_not_posted": len(not_posted),
         "replaced_rows": replaced,
         "errors": errors,

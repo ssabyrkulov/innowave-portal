@@ -159,6 +159,101 @@ def backfill_organization() -> None:
                 ))
 
 
+def unify_clients_by_guid() -> None:
+    """Сводит переименованного в 1С контрагента обратно в одного. Разово.
+
+    До перехода на GUID ключ строки реализации включал название клиента.
+    Переименовали точку в 1С — та же самая реализация приходила с другим
+    ключом и ложилась рядом со старой: один магазин становился двумя
+    контрагентами, отгрузки оставались на одном, оплаты и возвраты уезжали
+    на другого, и сверка показывала расхождение на пустом месте.
+
+    Здесь это разбирается по GUID — он при переименовании не меняется:
+    строкам клиента ставится его нынешнее название, ключи пересчитываются
+    по GUID, а копии, которые после этого совпали, удаляются.
+
+    Строке переписывается ключ только тогда, когда значения из базы дают в
+    точности тот ключ, под которым она лежит (проверка старым хэшем). Не
+    совпало — значит запись в базу что-то округлила, пересчитанный ключ
+    разошёлся бы с тем, что посчитает импорт по файлу; такую строку не
+    трогаем и считаем отдельно.
+    """
+    from sqlalchemy.orm import Session as _Session
+
+    from . import models
+    from .database import SessionLocal
+    from .routers.sales import _legacy_row_hash, _row_hash
+
+    NAME = "clients_by_guid_v1"
+    db: _Session = SessionLocal()
+    try:
+        if db.query(models.AppMigration).filter_by(name=NAME).first():
+            return
+        pairs = (db.query(models.Sale.organization, models.Sale.client_guid)
+                 .filter(models.Sale.client_guid.isnot(None))
+                 .distinct().all())
+        renamed = merged = skipped = 0
+        for org, guid in pairs:
+            # По одному клиенту за раз: у продаж бывают сотни тысяч строк, и
+            # разовая правка не должна поднимать их в память целиком.
+            rows = (db.query(models.Sale)
+                    .filter(models.Sale.organization == org,
+                            models.Sale.client_guid == guid)
+                    .order_by(models.Sale.id).all())
+            if not rows:
+                continue
+
+            def as_dict(r) -> dict:
+                num = lambda v: float(v) if v is not None else None  # noqa: E731
+                return {"date": r.date, "client": r.client,
+                        "client_guid": r.client_guid, "product": r.product,
+                        "qty": num(r.qty), "price": num(r.price),
+                        "amount": num(r.amount), "doc_number": r.doc_number,
+                        "warehouse": r.warehouse, "doc_total": num(r.doc_total)}
+
+            by_key: dict[str, models.Sale] = {}
+            survivors: list[models.Sale] = []
+            for r in rows:
+                d = as_dict(r)
+                if _legacy_row_hash(d, org) != r.row_hash:
+                    skipped += 1  # округление при записи — ключ не пересчитать
+                    survivors.append(r)
+                    continue
+                key = _row_hash(d, org)
+                if key not in by_key:
+                    by_key[key] = r
+                    r.row_hash = key
+                    survivors.append(r)
+                else:
+                    db.delete(r)  # копия под другим названием того же клиента
+                    merged += 1
+
+            # Нынешнее название — из самой свежей строки клиента: последняя
+            # выгрузка знает, как он называется сегодня. Удаляемых строк не
+            # касаемся: их уже нет.
+            fresh = max(rows, key=lambda r: (r.date, r.id)).client
+            for r in survivors:
+                if r.client != fresh:
+                    r.client = fresh
+                    renamed += 1
+            db.flush()
+
+        db.add(models.AppMigration(
+            name=NAME,
+            note=f"склеено {merged}, переименовано строк {renamed}, "
+                 f"не тронуто {skipped}"))
+        db.commit()
+        if merged or renamed:
+            print(f"[startup] Клиенты 1С сведены по GUID: склеено дублей "
+                  f"{merged}, переименовано строк {renamed}, "
+                  f"не тронуто {skipped}", flush=True)
+    except Exception as err:  # noqa: BLE001 — портал обязан подняться и без этого
+        db.rollback()
+        print(f"[startup] Склейка клиентов по GUID не прошла: {err}", flush=True)
+    finally:
+        db.close()
+
+
 # Готовность БД: пока False — API отвечает понятной ошибкой, а не падает.
 db_state: dict = {"ready": False, "error": None}
 
@@ -168,6 +263,7 @@ def init_database() -> None:
     Base.metadata.create_all(bind=engine)
     run_mini_migrations()
     backfill_organization()
+    unify_clients_by_guid()
     seed_initial_admin()
     # Зеркало SalesDoc: держим копию журналов в базе и обновляем в фоне
     # (дельта каждые 5 минут, полная выгрузка раз в сутки). Благодаря этому
