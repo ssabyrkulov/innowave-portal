@@ -444,7 +444,9 @@ export default function SalesDocPage() {
       {period && (
         <div className="sd-compare">
           <CompareCard title="Реализации за период" our={period.sales.our}
-            sd={period.sales.sd} diff={period.sales.diff} note={`${period.sales.sd_count} заказов в SD`} />
+            sd={period.sales.sd} diff={period.sales.diff}
+            note={`${period.sales.sd_count} заказов в SD · ${period.sales.our_docs ?? '—'} док. в 1С`
+              + (period.sales.discounts ? ` · скидки 1С: ${money(period.sales.discounts)}` : '')} />
           <CompareCard title="Оплаты за период" our={period.payments.our}
             sd={period.payments.sd} diff={period.payments.diff} note={`${period.payments.sd_count} оплат в SD`} />
         </div>

@@ -20,7 +20,6 @@ from ..database import get_db
 from ..deps import require_roles
 from ..services import salesdoc, salesdoc_mirror
 from .receipts import CUSTOMER_PAYMENT_PREFIX, receivables
-from .sales import sales_summary
 
 # Сопоставление имён 1С ↔ SalesDoc живёт в зеркале: дебиторке оно нужно так же,
 # как сверке, а импортировать роутер из роутера нельзя (получится цикл).
@@ -935,8 +934,28 @@ def reconcile_period(
     except salesdoc.SalesDocError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-    our_sales = sales_summary(db=db, _=user, date_from=date_from, date_to=date_to, top=1, org=org)
-    our_sales_total = round(float(our_sales["revenue"]), 2)
+    # Наши реализации считаем по документам и НЕТТО — как их видит SalesDoc.
+    # Раньше бралась сумма строк до скидки (sales_summary), и карточка
+    # сравнивала брутто 1С с нетто SalesDoc: каждая скидка выглядела
+    # расхождением. Итог документа (СуммаДокумента) в 1С уже после скидки —
+    # он и есть правильная сторона сравнения; без него считаем по строкам с
+    # учётом процента скидки.
+    sq = (models.org_scope(db.query(models.Sale), models.Sale, org)
+          .filter(models.Sale.date >= date_from, models.Sale.date <= date_to))
+    our_docs: dict = {}
+    for s in sq.all():
+        key = (s.doc_number or f"~{s.client}", s.date)
+        d = our_docs.setdefault(key, {"gross": 0.0, "net_lines": 0.0,
+                                      "doc_total": None})
+        amt = float(s.amount or 0)
+        d["gross"] += amt
+        d["net_lines"] += amt * (1 - float(s.discount_pct or 0) / 100)
+        if s.doc_total is not None:
+            d["doc_total"] = float(s.doc_total)
+    our_sales_gross = round(sum(d["gross"] for d in our_docs.values()), 2)
+    our_sales_total = round(sum(
+        d["doc_total"] if d["doc_total"] is not None else d["net_lines"]
+        for d in our_docs.values()), 2)
 
     # Наши оплаты клиентов за период (в сомах).
     q = (
@@ -954,6 +973,10 @@ def reconcile_period(
             "sd": sd_orders["total"],
             "diff": round(our_sales_total - sd_orders["total"], 2),
             "sd_count": sd_orders["count"],
+            # Скидки, на которые нетто меньше брутто, — отдельной цифрой:
+            # раньше вся эта сумма выглядела расхождением с SalesDoc.
+            "discounts": round(our_sales_gross - our_sales_total, 2),
+            "our_docs": len(our_docs),
         },
         "payments": {
             "our": our_pay_total,

@@ -56,6 +56,10 @@ HEADER_MAP = {
     "НоменклатураЕдиницаИзмерения": "unit",
     "КонтрагентSD_АгентНаименование": "agent",
     "ПроцентСкидкиНаценки": "discount_pct",
+    # Новый пакет выгрузки называет ту же колонку иначе. Без этой строки
+    # скидка терялась при импорте, и сверка с SalesDoc сравнивала сумму до
+    # скидки с суммой после — карточка показывала ложную разницу.
+    "ПроцентСкидкиСтроки": "discount_pct",
     "СчетУчета": "account",
     "ОтветственныйНаименование": "responsible",
     # Новый вариант выгрузки: ФИО того, кто оформил документ
@@ -269,14 +273,30 @@ def import_sales_workbook(
     seen_in_file: set[str] = set()
     added = 0
     skipped = 0
+    # Скидка в хэш не входит: строки, загруженные до того, как импорт узнал
+    # колонку «ПроцентСкидкиСтроки», при повторной загрузке отсеиваются как
+    # дубли — и без дозаписи остались бы без скидки навсегда. Ненулевая
+    # скидка у единиц строк, так что точечный UPDATE по хэшу копеечный.
+    backfill: dict[str, float] = {}
     for parsed in parsed_rows:
         h = _row_hash(parsed, org)
         if h in existing_hashes or h in seen_in_file:
             skipped += 1
+            if parsed.get("discount_pct"):
+                backfill[h] = parsed["discount_pct"]
             continue
         seen_in_file.add(h)
         db.add(models.Sale(**parsed, organization=org, row_hash=h))
         added += 1
+
+    updated_discounts = 0
+    for h, pct in backfill.items():
+        updated_discounts += (
+            db.query(models.Sale)
+            .filter(models.Sale.row_hash == h,
+                    (models.Sale.discount_pct.is_(None))
+                    | (models.Sale.discount_pct != pct))
+            .update({"discount_pct": pct}, synchronize_session=False))
 
     db.add(models.ImportLog(
         filename=filename or "upload.xlsx",
@@ -294,6 +314,7 @@ def import_sales_workbook(
         # Непроведённые и помеченные на удаление — не ошибка импорта, но
         # молчать о них нельзя: строки файла есть, а в учёт не пошли.
         "skipped_not_posted": len(not_posted),
+        "updated_discounts": updated_discounts,
         "replaced_rows": replaced,
         "superseded_doc_rows": superseded,
         "errors": errors,
