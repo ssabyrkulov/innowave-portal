@@ -30,11 +30,35 @@ const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave' }
 function Journal() {
   const [state, setState] = useState('open')
   const [data, setData] = useState(null)
+  const [busy, setBusy] = useState(false)
+  // Журнал пополняется, когда приходят файлы из 1С. Пока после запуска не
+  // было ни одной выгрузки, он пуст — и это выглядит как поломка. Поэтому
+  // первый раз считаем сами, а дальше есть кнопка.
+  const [scanned, setScanned] = useState(false)
 
   function load(st = state) {
-    api.contourEvents(st).then(setData).catch(() => setData(null))
+    return api.contourEvents(st).then(setData).catch(() => setData(null))
   }
   useEffect(() => { load(state) }, [state])
+
+  useEffect(() => {
+    if (!data || scanned || data.rows.length || state !== 'open') return
+    setScanned(true)
+    rescan()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, scanned, state])
+
+  async function rescan() {
+    setBusy(true)
+    try {
+      await api.contourEventsScan()
+      await load()
+    } catch (e) {
+      alert('Ошибка: ' + e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function ack(id) {
     try {
@@ -58,14 +82,23 @@ function Journal() {
             className={`btn btn-sm ${state === k ? '' : 'btn-ghost'}`}
             onClick={() => setState(k)}>{label}</button>
         ))}
+        <button className="btn btn-sm" disabled={busy} onClick={rescan}>
+          {busy ? 'Считаю…' : 'Пересчитать'}
+        </button>
         {data && (
           <span className="muted">
-            открытых: {data.open_total} · из них дыр: {data.open_gaps}
+            открытых: {data.open_total} · из них просрочено: {data.open_gaps}
           </span>
         )}
       </div>
       {!data ? <div className="muted">Загрузка…</div>
-        : data.rows.length === 0 ? <p className="muted">Пусто.</p> : (
+        : data.rows.length === 0 ? (
+          <p className="muted">
+            {state === 'open'
+              ? 'Открытых расхождений нет.'
+              : 'Записей нет.'}
+          </p>
+        ) : (
         <div className="table-wrap compact">
           <table>
             <thead>
@@ -93,7 +126,10 @@ function Journal() {
                     {e.resolved_at
                       ? <span className="sc-ok">закрылось {fdate(e.resolved_at.slice(0, 10))}</span>
                       : e.acked_at ? <span className="muted">норма</span>
-                        : e.gap ? <span className="sc-diff">дыра</span>
+                        : e.gap ? <span className="sc-diff"
+                            title="Во второй базе уже есть документы более поздние, чем этот, — значит его пропустили, а не просто не успели">
+                            просрочено
+                          </span>
                           : <span className="muted">нет пары</span>}
                   </td>
                   <td>
@@ -130,7 +166,7 @@ export default function ContoursPage() {
         <h1>Управленка ↔ налоговая</h1>
         <span className="muted">
           {unposted
-            ? `дыр: ${unposted.gaps} · в хвосте: ${unposted.tail}`
+            ? `просрочено: ${unposted.gaps} · ждут очереди: ${unposted.tail}`
             : 'Загрузка…'}
         </span>
       </div>
@@ -138,14 +174,19 @@ export default function ContoursPage() {
     {unposted?.firms?.length > 0 && (
       <div className="fresh-block">
         <p className="muted">
-          Пара ищется по количеству, а не по сумме: штуки в контурах
-          одинаковы, а цены разные — в налоговой трансфертные. Дата тоже
-          своя: документ проводят во второй базе позже, иногда через
-          месяцы. «Хвост» — документы свежее последнего документа второго
-          контура: обычное отставание. «Дыра» — пропуск внутри закрытого
-          периода, вот её и надо разбирать. Где контур ведёт лишь часть
-          документов (у Хайджина налоговая — это ЭСФ на юрлиц и сводные),
-          непарные помечены нейтрально: это устройство учёта, а не потеря.
+          Документ есть в одной базе 1С и не найден в другой. Две пометки
+          различают спокойное и тревожное. <b>Ждёт очереди</b> — документ
+          свежее последнего документа второй базы: бухгалтерия просто ещё не
+          дошла, это норма. <b>Просрочено</b> — во второй базе уже есть
+          документы более поздние, а этот так и не появился: его пропустили,
+          и вот это надо разбирать.
+          <br />
+          Пара ищется по количеству, а не по сумме: штуки в базах одинаковы,
+          а цены разные — в налоговой трансфертные. Дата тоже своя: документ
+          проводят во второй базе позже, иногда через месяцы. Там, где вторая
+          база ведёт лишь часть документов (у Хайджина налоговая — это ЭСФ на
+          юрлиц и сводные), непарные помечены нейтрально «нет пары»: это
+          устройство учёта, а не потеря.
         </p>
         <div className="table-wrap compact">
           <table>
@@ -174,12 +215,12 @@ export default function ContoursPage() {
                         <td className={`num ${t.gaps_upr ? 'sc-diff' : ''}`}>
                           {t.upr_absent ? <span className="muted">не ведётся</span>
                             : t.only_upr_count || '—'}
-                          {t.gaps_upr > 0 && <> · дыр <b>{t.gaps_upr}</b></>}
+                          {t.gaps_upr > 0 && <> · просрочено <b>{t.gaps_upr}</b></>}
                         </td>
                         <td className={`num ${t.gaps_tax ? 'sc-diff' : ''}`}>
                           {t.tax_absent ? <span className="muted">не ведётся</span>
                             : t.only_tax_count || '—'}
-                          {t.gaps_tax > 0 && <> · дыр <b>{t.gaps_tax}</b></>}
+                          {t.gaps_tax > 0 && <> · просрочено <b>{t.gaps_tax}</b></>}
                         </td>
                         <td className="muted">
                           {t.paired} {pairs(t.paired)}
@@ -229,7 +270,10 @@ export default function ContoursPage() {
                                             {r.tail
                                               ? <span className="muted">хвост</span>
                                               : r.gap
-                                                ? <span className="sc-diff">дыра</span>
+                                                ? <span className="sc-diff"
+                                                    title="Во второй базе уже есть документы более поздние, чем этот, — значит его пропустили, а не просто не успели">
+                                                    просрочено
+                                                  </span>
                                                 : <span className="muted">нет пары</span>}
                                           </td>
                                         </tr>

@@ -106,6 +106,7 @@ export const api = {
   freshness: () => request('/integrations/freshness'),
   taxUnposted: () => request('/tax/unposted'),
   contourEvents: (state = 'open') => request(`/tax/contour-events?state=${state}`),
+  contourEventsScan: () => request('/tax/contour-events/scan', { method: 'POST' }),
   contourEventAck: (id) => request(`/tax/contour-events/${id}/ack`, { method: 'POST' }),
   skippedKinds: () => request('/integrations/skipped-kinds'),
   // Непроведённые и помеченные на удаление документы 1С — и проверка,
