@@ -18,6 +18,7 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -1422,16 +1423,27 @@ def scan_contour_events(db: Session) -> dict:
         o = firm["org"]
         for t in firm["types"]:
             for side, rows in (("upr", t["only_upr"]), ("tax", t["only_tax"])):
+                # Порядок фиксируем: по нему нумеруются одинаковые документы,
+                # и при следующем пересчёте нумерация должна получиться той
+                # же, иначе события заводились бы заново каждый раз.
+                rows = sorted(rows, key=lambda x: (
+                    x["date"], str(x["number"] or ""), str(x["party"] or ""),
+                    x["qty"], x["amount"]))
+                repeats: dict[str, int] = defaultdict(int)
                 for r in rows:
                     # Ключ документа: номер бывает пустым (у возвратов его
-                    # нет вовсе), поэтому в ключ идут ещё дата и суммы —
-                    # иначе два безымянных документа склеились бы в одно
-                    # событие.
-                    key = "|".join([
+                    # нет вовсе), поэтому в ключ идут ещё дата и суммы. Но и
+                    # этого мало: два возврата одному клиенту в один день на
+                    # одну сумму — обычное дело, и такие документы разводятся
+                    # порядковым номером. Первый остаётся без суффикса, чтобы
+                    # уже заведённые события не потерялись.
+                    base = "|".join([
                         o, t["key"], side, r["date"], str(r["number"] or ""),
                         str(r["party"] or ""), f'{r["qty"]:.3f}',
                         f'{r["amount"]:.2f}',
                     ])
+                    repeats[base] += 1
+                    key = base if repeats[base] == 1 else f"{base}#{repeats[base]}"
                     seen.add(key)
                     e = existing.get(key)
                     if e is None:
@@ -1454,7 +1466,14 @@ def scan_contour_events(db: Session) -> dict:
             # Пара нашлась — расхождение закрылось само.
             e.resolved_at = now
             closed += 1
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as err:
+        # Журнал — вспомогательная вещь: его сбой не должен ни ронять
+        # страницу, ни мешать приёму файлов.
+        db.rollback()
+        print(f"[contours] журнал не записан: {err}", flush=True)
+        return {"added": 0, "closed": 0, "error": "не удалось записать журнал"}
     open_gaps = (db.query(models.ContourEvent)
                  .filter(models.ContourEvent.resolved_at.is_(None),
                          models.ContourEvent.acked_at.is_(None),

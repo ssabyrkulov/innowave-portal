@@ -454,11 +454,18 @@ async def guard_db(request: Request, call_next):
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Необработанные исключения отдаём с текстом, а не «пустым» 500 — чтобы на
-    фронте вместо безликого «Ошибка запроса» была видна реальная причина."""
+    фронте вместо безликого «Ошибка запроса» была видна реальная причина.
+
+    Текст режем: у ошибок SQLAlchemy в сообщение попадает весь запрос со
+    списком параметров, и пользователь видит простыню SQL вместо смысла.
+    Полная трассировка уходит в логи, где ей и место."""
     traceback.print_exc()
+    text = str(exc).split("\n[SQL:")[0].strip()
+    if len(text) > 300:
+        text = text[:300] + "…"
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Внутренняя ошибка: {type(exc).__name__}: {exc}"},
+        content={"detail": f"Внутренняя ошибка: {type(exc).__name__}: {text}"},
     )
 
 
