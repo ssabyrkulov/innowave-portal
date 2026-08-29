@@ -533,6 +533,23 @@ export default function SalesDocPage() {
                       <button className="client-link" onClick={() => setDetail(r)}>
                         {r.name}
                       </button>
+                      {/* ИД точки в SalesDoc и её код 1С: по ним строка
+                          находится в самом SalesDoc и в 1С. Без них таблица
+                          называет расхождение, но не говорит, какую карточку
+                          открывать, — имена в двух системах сплошь и рядом
+                          разные. Текст выделяемый: ИД чаще всего копируют. */}
+                      {(r.sd_id || r.code_1C) && (
+                        <div className="rc-ids">
+                          {r.sd_id && (
+                            <code title="ИД точки в SalesDoc">{r.sd_id}</code>
+                          )}
+                          {r.code_1C && (
+                            <code title="Код 1С в карточке SalesDoc">
+                              код {r.code_1C}
+                            </code>
+                          )}
+                        </div>
+                      )}
                       {/* Имя точки в SalesDoc показываем, только когда оно
                           расходится с именем в 1С: связка идёт по ИД из
                           названия контрагента, и устаревший или неверно
