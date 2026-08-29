@@ -8,6 +8,7 @@ import AgentsPage from './pages/AgentsPage'
 import DebtPage from './pages/DebtPage'
 import CalendarPage from './pages/CalendarPage'
 import ChecksPage from './pages/ChecksPage'
+import ContoursPage from './pages/ContoursPage'
 import PaymentsPage from './pages/PaymentsPage'
 import UsersPage from './pages/UsersPage'
 import UnitEconomicsPage from './pages/UnitEconomicsPage'
@@ -53,6 +54,7 @@ export default function App() {
         <Route path="salesdoc" element={<SalesDocPage />} />
         <Route path="id-match" element={<IdMatchPage />} />
         <Route path="tax" element={<TaxPage />} />
+        <Route path="contours" element={<ContoursPage />} />
         <Route path="accounting" element={<AccountingPage />} />
         <Route path="work" element={<WorkPage />} />
         <Route
