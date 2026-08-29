@@ -18,6 +18,100 @@ const pairs = (n) => {
 // числится на складе, а выручки нет. Видно это было только косвенно —
 // расхождением остатков, и причину искали раскопками в выгрузках. Страница
 // называет причину прямо: что проведено здесь и не проведено там.
+const KINDS = {
+  sale: 'Реализация', return: 'Возврат',
+  writeoff: 'Списание', purchase: 'Поступление',
+}
+const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave' }
+
+// Момент, когда расхождение заметили, знает только сам портал: 1С про него
+// не помнит, а список «сейчас» ничего не хранит — документ провели во второй
+// базе, и расхождение исчезло, будто его не было. Журнал держит его событием.
+function Journal() {
+  const [state, setState] = useState('open')
+  const [data, setData] = useState(null)
+
+  function load(st = state) {
+    api.contourEvents(st).then(setData).catch(() => setData(null))
+  }
+  useEffect(() => { load(state) }, [state])
+
+  async function ack(id) {
+    try {
+      await api.contourEventAck(id)
+      load()
+    } catch (e) { alert('Ошибка: ' + e.message) }
+  }
+
+  return (
+    <>
+      <h2 className="section-title">Журнал расхождений</h2>
+      <p className="muted">
+        Каждое расхождение записано событием: когда замечено и чем
+        закончилось. Ушло само — значит документ провели во второй базе.
+        «Это норма» убирает событие из открытых, но не из журнала.
+      </p>
+      <div className="rc-period">
+        {[['open', 'Открытые'], ['resolved', 'Закрылись сами'],
+          ['acked', 'Признаны нормой'], ['all', 'Все']].map(([k, label]) => (
+          <button key={k}
+            className={`btn btn-sm ${state === k ? '' : 'btn-ghost'}`}
+            onClick={() => setState(k)}>{label}</button>
+        ))}
+        {data && (
+          <span className="muted">
+            открытых: {data.open_total} · из них дыр: {data.open_gaps}
+          </span>
+        )}
+      </div>
+      {!data ? <div className="muted">Загрузка…</div>
+        : data.rows.length === 0 ? <p className="muted">Пусто.</p> : (
+        <div className="table-wrap compact">
+          <table>
+            <thead>
+              <tr>
+                <th>Замечено</th><th>Фирма</th><th>Документ</th>
+                <th>Контрагент</th><th className="num">Кол-во</th>
+                <th className="num">Сумма</th><th>Состояние</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((e) => (
+                <tr key={e.id}>
+                  <td>{fdate(e.first_seen.slice(0, 10))}</td>
+                  <td className="muted">{FIRMS[e.organization] || e.organization}</td>
+                  <td>
+                    {KINDS[e.kind] || e.kind} {e.number || '—'}
+                    <span className="muted"> · {e.side === 'upr'
+                      ? 'только в управленке' : 'только в налоговой'}</span>
+                    <div className="muted skipped-cols">от {fdate(e.date)}</div>
+                  </td>
+                  <td>{e.party || '—'}</td>
+                  <td className="num">{e.qty ? e.qty.toLocaleString('ru-RU') : '—'}</td>
+                  <td className="num">{formatMoney(e.amount, '')}</td>
+                  <td>
+                    {e.resolved_at
+                      ? <span className="sc-ok">закрылось {fdate(e.resolved_at.slice(0, 10))}</span>
+                      : e.acked_at ? <span className="muted">норма</span>
+                        : e.gap ? <span className="sc-diff">дыра</span>
+                          : <span className="muted">нет пары</span>}
+                  </td>
+                  <td>
+                    {!e.resolved_at && !e.acked_at && (
+                      <button className="btn btn-ghost btn-sm"
+                        onClick={() => ack(e.id)}>это норма</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  )
+}
+
 export default function ContoursPage() {
   const [unposted, setUnposted] = useState(null)
   const [openType, setOpenType] = useState(null)
@@ -161,6 +255,8 @@ export default function ContoursPage() {
         Все документы обеих баз нашли пару — расхождений нет.
       </p>
     )}
+
+    <Journal />
     </div>
   )
 }

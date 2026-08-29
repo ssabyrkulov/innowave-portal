@@ -84,7 +84,8 @@ const SECONDARY = [
   { to: '/salesdoc', icon: '⚖️', label: 'Сверка SD', editOnly: true },
   { to: '/id-match', icon: '🔗', label: 'Сверка по ID', editOnly: true },
   { to: '/tax', icon: '🧾', label: 'Налоговая', editOnly: true },
-  { to: '/contours', icon: '⚖', label: 'Контуры 1С', editOnly: true },
+  { to: '/contours', icon: '⚖', label: 'Контуры 1С', editOnly: true,
+    contourBadge: true },
   { to: '/accounting', icon: '📚', label: 'Учёт 1С', adminOnly: true },
   { to: '/tools/unit-economics', icon: '🧮', label: 'Юнит-экономика', adminOnly: true },
   { to: '/users', icon: '👥', label: 'Пользователи', adminOnly: true },
@@ -93,6 +94,10 @@ const SECONDARY = [
 export default function Layout() {
   const { user, logout, can } = useAuth()
   const [alerts, setAlerts] = useState(null)
+  // Открытые расхождения контуров: документ, проведённый в одной базе 1С и
+  // не проведённый в другой. Без счётчика о нём узнают, только если зайти
+  // на страницу, — а узнать надо сразу.
+  const [contour, setContour] = useState(null)
   const [moreOpen, setMoreOpen] = useState(false)
   // Свёрнутая боковая панель (только десктоп) — состояние запоминаем.
   const [collapsed, setCollapsed] = useState(
@@ -114,6 +119,10 @@ export default function Layout() {
       .checksCount()
       .then(setAlerts)
       .catch(() => {})
+    api
+      .contourEvents('open')
+      .then((d) => setContour(d.open_gaps))
+      .catch(() => {})
   }, [location.pathname])
 
   // Закрываем лист «Ещё» при любой навигации
@@ -127,6 +136,16 @@ export default function Layout() {
         title={`Критичных: ${alerts.critical}, предупреждений: ${alerts.warning}`}
       >
         {alertTotal > 99 ? '99+' : alertTotal}
+      </span>
+    ) : null
+
+  // Считаем только дыры: хвост — обычное отставание бухгалтерии, из-за него
+  // счётчик горел бы всегда и перестал бы значить хоть что-то.
+  const contourBadge =
+    contour > 0 ? (
+      <span className="nav-badge nav-badge-critical"
+        title={`Расхождений контуров: ${contour}`}>
+        {contour > 99 ? '99+' : contour}
       </span>
     ) : null
 
@@ -183,6 +202,7 @@ export default function Layout() {
               title={collapsed ? i.label : undefined}>
               <span className="nav-ico">{i.icon}</span>
               <span className="nav-txt">{i.label}</span>
+              {i.contourBadge && contourBadge}
             </NavLink>
           ))}
         </nav>
@@ -261,6 +281,7 @@ export default function Layout() {
                 <NavLink key={i.to} to={i.to} className="sheet-link">
                   <span className="sheet-link-icon">{i.icon}</span>
                   {i.label}
+                  {i.contourBadge && contourBadge}
                 </NavLink>
               ))}
             </div>

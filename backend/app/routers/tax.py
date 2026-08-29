@@ -1367,3 +1367,144 @@ def tax_unposted(
                     + t["only_tax_count"] - t["gaps_tax"]
                     for f in out_firms for t in f["types"]),
     }
+
+
+def scan_contour_events(db: Session) -> dict:
+    """Заносит в журнал расхождения контуров: новые — заводит, ушедшие —
+    закрывает.
+
+    Сверка сама по себе показывает только «сейчас»: документ без пары
+    сегодня есть, завтра бухгалтер провёл его во второй базе — и он исчез,
+    будто ничего не было. Для «ничего не забываем» этого мало, поэтому
+    каждое расхождение живёт отдельной записью: замечено такого-то числа,
+    закрылось такого-то. Повтор той же истории виден как повтор.
+
+    Считается по всем фирмам сразу — журнал общий, а фильтруют его при
+    показе.
+    """
+    from datetime import datetime
+
+    data = tax_unposted(db=db, _=None, org="all", limit=100000)
+    now = datetime.utcnow()
+    seen: set[str] = set()
+    added = closed = 0
+    existing = {e.key: e for e in db.query(models.ContourEvent).all()}
+
+    for firm in data["firms"]:
+        o = firm["org"]
+        for t in firm["types"]:
+            for side, rows in (("upr", t["only_upr"]), ("tax", t["only_tax"])):
+                for r in rows:
+                    # Ключ документа: номер бывает пустым (у возвратов его
+                    # нет вовсе), поэтому в ключ идут ещё дата и суммы —
+                    # иначе два безымянных документа склеились бы в одно
+                    # событие.
+                    key = "|".join([
+                        o, t["key"], side, r["date"], str(r["number"] or ""),
+                        str(r["party"] or ""), f'{r["qty"]:.3f}',
+                        f'{r["amount"]:.2f}',
+                    ])
+                    seen.add(key)
+                    e = existing.get(key)
+                    if e is None:
+                        db.add(models.ContourEvent(
+                            key=key, organization=o, kind=t["key"], side=side,
+                            doc_date=date.fromisoformat(r["date"]),
+                            doc_number=r["number"], party=r["party"],
+                            qty=r["qty"], amount=r["amount"],
+                            gap=bool(r.get("gap")),
+                            first_seen=now, last_seen=now))
+                        added += 1
+                    else:
+                        e.last_seen = now
+                        # Документ снова без пары — событие снова открыто.
+                        e.resolved_at = None
+                        e.gap = bool(r.get("gap"))
+
+    for key, e in existing.items():
+        if key not in seen and e.resolved_at is None:
+            # Пара нашлась — расхождение закрылось само.
+            e.resolved_at = now
+            closed += 1
+    db.commit()
+    open_gaps = (db.query(models.ContourEvent)
+                 .filter(models.ContourEvent.resolved_at.is_(None),
+                         models.ContourEvent.acked_at.is_(None),
+                         models.ContourEvent.gap.is_(True)).count())
+    return {"added": added, "closed": closed, "open_gaps": open_gaps}
+
+
+@router.post("/contour-events/scan")
+def contour_events_scan(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Пересчитать журнал расхождений (обычно вызывается после импорта)."""
+    return scan_contour_events(db)
+
+
+@router.get("/contour-events")
+def contour_events(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = "all",
+    state: str = Query(default="open", pattern="^(open|resolved|acked|all)$"),
+    limit: int = Query(default=200, le=1000),
+):
+    """Журнал расхождений: что заметили, когда и чем закончилось."""
+    q = db.query(models.ContourEvent)
+    o = (org or "").strip().lower()
+    if o in models.ORGS:
+        q = q.filter(models.ContourEvent.organization == o)
+    if state == "open":
+        q = q.filter(models.ContourEvent.resolved_at.is_(None),
+                     models.ContourEvent.acked_at.is_(None))
+    elif state == "resolved":
+        q = q.filter(models.ContourEvent.resolved_at.isnot(None))
+    elif state == "acked":
+        q = q.filter(models.ContourEvent.acked_at.isnot(None))
+    rows = (q.order_by(models.ContourEvent.first_seen.desc(),
+                       models.ContourEvent.id.desc()).limit(limit).all())
+    return {
+        "rows": [{
+            "id": e.id,
+            "organization": e.organization,
+            "kind": e.kind,
+            "side": e.side,
+            "date": e.doc_date.isoformat(),
+            "number": e.doc_number,
+            "party": e.party,
+            "qty": float(e.qty or 0),
+            "amount": float(e.amount or 0),
+            "gap": bool(e.gap),
+            "first_seen": e.first_seen.isoformat(),
+            "resolved_at": e.resolved_at.isoformat() if e.resolved_at else None,
+            "acked_at": e.acked_at.isoformat() if e.acked_at else None,
+            "note": e.note,
+        } for e in rows],
+        "open_gaps": (db.query(models.ContourEvent)
+                      .filter(models.ContourEvent.resolved_at.is_(None),
+                              models.ContourEvent.acked_at.is_(None),
+                              models.ContourEvent.gap.is_(True)).count()),
+        "open_total": (db.query(models.ContourEvent)
+                       .filter(models.ContourEvent.resolved_at.is_(None),
+                               models.ContourEvent.acked_at.is_(None)).count()),
+    }
+
+
+@router.post("/contour-events/{event_id}/ack")
+def contour_event_ack(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current: models.User = Depends(can_edit),
+):
+    """«Это норма» — событие уходит из открытых, но остаётся в журнале."""
+    from datetime import datetime
+
+    e = db.query(models.ContourEvent).get(event_id)
+    if e is None:
+        raise HTTPException(status_code=404, detail="Событие не найдено")
+    e.acked_at = datetime.utcnow()
+    e.acked_by = current.id
+    db.commit()
+    return {"status": "ok"}

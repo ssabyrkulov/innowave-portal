@@ -1186,6 +1186,46 @@ class TaxClientLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ContourEvent(Base):
+    """Расхождение между базами 1С: документ, у которого нет пары в другой.
+
+    Портал сверяет контуры каждый раз заново, и картинка «сейчас» ничего не
+    помнит: документ появился без пары, через месяц бухгалтер провёл его во
+    второй базе — и расхождение исчезло, будто его не было. Здесь оно
+    остаётся событием: когда замечено, когда закрылось, кто счёл нормой.
+    Так «ничего не забываем» перестаёт зависеть от того, кто и когда открыл
+    страницу.
+
+    Ключ — фирма, вид документа, сторона и сам документ. Пропал из списка
+    непарных (нашлась пара) — событие закрывается, но не стирается: повтор
+    той же истории будет виден как повтор.
+    """
+
+    __tablename__ = "contour_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    key: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    organization: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False, index=True)  # sale|return|writeoff|purchase
+    side: Mapped[str] = mapped_column(String, nullable=False, index=True)  # upr|tax
+    doc_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    doc_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    party: Mapped[str | None] = mapped_column(String, nullable=True)
+    qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # Дыра или хвост на момент, когда событие завели: хвост — обычное
+    # отставание, дыра — пропуск внутри закрытого периода.
+    gap: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    first_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Заполняется, когда документ нашёл пару: расхождение закрылось само.
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # «Это норма» — отметка человека, чтобы список не мозолил глаза.
+    acked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    acked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
 class AppMigration(Base):
     """Отметка о выполненной разовой правке данных.
 

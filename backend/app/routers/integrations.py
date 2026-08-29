@@ -446,6 +446,22 @@ def sniff_kind(content: bytes) -> str:
     return "unknown"
 
 
+def _scan_contours(db) -> dict | None:
+    """Обновляет журнал расхождений контуров после приёма документа.
+
+    Считать это при открытии страницы поздно: расхождение, возникшее и
+    исчезнувшее между визитами, так и осталось бы незамеченным. Сбой
+    журнала не должен ронять приём файла — он важнее.
+    """
+    try:
+        from .tax import scan_contour_events
+        return scan_contour_events(db)
+    except Exception as err:  # noqa: BLE001 — импорт важнее журнала
+        db.rollback()
+        print(f"[inbox] журнал расхождений не обновлён: {err}", flush=True)
+        return None
+
+
 @router.post("/inbox")
 async def inbox(
     file: UploadFile,
@@ -479,7 +495,9 @@ async def inbox(
         robot = _robot_user(db)
         try:
             result = import_tax_workbook(db, content, filename, robot.id, org)
-            return {"type": f"tax_{result['kind']}", "status": "imported", **result}
+            events = _scan_contours(db)
+            return {"type": f"tax_{result['kind']}", "status": "imported", **result,
+                    **({"contour_events": events} if events else {})}
         except HTTPException as e:
             # Вид, который налоговый импортёр пока не понимает (банк, остатки…)
             # — пропускаем с причиной, не роняя автосинк.
@@ -670,7 +688,13 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         log.file_hash = file_hash
         db.commit()
 
-    return {"type": kind, "status": "imported", **result}
+    # Товародвижение управленки — вторая половина сверки контуров.
+    events = (_scan_contours(db)
+              if kind in ("sales", "return_docs", "return_lines",
+                          "writeoffs", "purchases") else None)
+
+    return {"type": kind, "status": "imported", **result,
+            **({"contour_events": events} if events else {})}
 
 
 admin_only = require_roles(models.Role.admin)
