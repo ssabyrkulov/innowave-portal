@@ -125,7 +125,11 @@ _TAX_BY_NAME = (
 # Виды, которые участвуют в сверке налоговой с управленкой. Остальные лежат
 # справочно: закупки, подотчёт, склад и возвраты поставщикам — управленческого
 # контура под них в портале нет, сверять не с чем.
-MATCHED_KINDS = ("sale", "return", "cash_in", "cash_out")
+# Виды, у которых в управленке есть свой контур и пара ищется. Закупки и
+# списания попали сюда, когда сверка научилась искать пару по количеству:
+# до этого их сверять было нечем.
+MATCHED_KINDS = ("sale", "return", "cash_in", "cash_out", "purchase",
+                 "writeoff")
 
 # Товарные виды: у них есть номенклатура, количество и склад.
 _GOODS_KINDS = ("sale", "return", "return_supplier", "purchase",
@@ -561,6 +565,211 @@ def tax_groups(
 DOCS_CAP = 500
 
 
+# Окно поиска пары между базами. Документ проводят во второй базе не в тот
+# же день: встречаются и 140 дней позже, и 38 дней раньше. Шире брать нельзя —
+# одинаковых по количеству отгрузок много, и пары станут случайными.
+PAIR_WINDOW = 150
+
+
+def _doc_rows(rows, number_of, party_of, amount_of, qty_of,
+              total_of=None) -> list[dict]:
+    """Строки выгрузки сворачиваются в документы.
+
+    Итог документа (СуммаДокумента) повторяется в каждой строке, поэтому он
+    не складывается, а запоминается один раз: иначе документ из двух строк
+    выглядел бы вдвое дороже, чем он есть.
+    """
+    acc: dict = {}
+    for r in rows:
+        key = (number_of(r) or getattr(r, "doc_guid", None) or f"~{r.id}", r.date)
+        e = acc.setdefault(key, {
+            "date": r.date, "number": number_of(r), "party": party_of(r),
+            "amount": 0.0, "qty": 0.0, "total": None})
+        e["amount"] += amount_of(r)
+        e["qty"] += qty_of(r)
+        if total_of is not None:
+            t = total_of(r)
+            if t is not None:
+                e["total"] = t
+    out = []
+    for e in acc.values():
+        if e["total"] is not None:
+            e["amount"] = e["total"]
+        e.pop("total")
+        out.append(e)
+    return out
+
+
+def _upr_docs(db: Session, org: str, kind: str) -> list[dict]:
+    """Документы управленки того же вида, что и налоговые."""
+    if kind == "sale":
+        rows = db.query(models.Sale).filter(models.Sale.organization == org).all()
+        # Сумма документа — после скидки: в налоговой она такая же. Где итога
+        # нет, складываем строки с учётом процента скидки.
+        return _doc_rows(rows, lambda r: r.doc_number, lambda r: r.client,
+                         lambda r: (float(r.amount or 0)
+                                    * (1 - float(r.discount_pct or 0) / 100)),
+                         lambda r: float(r.qty or 0),
+                         total_of=lambda r: (float(r.doc_total)
+                                             if r.doc_total is not None else None))
+    if kind == "return":
+        rows = db.query(models.ReturnDoc).filter(
+            models.ReturnDoc.organization == org).all()
+        return _doc_rows(rows, lambda r: None, lambda r: r.client,
+                         lambda r: float(r.amount or 0), lambda r: 0.0)
+    if kind == "writeoff":
+        rows = db.query(models.WriteOff).filter(
+            models.WriteOff.organization == org).all()
+        return _doc_rows(rows, lambda r: r.doc_number, lambda r: r.subconto,
+                         lambda r: 0.0, lambda r: float(r.qty or 0))
+    if kind == "purchase":
+        rows = db.query(models.Purchase).filter(
+            models.Purchase.organization == org).all()
+        return _doc_rows(rows, lambda r: r.doc_number, lambda r: r.supplier,
+                         lambda r: float(r.amount_kgs or 0),
+                         lambda r: float(r.qty or 0))
+    return []
+
+
+def _tax_doc_rows(db: Session, org: str, kind: str) -> list[dict]:
+    """Документы налогового контура одного вида, собранные из строк."""
+    acc: dict = {}
+    for t in db.query(models.TaxOperation).filter(
+            models.TaxOperation.organization == org,
+            models.TaxOperation.kind == kind).all():
+        key = t.doc_guid or f"{t.doc_number}|{t.date}|{t.counterparty}"
+        e = acc.setdefault(key, {
+            "date": t.date, "number": t.doc_number, "party": t.counterparty,
+            "amount": 0.0, "qty": 0.0, "comment": ""})
+        e["amount"] += float(t.amount or 0)
+        e["qty"] += float(t.qty or 0)
+        if t.comment:
+            e["comment"] = t.comment
+    return list(acc.values())
+
+
+def _pair_docs(upr: list[dict], tax: list[dict]) -> tuple[dict, int]:
+    """Сопоставляет документы двух баз. Возвращает {индекс налогового: документ
+    управленки} и число пар.
+
+    Ключ сверки — количество, а не сумма: штуки в базах одинаковы, а цены
+    разные (в налоговой трансфертные — у Байго те же 20 312 шт стоят 7,1 млн
+    в управленке и 5,6 млн в налоговой). Дата тоже не совпадает: документ
+    проводят во второй базе позже, иногда через месяцы, а иногда раньше —
+    поэтому окно широкое и симметричное, а из нескольких кандидатов берётся
+    ближайший по дате.
+    """
+    used_u: set = set()
+    pairs: dict = {}
+
+    # 1) По номеру управленки из комментария налогового документа — прямая
+    #    ссылка, поставленная руками бухгалтера, сильнее любых догадок.
+    by_number: dict = defaultdict(list)
+    for i, u in enumerate(upr):
+        if u["number"]:
+            by_number[u["number"]].append(i)
+    for j, t in enumerate(tax):
+        for n in _UPR_NUMBER.findall(t.get("comment") or ""):
+            free = [i for i in by_number.get(n, []) if i not in used_u]
+            if not free:
+                continue
+            # Номера повторяются по годам — берём ближайший по дате.
+            i = min(free, key=lambda i: abs((upr[i]["date"] - t["date"]).days))
+            used_u.add(i)
+            pairs[j] = upr[i]
+
+    # 2) По количеству, а где количества нет (возвраты приходят документом,
+    #    без товарных строк) — по сумме.
+    def greedy(field: str, tol: float) -> None:
+        index: dict = defaultdict(list)
+        for i, u in enumerate(upr):
+            if i not in used_u and u[field]:
+                index[round(u[field], 3)].append(i)
+        cands = []
+        for j, t in enumerate(tax):
+            if j in pairs or not t[field]:
+                continue
+            for i in index.get(round(t[field], 3), []):
+                dist = abs((upr[i]["date"] - t["date"]).days)
+                if dist > PAIR_WINDOW:
+                    continue
+                # При равном расстоянии по дате вперёд идёт пара, у которой
+                # сошлась ещё и сумма.
+                cands.append((dist, abs(upr[i]["amount"] - t["amount"]) > 1, i, j))
+        cands.sort()
+        for _, _, i, j in cands:
+            if i in used_u or j in pairs:
+                continue
+            if abs(upr[i][field] - tax[j][field]) > tol:
+                continue
+            used_u.add(i)
+            pairs[j] = upr[i]
+
+    greedy("qty", 0.001)
+    greedy("amount", 1.0)
+    return pairs, len(pairs)
+
+
+def _money_pairs(db: Session, items: list[dict], kind: str, org: str | None) -> None:
+    """Пара для денежных операций: у платежа нет количества, ключ — сумма.
+
+    Контрагенты в контурах разные (в налоговой юрлицо, в управленке точка
+    или плательщик), поэтому имя ключом быть не может. Сначала ищем среди
+    операций связанных контрагентов (связки заданы руками, окно шире), потом
+    среди всех — по сумме до копейки и близкой дате.
+    """
+    uq_org = org or models.DEFAULT_ORG
+    if kind == "cash_in":
+        cands = [{"date": r.date, "who": r.payer, "currency": r.currency,
+                  "amount": round(float(r.amount), 2)}
+                 for r in db.query(models.Receipt).filter(
+                     models.Receipt.organization == uq_org).all()]
+    else:
+        cands = [{"date": e.date, "who": e.counterparty, "currency": e.currency,
+                  "amount": round(float(e.amount), 2)}
+                 for e in db.query(models.Expense).filter(
+                     models.Expense.organization == uq_org).all()]
+
+    used: set = set()
+    name_links = _links_map(db)
+
+    def scan(item, d0, cur, who, window):
+        best, best_days = None, None
+        for j, c in enumerate(cands):
+            if j in used or (c["currency"] or "KGS") != cur:
+                continue
+            if who is not None and (c["who"] or "") not in who:
+                continue
+            if abs(c["amount"] - item["amount"]) >= 0.5:
+                continue
+            days = abs((c["date"] - d0).days)
+            if days > window:
+                continue
+            if best is None or days < best_days:
+                best, best_days = j, days
+                if days == 0:
+                    break
+        return best, best_days
+
+    for item in items:
+        d0 = date.fromisoformat(item["date"])
+        cur = item.get("currency") or "KGS"
+        linked = set(name_links.get(item.get("counterparty") or "", []))
+        best, best_days = (None, None)
+        if linked:
+            best, best_days = scan(item, d0, cur, linked, 14)
+        if best is None:
+            best, best_days = scan(item, d0, cur, None, 7)
+        if best is None:
+            item["upr"] = None
+            continue
+        used.add(best)
+        c = cands[best]
+        item["upr"] = {"date": c["date"].isoformat(), "who": c["who"],
+                       "days": best_days, "amount": c["amount"],
+                       "by_link": bool(linked and (c["who"] or "") in linked)}
+
+
 @router.get("/docs")
 def tax_docs(
     db: Session = Depends(get_db),
@@ -624,47 +833,9 @@ def tax_docs(
 
     items.sort(key=lambda x: (x["date"], x.get("doc_number") or ""), reverse=True)
 
-    # --- Пара в управленке для каждой операции ---
-    # Контрагенты в контурах разные (в налоговой — юрлица, в управленке —
-    # точки), поэтому имя ключом быть не может. Пара ищется по сумме (до
-    # копеек) и близкой дате: сначала день в день, потом в пределах недели —
-    # проводки в налоговую базу часто заносятся с отставанием.
-    def upr_candidates() -> list[dict]:
-        uq_org = o or "hygiene"  # налоговый контур пока только по Hygiene
-        if kind == "sale":
-            docs: dict = {}
-            for s in db.query(models.Sale).filter(
-                    models.Sale.organization == uq_org).all():
-                key = (s.doc_number or f"~{s.client}", s.date, s.client)
-                d = docs.setdefault(key, {"date": s.date, "who": s.client,
-                                          "amount": 0.0, "doc_total": None,
-                                          "currency": "KGS"})
-                d["amount"] += float(s.amount) * (1 - float(s.discount_pct or 0) / 100)
-                if s.doc_total is not None:
-                    d["doc_total"] = float(s.doc_total)
-            out = []
-            for d in docs.values():
-                out.append({"date": d["date"], "who": d["who"], "currency": "KGS",
-                            "amount": round(float(d["doc_total"] or d["amount"]), 2)})
-            return out
-        if kind == "return":
-            return [{"date": r.date, "who": r.client, "currency": r.currency,
-                     "amount": round(float(r.amount), 2)}
-                    for r in db.query(models.ReturnDoc).filter(
-                        models.ReturnDoc.organization == uq_org).all()]
-        if kind == "cash_in":
-            return [{"date": r.date, "who": r.payer, "currency": r.currency,
-                     "amount": round(float(r.amount), 2)}
-                    for r in db.query(models.Receipt).filter(
-                        models.Receipt.organization == uq_org).all()]
-        return [{"date": e.date, "who": e.counterparty, "currency": e.currency,
-                 "amount": round(float(e.amount), 2)}
-                for e in db.query(models.Expense).filter(
-                    models.Expense.organization == uq_org).all()]
-
     if kind not in MATCHED_KINDS:
-        # Сверять не с чем: у закупок, авансовых отчётов и склада в управленке
-        # нет соответствующего контура. Возвращаем чистый реестр.
+        # Сверять не с чем: у авансовых отчётов и склада в управленке нет
+        # соответствующего контура. Возвращаем чистый реестр.
         for item in items:
             item["upr"] = None
         return {
@@ -674,54 +845,41 @@ def tax_docs(
             "items": items[:DOCS_CAP], "cap": DOCS_CAP,
         }
 
-    cands = upr_candidates()
-    used: set = set()
-    # Связки контрагентов НАЛ ↔ УПР: для связанных имя становится ключом
-    # сверки — сначала ищем пару только среди операций связанных контрагентов
-    # (окно шире, две недели), и лишь потом среди всех по сумме и дате.
-    # Связанных имён может быть несколько (Императив → все точки Алдей).
-    name_links = _links_map(db)
+    # --- Пара в управленке для каждой операции ---
+    # Товарные документы ищутся тем же способом, что и на странице
+    # «Контуры 1С»: по количеству в широком окне. Раньше здесь был свой
+    # поиск — по сумме до копейки в окне недели, — и он терял пары там, где
+    # в налоговой трансфертная цена или документ проведён месяцем позже: у
+    # Инновейва из 193 документов «без пары» оказывалось 22 вместо пяти.
+    # Деньги ищутся по-прежнему по сумме: у платежа нет количества, а сумма
+    # в контурах одна и та же.
+    by_key: dict = {}
+    if kind in _GOODS_KINDS:
+        for firm in ([o] if o else list(models.ORGS)):
+            upr = _upr_docs(db, firm, kind)
+            tax = _tax_doc_rows(db, firm, kind)
+            pairs, _n = _pair_docs(upr, tax)
+            for j, t in enumerate(tax):
+                u = pairs.get(j)
+                if u is None:
+                    continue
+                key = (t["number"], t["date"].isoformat(), t["party"])
+                by_key[key] = {
+                    "date": u["date"].isoformat(), "who": u["party"],
+                    "number": u["number"],
+                    "days": abs((u["date"] - t["date"]).days),
+                    # Сумма второй базы: разница в цене — не ошибка, а
+                    # трансфертная наценка, и прятать её незачем.
+                    "amount": round(u["amount"], 2),
+                }
+        for item in items:
+            item["upr"] = by_key.get(
+                (item["doc_number"], item["date"], item["counterparty"]))
+    else:
+        _money_pairs(db, items, kind, o)
 
-    def scan(item: dict, d0, cur, who: set | None, window: int):
-        best, best_days = None, None
-        for j, c in enumerate(cands):
-            if j in used or (c["currency"] or "KGS") != cur:
-                continue
-            if who is not None and (c["who"] or "") not in who:
-                continue
-            if abs(c["amount"] - item["amount"]) >= 0.5:
-                continue
-            days = abs((c["date"] - d0).days)
-            if days > window:
-                continue
-            if best is None or days < best_days:
-                best, best_days = j, days
-                if days == 0:
-                    break
-        return best, best_days
+    matched = sum(1 for i in items if i["upr"])
 
-    def find_pair(item: dict):
-        d0 = date.fromisoformat(item["date"])
-        cur = item.get("currency") or "KGS"
-        linked = set(name_links.get(item.get("counterparty") or "", []))
-        best, best_days = (None, None)
-        if linked:
-            best, best_days = scan(item, d0, cur, linked, 14)
-        if best is None:
-            best, best_days = scan(item, d0, cur, None, 7)
-        if best is None:
-            return None
-        used.add(best)
-        c = cands[best]
-        return {"date": c["date"].isoformat(), "who": c["who"], "days": best_days,
-                "by_link": bool(linked and (c["who"] or "") in linked)}
-
-    matched = 0
-    for item in items:
-        pair = find_pair(item)
-        item["upr"] = pair
-        if pair:
-            matched += 1
 
     unmatched_amount = round(sum(i["amount"] for i in items if not i["upr"]), 2)
     return {
@@ -1128,184 +1286,62 @@ def tax_unposted(
     # поэтому каждая считается отдельно и показывается своим блоком.
     firms = ([models.normalize_org(org)] if (org or "").lower() in models.ORGS
              else list(models.ORGS))
-    # Окно поиска пары. Документ проводят в другой базе не в тот же день:
-    # встречаются и 140 дней позже, и 38 дней раньше. Шире брать нельзя —
-    # одинаковых по количеству отгрузок много, и пары станут случайными.
-    DAY_WINDOW = 150
 
-    def tax_docs(o: str, kind: str) -> list[dict]:
-        """Документы налогового контура одного вида, собранные из строк."""
-        acc: dict = {}
-        for t in db.query(models.TaxOperation).filter(
-                models.TaxOperation.organization == o,
-                models.TaxOperation.kind == kind).all():
-            key = t.doc_guid or f"{t.doc_number}|{t.date}|{t.counterparty}"
-            e = acc.setdefault(key, {
-                "date": t.date, "number": t.doc_number, "party": t.counterparty,
-                "amount": 0.0, "qty": 0.0, "comment": ""})
-            # СуммаДокумента повторяется в каждой строке — складываем строки.
-            e["amount"] += float(t.amount or 0)
-            e["qty"] += float(t.qty or 0)
-            if t.comment:
-                e["comment"] = t.comment
-        return list(acc.values())
-
-    def upr_docs(rows, number_of, party_of, amount_of, qty_of,
-                 total_of=None) -> list[dict]:
-        """Документы управленки: строки выгрузки сворачиваются в документ.
-
-        Итог документа (СуммаДокумента) повторяется в каждой строке, поэтому
-        он не складывается, а запоминается один раз: иначе документ из двух
-        строк выглядел бы вдвое дороже, чем он есть."""
-        acc: dict = {}
-        for r in rows:
-            key = (number_of(r) or r.doc_guid or f"~{r.id}", r.date)
-            e = acc.setdefault(key, {
-                "date": r.date, "number": number_of(r), "party": party_of(r),
-                "amount": 0.0, "qty": 0.0, "total": None})
-            e["amount"] += amount_of(r)
-            e["qty"] += qty_of(r)
-            if total_of is not None:
-                t = total_of(r)
-                if t is not None:
-                    e["total"] = t
-        out = []
-        for e in acc.values():
-            if e["total"] is not None:
-                e["amount"] = e["total"]
-            e.pop("total")
-            out.append(e)
-        return out
-
-    def pair(upr: list[dict], tax: list[dict]) -> tuple[list, list, int]:
-        """Разносит документы на пары; возвращает то, что осталось без пары.
-
-        Ключ сверки — количество, а не сумма: штуки в контурах одинаковы, а
-        цены разные (в налоговой трансфертная — у Байго 20 312 шт стоят
-        7,1 млн в управленке и 5,6 млн в налоговой). Дата тоже не совпадает:
-        документ проводят в налоговой базе позже, иногда через два месяца,
-        а иногда раньше — поэтому окно широкое и симметричное, а из
-        нескольких кандидатов берётся ближайший по дате.
-        """
-        used_u: set = set()
-        paired_t: set = set()
-
-        # 1) По номеру управленки из комментария налогового документа —
-        #    прямая ссылка, поставленная руками бухгалтера, сильнее догадок.
-        by_number: dict = defaultdict(list)
-        for i, u in enumerate(upr):
-            if u["number"]:
-                by_number[u["number"]].append(i)
-        for j, t in enumerate(tax):
-            for n in _UPR_NUMBER.findall(t["comment"] or ""):
-                free = [i for i in by_number.get(n, []) if i not in used_u]
-                if not free:
-                    continue
-                # Номера повторяются по годам — берём ближайший по дате.
-                i = min(free, key=lambda i: abs((upr[i]["date"] - t["date"]).days))
-                used_u.add(i)
-                paired_t.add(j)
-
-        # 2) По количеству, а где количества нет (возвраты приходят
-        #    документом, без товарных строк) — по сумме.
-        def greedy(field: str, tol: float) -> None:
-            index: dict = defaultdict(list)
-            for i, u in enumerate(upr):
-                if i not in used_u and u[field]:
-                    index[round(u[field], 3)].append(i)
-            cands = []
-            for j, t in enumerate(tax):
-                if j in paired_t or not t[field]:
-                    continue
-                for i in index.get(round(t[field], 3), []):
-                    dist = abs((upr[i]["date"] - t["date"]).days)
-                    if dist > DAY_WINDOW:
-                        continue
-                    # При равном расстоянии по дате вперёд идёт пара, у
-                    # которой сошлась ещё и сумма.
-                    cands.append((dist, abs(upr[i]["amount"] - t["amount"]) > 1,
-                                  i, j))
-            cands.sort()
-            for _, _, i, j in cands:
-                if i in used_u or j in paired_t:
-                    continue
-                if abs(upr[i][field] - tax[j][field]) > tol:
-                    continue
-                used_u.add(i)
-                paired_t.add(j)
-
-        greedy("qty", 0.001)
-        greedy("amount", 1.0)
-
-        paired = len(paired_t)
-        only_u = [u for i, u in enumerate(upr) if i not in used_u]
-        only_t = [t for j, t in enumerate(tax) if j not in paired_t]
-        return only_u, only_t, paired
-
-    def block(key, label, upr, tax, by_amount=True) -> dict:
+    def block(key: str, label: str, upr: list[dict], tax: list[dict]) -> dict:
         upr_last = max((u["date"] for u in upr), default=None)
         tax_last = max((t["date"] for t in tax), default=None)
-        only_u, only_t, paired = pair(upr, tax)
+        pairs, paired = _pair_docs(upr, tax)
+        only_u = [u for u in upr if u not in pairs.values()]
+        only_t = [t for j, t in enumerate(tax) if j not in pairs]
 
         def out(rows, other_last):
-            res = []
-            for r in sorted(rows, key=lambda x: x["date"], reverse=True):
-                res.append({
-                    "date": r["date"].isoformat(),
-                    "number": r["number"],
-                    "party": r["party"],
-                    "amount": round(r["amount"], 2),
-                    "qty": round(r["qty"], 3),
-                    # Свежее последнего документа второго контура — обычное
-                    # отставание, а не потерянный документ. Если во втором
-                    # контуре документов этого вида нет вовсе, он его просто
-                    # не ведёт (налоговая, например, не ведёт списания
-                    # маркетинга) — тогда «дыр» тут тоже нет.
-                    "tail": bool(other_last is None or r["date"] > other_last),
-                })
-            return res
+            return [{
+                "date": r["date"].isoformat(),
+                "number": r["number"],
+                "party": r["party"],
+                "amount": round(r["amount"], 2),
+                "qty": round(r["qty"], 3),
+                # Свежее последнего документа второй базы — документ просто
+                # ждёт очереди, бухгалтерия ещё не дошла. Если во второй базе
+                # документов этого вида нет вовсе, она его не ведёт (налоговая,
+                # например, не ведёт списания на маркетинг) — тогда и
+                # просроченных тут не бывает.
+                "tail": bool(other_last is None or r["date"] > other_last),
+            } for r in sorted(rows, key=lambda x: x["date"], reverse=True)]
 
         rows_u, rows_t = out(only_u, tax_last), out(only_t, upr_last)
-        # Пометка строки считается ниже, когда известно, полный ли контур.
-        # Налоговый контур ведёт не всё: у Хайджина на 1 539 отгрузок
-        # управленки приходится 184 налоговых документа — ЭСФ на юрлиц и
-        # сводные. Списывать полторы тысячи документов в «дыры» бессмысленно:
-        # это не потери, а устройство учёта. Поэтому дырами считаем стороны,
-        # которые контур покрывает почти целиком, — там пропуск действительно
-        # означает пропуск.
+        # Налоговая ведёт не всё: у Хайджина на 1 539 отгрузок управленки
+        # приходится 184 налоговых документа — ЭСФ на юрлиц и сводные.
+        # Записывать полторы тысячи документов в пропущенные бессмысленно:
+        # это не потери, а устройство учёта. Поэтому «просрочено» считаем
+        # только там, где база ведёт документы вида почти целиком.
         FULL, ENOUGH = 0.7, 20
         cover_u = paired / len(upr) if upr else 1.0
         cover_t = paired / len(tax) if tax else 1.0
         # На горстке документов доля ничего не значит: один непарный из трёх
-        # даст «покрытие 67%» и молча спрячет настоящий пропуск. Считаем
-        # контур неполным только там, где документов достаточно, чтобы это
-        # было свойством учёта, а не случайностью.
+        # даст «покрытие 67%» и молча спрячет настоящий пропуск.
         partial_u = cover_u < FULL and len(upr) >= ENOUGH
         partial_t = cover_t < FULL and len(tax) >= ENOUGH
         gaps_u = [] if partial_u else [r for r in rows_u if not r["tail"]]
         gaps_t = [] if partial_t else [r for r in rows_t if not r["tail"]]
-        # «Дыра» — только там, где контур ведёт документы этого вида
-        # целиком. В частичном контуре отсутствие пары — норма, и строка
-        # помечается нейтрально: «нет пары».
         for rows, partial in ((rows_u, partial_u), (rows_t, partial_t)):
             for r in rows:
                 r["gap"] = not r["tail"] and not partial
         return {
             "key": key,
             "label": label,
-            "by_amount": by_amount,
             "upr_last": upr_last.isoformat() if upr_last else None,
             "tax_last": tax_last.isoformat() if tax_last else None,
             "upr_docs": len(upr),
             "tax_docs": len(tax),
             "paired": paired,
-            # Доля документов, у которых пара нашлась. Низкая — контур ведёт
+            # Доля документов, у которых пара нашлась. Низкая — база ведёт
             # лишь часть, и список «без пары» справочный, а не тревожный.
             "cover_upr": round(cover_u * 100),
             "cover_tax": round(cover_t * 100),
             "partial_upr": partial_u,
             "partial_tax": partial_t,
-            # Контур вообще не ведёт этот вид документов — расхождение
+            # База вообще не ведёт этот вид документов — расхождение
             # структурное, а не потерянный документ.
             "upr_absent": not upr,
             "tax_absent": not tax,
@@ -1313,47 +1349,18 @@ def tax_unposted(
             "only_tax": rows_t[:limit],
             "only_upr_count": len(rows_u),
             "only_tax_count": len(rows_t),
-            # Дыры — без учёта хвоста: именно они требуют вмешательства.
             "gaps_upr": len(gaps_u),
             "gaps_tax": len(gaps_t),
             "gaps_upr_amount": round(sum(r["amount"] for r in gaps_u), 2),
             "gaps_tax_amount": round(sum(r["amount"] for r in gaps_t), 2),
         }
 
+    LABELS = {"sale": "Реализации", "return": "Возвраты от покупателей",
+              "writeoff": "Списания", "purchase": "Поступления товаров"}
+
     def firm_types(o: str) -> list[dict]:
-        """Все виды документов одной фирмы."""
-        sales = db.query(models.Sale).filter(models.Sale.organization == o).all()
-        returns = db.query(models.ReturnDoc).filter(
-            models.ReturnDoc.organization == o).all()
-        writeoffs = db.query(models.WriteOff).filter(
-            models.WriteOff.organization == o).all()
-        purchases = db.query(models.Purchase).filter(
-            models.Purchase.organization == o).all()
-        return [
-            block("sale", "Реализации",
-                  # Сумма документа — после скидки: в налоговой она такая же.
-                  # Где итога нет, складываем строки с учётом процента скидки.
-                  upr_docs(sales, lambda r: r.doc_number, lambda r: r.client,
-                           lambda r: (float(r.amount or 0)
-                                      * (1 - float(r.discount_pct or 0) / 100)),
-                           lambda r: float(r.qty or 0),
-                           total_of=lambda r: (float(r.doc_total)
-                                               if r.doc_total is not None else None)),
-                  tax_docs(o, "sale")),
-            block("return", "Возвраты от покупателей",
-                  upr_docs(returns, lambda r: None, lambda r: r.client,
-                           lambda r: float(r.amount or 0), lambda r: 0.0),
-                  tax_docs(o, "return")),
-            block("writeoff", "Списания",
-                  upr_docs(writeoffs, lambda r: r.doc_number, lambda r: r.subconto,
-                           lambda r: 0.0, lambda r: float(r.qty or 0)),
-                  tax_docs(o, "writeoff"), by_amount=False),
-            block("purchase", "Поступления товаров",
-                  upr_docs(purchases, lambda r: r.doc_number, lambda r: r.supplier,
-                           lambda r: float(r.amount_kgs or 0),
-                           lambda r: float(r.qty or 0)),
-                  tax_docs(o, "purchase")),
-        ]
+        return [block(k, label, _upr_docs(db, o, k), _tax_doc_rows(db, o, k))
+                for k, label in LABELS.items()]
 
     out_firms = []
     for o in firms:
