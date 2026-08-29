@@ -254,6 +254,75 @@ def unify_clients_by_guid() -> None:
         db.close()
 
 
+def dedupe_renamed_money() -> None:
+    """Убирает вторые экземпляры оплат и расходов после переименований 1С.
+
+    Денежный документ портал узнаёт по дате, сумме и контрагенту: времени
+    платежа в базе нет, пересчитать ключ нельзя. Пока контрагент входил в
+    ключ, переименование делало уже загруженный платёж «незнакомым», и он
+    ложился вторым экземпляром — долг клиента уезжал в минус на всю сумму его
+    оплат. Импорт это больше не допускает (см. защиту по ДокументGUID), но
+    накопившиеся копии надо убрать.
+
+    Копия узнаётся по ДокументGUID: один документ 1С — одна запись. Если у
+    документа несколько строк с одинаковой суммой (так бывает у расшифровок),
+    они пришли одним импортом — это видно по времени загрузки, и такие строки
+    остаются все. Удаляются только приехавшие позже первой загрузки документа.
+    """
+    from collections import defaultdict
+
+    from sqlalchemy import func
+
+    from . import models
+    from .database import SessionLocal
+
+    NAME = "money_dupes_v1"
+    db = SessionLocal()
+    try:
+        if db.query(models.AppMigration).filter_by(name=NAME).first():
+            return
+        notes = []
+        for model, label in ((models.Receipt, "оплат"),
+                             (models.Expense, "расходов")):
+            pairs = (db.query(model.organization, model.doc_guid)
+                     .filter(model.doc_guid.isnot(None))
+                     .group_by(model.organization, model.doc_guid)
+                     .having(func.count(model.id) > 1).all())
+            removed_rows, removed = 0, 0.0
+            for org, guid in pairs:
+                rows = (db.query(model)
+                        .filter(model.organization == org,
+                                model.doc_guid == guid)
+                        .order_by(model.imported_at, model.id).all())
+                same: dict[tuple, list] = defaultdict(list)
+                for r in rows:
+                    same[(r.date, float(r.amount or 0), r.currency,
+                          r.kind)].append(r)
+                for group in same.values():
+                    if len(group) < 2:
+                        continue
+                    first = group[0].imported_at
+                    for r in group[1:]:
+                        late = (r.imported_at and first
+                                and (r.imported_at - first).total_seconds() > 60)
+                        if late:
+                            removed += float(r.amount or 0)
+                            removed_rows += 1
+                            db.delete(r)
+                db.flush()
+            notes.append(f"{label}: {removed_rows} на {removed:.2f}")
+            if removed_rows:
+                print(f"[startup] Убраны копии {label} после переименований: "
+                      f"{removed_rows} шт. на {removed:.2f}", flush=True)
+        db.add(models.AppMigration(name=NAME, note="; ".join(notes)))
+        db.commit()
+    except Exception as err:  # noqa: BLE001 — портал обязан подняться и без этого
+        db.rollback()
+        print(f"[startup] Чистка денежных копий не прошла: {err}", flush=True)
+    finally:
+        db.close()
+
+
 # Готовность БД: пока False — API отвечает понятной ошибкой, а не падает.
 db_state: dict = {"ready": False, "error": None}
 
@@ -264,6 +333,7 @@ def init_database() -> None:
     run_mini_migrations()
     backfill_organization()
     unify_clients_by_guid()
+    dedupe_renamed_money()
     seed_initial_admin()
     # Зеркало SalesDoc: держим копию журналов в базе и обновляем в фоне
     # (дельта каждые 5 минут, полная выгрузка раз в сутки). Благодаря этому

@@ -196,6 +196,17 @@ def import_expenses_workbook(
     for r in db.query(models.Expense).filter(models.Expense.organization == org).all():
         prior[_bk(r.date, r.amount, r.currency, r.counterparty, r.kind)].append(r)
 
+    # Уже загруженные документы — по ДокументGUID. Ключ по контрагенту
+    # ломается от переименования в 1С (у поставщика правят название, и весь
+    # его платёж приезжает вторым экземпляром), а GUID документа не меняется.
+    # Считаем количество строк документа: у расшифровки их бывает несколько.
+    doc_rows: dict[tuple, int] = defaultdict(int)
+    for r in (db.query(models.Expense)
+              .filter(models.Expense.organization == org,
+                      models.Expense.doc_guid.isnot(None)).all()):
+        doc_rows[(r.doc_guid, r.date, float(r.amount or 0), r.kind)] += 1
+    doc_used: dict[tuple, int] = defaultdict(int)
+
     seen: set[str] = set()
     occurrences: dict[str, int] = defaultdict(int)
     biz_used: dict[tuple, int] = defaultdict(int)
@@ -207,6 +218,11 @@ def import_expenses_workbook(
         h = hashlib.sha256(f"{org}|{base}#{occurrences[base]}".encode()).hexdigest()
         p = {k: v for k, v in p.items() if k != "src_dt"}
         if h in existing or h in seen:
+            skipped += 1
+            continue
+        dk = (p.get("doc_guid"), p["date"], p["amount"], p["kind"])
+        if p.get("doc_guid") and doc_used[dk] < doc_rows.get(dk, 0):
+            doc_used[dk] += 1  # документ уже загружен, пусть под другим именем
             skipped += 1
             continue
         bk = _bk(p["date"], p["amount"], p["currency"], p["counterparty"], p["kind"])

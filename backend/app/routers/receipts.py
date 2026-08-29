@@ -246,6 +246,19 @@ def import_receipts_workbook(
         prior[_biz_key(r.date, float(r.amount or 0), r.currency or "",
                        r.payer or "", r.operation or "")].append(r)
 
+    # Документы, уже лежащие в базе, — по ДокументGUID. Это самый прочный
+    # ключ из всех: он переживает и переименование контрагента, и смену
+    # формата записи времени, на которых ломались хэш и ключ по имени.
+    # Считаем именно количество строк документа: у расшифровки их бывает
+    # несколько, и лишние отбрасывать нельзя.
+    doc_rows: dict[tuple, int] = defaultdict(int)
+    for r in (db.query(models.Receipt)
+              .filter(models.Receipt.organization == org,
+                      models.Receipt.doc_guid.isnot(None)).all()):
+        doc_rows[(r.doc_guid, r.date, float(r.amount or 0),
+                  r.operation, r.kind)] += 1
+    doc_used: dict[tuple, int] = defaultdict(int)
+
     seen, added, skipped, adopted = set(), 0, 0, 0
     occurrences: dict[str, int] = defaultdict(int)
     biz_used: dict[tuple, int] = defaultdict(int)
@@ -255,6 +268,11 @@ def import_receipts_workbook(
         h = _hash(p, occurrences[base], org)
         p = {k: v for k, v in p.items() if k != "src_dt"}
         if h in existing or h in seen:
+            skipped += 1
+            continue
+        dk = (p.get("doc_guid"), p["date"], p["amount"], p["operation"], kind)
+        if p.get("doc_guid") and doc_used[dk] < doc_rows.get(dk, 0):
+            doc_used[dk] += 1  # этот документ уже загружен, пусть под другим именем
             skipped += 1
             continue
         bk = _biz_key(p["date"], p["amount"], p["currency"], p["payer"], p["operation"])
