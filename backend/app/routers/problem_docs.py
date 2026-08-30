@@ -15,7 +15,10 @@
 не должны.
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -111,6 +114,22 @@ def import_problem_docs_workbook(db: Session, content: bytes, filename: str,
             comment=text(row, "comment"),
         ))
 
+    # Список грузится заменой целиком, а «в списке с» надо сохранить: иначе
+    # каждая выгрузка обнуляла бы возраст проблемы и все документы выглядели
+    # бы появившимися сегодня. Переносим по ДокументGUID, а если его нет —
+    # по дате, номеру, виду и контрагенту.
+    def key_of(p) -> tuple:
+        if p.doc_guid:
+            return ("g", p.doc_guid)
+        return ("k", p.date, p.doc_number, p.kind, p.counterparty)
+
+    known = {key_of(old): old.first_seen
+             for old in db.query(models.ProblemDoc)
+             .filter(models.ProblemDoc.organization == org).all()}
+    now = datetime.utcnow()
+    for p in parsed:
+        p.first_seen = known.get(key_of(p)) or now
+
     # Пустой список — хорошая новость, а не сбой: в 1С не осталось
     # проблемных документов. Стираем прежний, иначе портал будет показывать
     # уже исправленное.
@@ -145,15 +164,24 @@ def problem_docs(
     # Ищем GUID проблемных документов в рабочих таблицах — одним запросом на
     # таблицу, а не по документу: списки короткие, а обращений к базе иначе
     # были бы сотни.
+    # Заодно берём самую раннюю дату загрузки строк документа: 1С не отдаёт,
+    # когда поставили пометку удаления, но день, с которого документ считается
+    # у нас, известен точно — и пометку поставили уже после него.
     guids = {d.doc_guid for d in docs if d.doc_guid}
     found: dict[str, list[str]] = {}
+    since: dict[str, datetime] = {}
     if guids:
         for label, model in LEAK_SOURCES:
-            hits = (db.query(model.doc_guid)
+            hits = (db.query(model.doc_guid, func.min(model.imported_at))
                     .filter(model.doc_guid.in_(guids))
-                    .distinct().all())
-            for (g,) in hits:
-                found.setdefault((g or "").lower(), []).append(label)
+                    .group_by(model.doc_guid).all())
+            for g, first in hits:
+                g = (g or "").lower()
+                if not g:
+                    continue
+                found.setdefault(g, []).append(label)
+                if first is not None and (g not in since or first < since[g]):
+                    since[g] = first
 
     def row(d):
         return {
@@ -167,6 +195,12 @@ def problem_docs(
             "comment": d.comment,
             # Пусто — документ никуда не просочился, и это норма.
             "in_portal": found.get(d.doc_guid or "", []),
+            # С какого дня документ числится проблемным у нас.
+            "first_seen": (d.first_seen.date().isoformat()
+                           if d.first_seen else None),
+            # С какого дня его строки лежат в расчётах (только для утечек).
+            "in_portal_since": (since[d.doc_guid].date().isoformat()
+                                if d.doc_guid in since else None),
         }
 
     rows = [row(d) for d in docs]

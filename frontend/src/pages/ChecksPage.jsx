@@ -397,17 +397,39 @@ export default function ChecksPage() {
                           {r.kind}
                           <span className="muted"> {r.doc_number || ''}</span>
                         </td>
-                        <td data-label="Статус" className="sc-diff">{r.status}</td>
+                        <td data-label="Статус" className="sc-diff">
+                          {r.status}
+                          {r.first_seen && (
+                            <span className="muted skipped-cols">
+                              в списке с {r.first_seen.split('-').reverse().join('.')}
+                            </span>
+                          )}
+                        </td>
                         <td data-label="Контрагент">{r.counterparty || '—'}</td>
                         <td className="num" data-label="Сумма">
                           {r.amount == null ? '—' : formatMoney(r.amount, '')}
                         </td>
-                        <td data-label="Где у нас">{r.in_portal.join(', ')}</td>
+                        <td data-label="Где у нас">
+                          {r.in_portal.join(', ')}
+                          {r.in_portal_since && (
+                            <span className="muted skipped-cols">
+                              считается с {r.in_portal_since.split('-').reverse().join('.')}
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              <p className="muted">
+                Дату, когда в 1С поставили пометку удаления, выгрузка не
+                отдаёт — она есть только в журнале регистрации 1С. Поэтому
+                показаны две даты, которые известны точно: «считается с» —
+                день, когда строки документа попали к нам (пометку поставили
+                позже), «в списке с» — день, когда документ впервые пришёл в
+                списке проблемных.
+              </p>
             </>
           ) : (
             <p className="sc-ok">

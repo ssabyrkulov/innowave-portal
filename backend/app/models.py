@@ -427,6 +427,12 @@ class ProblemDoc(Base):
     amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     author: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Когда документ впервые появился в списке проблемных. Даты, когда в 1С
+    # поставили пометку удаления, в выгрузке нет — она есть только в журнале
+    # регистрации. Ближайшее, что можно знать точно: с какого дня документ
+    # числится проблемным у нас. Список грузится заменой целиком, поэтому
+    # значение переносится со старой записи по ДокументGUID.
+    first_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
