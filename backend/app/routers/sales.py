@@ -206,8 +206,19 @@ def parse_sales_workbook(content: bytes) -> tuple[list[dict], list[str]]:
 
     def process(row, line_no):
         data = {}
+        # В одно поле ведут несколько колонок-синонимов («Ответственный» и
+        # «ОтветственноеЛицо», «Склад» и «СкладНаименование»). Колонки идут
+        # слева направо, и пустая колонка справа не должна затирать уже
+        # прочитанное значение: в выгрузке 1С «ОтветственноеЛицо» пустое
+        # всегда, из-за чего ответственный терялся во всех строках.
+        def empty(v):
+            return v is None or str(v).strip() == ""
+
         for j, field in columns.items():
-            data[field] = row[j] if j < len(row) else None
+            value = row[j] if j < len(row) else None
+            if empty(value) and not empty(data.get(field)):
+                continue
+            data[field] = value
         if all(v is None for v in data.values()):
             return
         skip = onec.skip_reason(data)
@@ -330,12 +341,18 @@ def import_sales_workbook(
     # дубли — и без дозаписи остались бы без скидки навсегда. Ненулевая
     # скидка у единиц строк, так что точечный UPDATE по хэшу копеечный.
     backfill: dict[str, float] = {}
+    # То же самое с ответственным: он в хэш не входит, а до починки разбора
+    # терялся во всех строках — пустая колонка-синоним затирала прочитанное.
+    # Без дозаписи «Ответственный» остался бы пустым во всей истории.
+    backfill_resp: dict[str, str] = {}
     for parsed in parsed_rows:
         h = _row_hash(parsed, org)
         if h in existing_hashes or h in seen_in_file:
             skipped += 1
             if parsed.get("discount_pct"):
                 backfill[h] = parsed["discount_pct"]
+            if parsed.get("responsible"):
+                backfill_resp[h] = parsed["responsible"]
             continue
         seen_in_file.add(h)
         db.add(models.Sale(**parsed, organization=org, row_hash=h))
@@ -349,6 +366,21 @@ def import_sales_workbook(
                     (models.Sale.discount_pct.is_(None))
                     | (models.Sale.discount_pct != pct))
             .update({"discount_pct": pct}, synchronize_session=False))
+
+    # Ответственных на фирму единицы, а строк тысячи — обновляем пачками по
+    # значению, а не по строке, иначе каждая загрузка это тысячи UPDATE.
+    updated_responsible = 0
+    hashes_by_name: dict[str, list[str]] = defaultdict(list)
+    for h, name in backfill_resp.items():
+        hashes_by_name[name].append(h)
+    for name, hashes in hashes_by_name.items():
+        for i in range(0, len(hashes), 400):
+            updated_responsible += (
+                db.query(models.Sale)
+                .filter(models.Sale.row_hash.in_(hashes[i:i + 400]),
+                        (models.Sale.responsible.is_(None))
+                        | (models.Sale.responsible != name))
+                .update({"responsible": name}, synchronize_session=False))
 
     db.add(models.ImportLog(
         filename=filename or "upload.xlsx",
@@ -367,6 +399,8 @@ def import_sales_workbook(
         # молчать о них нельзя: строки файла есть, а в учёт не пошли.
         "skipped_not_posted": len(not_posted),
         "updated_discounts": updated_discounts,
+        # Сколько строк получили ответственного, потерянного при разборе.
+        "updated_responsible": updated_responsible,
         # Сколько строк переехало на новое название контрагента 1С.
         "renamed_clients": renamed_clients,
         "replaced_rows": replaced,
