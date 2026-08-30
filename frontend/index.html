@@ -35,6 +35,32 @@
           navigator.serviceWorker.register('/sw.js').catch(function () {})
         })
       }
+
+      // Самолечение белого экрана. Если приложение не отрисовалось за
+      // несколько секунд, значит страница осталась от прошлой версии и
+      // тянет файл сборки, которого после выкладки уже нет. Сам по себе
+      // такой экран не чинится: обновление отдаёт ту же страницу из кэша.
+      // Поэтому один раз сбрасываем кэш и сервис-воркер и перезагружаемся;
+      // повтор защищён отметкой в сессии, чтобы не уйти в бесконечный круг.
+      setTimeout(function () {
+        var root = document.getElementById('root')
+        if (root && root.childElementCount > 0) return
+        if (sessionStorage.getItem('iw_recovered')) return
+        sessionStorage.setItem('iw_recovered', '1')
+        var done = function () { location.reload() }
+        var jobs = []
+        if (window.caches && caches.keys) {
+          jobs.push(caches.keys().then(function (ks) {
+            return Promise.all(ks.map(function (k) { return caches.delete(k) }))
+          }))
+        }
+        if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+          jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+            return Promise.all(rs.map(function (r) { return r.unregister() }))
+          }))
+        }
+        Promise.all(jobs).then(done, done)
+      }, 8000)
     </script>
   </body>
 </html>
