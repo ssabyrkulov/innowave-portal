@@ -446,26 +446,14 @@ def sniff_kind(content: bytes) -> str:
     return "unknown"
 
 
-# Когда журнал расхождений пересчитывался последний раз. Автосинк присылает
-# файлы пачкой — за прогон их больше сотни, — а пересчёт читает документы обеих
-# фирм целиком. На каждый файл это выливалось в сотню полных пересчётов подряд
-# и клало сервис. Пачку достаточно посчитать один раз.
-_LAST_SCAN: dict = {"at": None}
-_SCAN_EVERY = timedelta(minutes=10)
-
-
+# Журнал расхождений считается отдельной фоновой задачей раз в час, а не в
+# момент приёма файла. Пересчёт читает документы обеих фирм целиком, а
+# автосинк присылает больше сотни файлов за прогон: на приёме это выливалось
+# в сотню тяжёлых пересчётов подряд, и маленькому инстансу этого хватало,
+# чтобы упереться в память и уйти на перезапуск — снаружи это выглядит как
+# «сайт иногда показывает белое окно».
 def _scan_contours(db, force: bool = False) -> dict | None:
-    """Обновляет журнал расхождений контуров после приёма документов.
-
-    Считать это при открытии страницы поздно: расхождение, возникшее и
-    исчезнувшее между визитами, так и осталось бы незамеченным. Сбой журнала
-    не должен ронять приём файла — файл важнее.
-    """
-    now = datetime.utcnow()
-    last = _LAST_SCAN["at"]
-    if not force and last is not None and now - last < _SCAN_EVERY:
-        return None
-    _LAST_SCAN["at"] = now
+    """Оставлено для ручного пересчёта (кнопка на странице «Контуры 1С»)."""
     try:
         from .tax import scan_contour_events
         return scan_contour_events(db)
@@ -508,9 +496,7 @@ async def inbox(
         robot = _robot_user(db)
         try:
             result = import_tax_workbook(db, content, filename, robot.id, org)
-            events = _scan_contours(db)
-            return {"type": f"tax_{result['kind']}", "status": "imported", **result,
-                    **({"contour_events": events} if events else {})}
+            return {"type": f"tax_{result['kind']}", "status": "imported", **result}
         except HTTPException as e:
             # Вид, который налоговый импортёр пока не понимает (банк, остатки…)
             # — пропускаем с причиной, не роняя автосинк.
@@ -701,13 +687,7 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         log.file_hash = file_hash
         db.commit()
 
-    # Товародвижение управленки — вторая половина сверки контуров.
-    events = (_scan_contours(db)
-              if kind in ("sales", "return_docs", "return_lines",
-                          "writeoffs", "purchases") else None)
-
-    return {"type": kind, "status": "imported", **result,
-            **({"contour_events": events} if events else {})}
+    return {"type": kind, "status": "imported", **result}
 
 
 admin_only = require_roles(models.Role.admin)

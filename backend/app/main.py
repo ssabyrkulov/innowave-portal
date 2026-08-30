@@ -189,10 +189,21 @@ def unify_clients_by_guid() -> None:
     try:
         if db.query(models.AppMigration).filter_by(name=NAME).first():
             return
-        pairs = (db.query(models.Sale.organization, models.Sale.client_guid)
-                 .filter(models.Sale.client_guid.isnot(None))
-                 .distinct().all())
+        pairs = sorted(
+            db.query(models.Sale.organization, models.Sale.client_guid)
+            .filter(models.Sale.client_guid.isnot(None)).distinct().all())
+        # Продолжаем с места, где остановились: у живой базы клиентов тысячи,
+        # и одним заходом это долгая работа. Если контейнер перезапустят
+        # посреди неё, следующий заход не начнёт всё сначала.
+        PROGRESS = NAME + ":progress"
+        mark = db.query(models.AppMigration).filter_by(name=PROGRESS).first()
+        if mark and mark.note:
+            pairs = [p for p in pairs if f"{p[0]}|{p[1]}" > mark.note]
+        PER_RUN = 300
+        rest = len(pairs) > PER_RUN
+        pairs = pairs[:PER_RUN]
         renamed = merged = skipped = 0
+        done = 0
         for org, guid in pairs:
             # По одному клиенту за раз: у продаж бывают сотни тысяч строк, и
             # разовая правка не должна поднимать их в память целиком.
@@ -237,6 +248,29 @@ def unify_clients_by_guid() -> None:
                     r.client = fresh
                     renamed += 1
             db.flush()
+            done += 1
+            # Отмечаемся по ходу дела, а не в конце: прогресс переживает
+            # перезапуск контейнера.
+            if done % 50 == 0:
+                if mark is None:
+                    mark = models.AppMigration(name=PROGRESS)
+                    db.add(mark)
+                mark.note = f"{org}|{guid}"
+                db.commit()
+
+        if rest:
+            # Остаток доделаем при следующем запуске — отметку «правка
+            # прошла» не ставим, иначе часть клиентов осталась бы несведённой.
+            if pairs:
+                if mark is None:
+                    mark = models.AppMigration(name=PROGRESS)
+                    db.add(mark)
+                mark.note = f"{pairs[-1][0]}|{pairs[-1][1]}"
+            db.commit()
+            print(f"[startup] клиенты сведены частично: склеено {merged}, "
+                  f"переименовано строк {renamed}; остальные — при следующем "
+                  f"запуске", flush=True)
+            return
 
         db.add(models.AppMigration(
             name=NAME,
@@ -328,7 +362,13 @@ db_state: dict = {"ready": False, "error": None}
 
 
 def _deferred_migrations() -> None:
-    """Разовые правки данных — уже после того, как сервис начал отвечать."""
+    """Разовые правки данных и журнал расхождений — в фоне, не мешая порталу.
+
+    Сначала правки (они одноразовые и помечаются в app_migrations), затем
+    журнал контуров раз в час. Пересчёт журнала тяжёлый — читает документы
+    обеих фирм, — и на приёме файлов ему не место: автосинк присылает больше
+    сотни файлов за прогон.
+    """
     t0 = time.time()
     try:
         unify_clients_by_guid()
@@ -337,6 +377,21 @@ def _deferred_migrations() -> None:
               f"{time.time() - t0:.1f} c", flush=True)
     except Exception as err:  # noqa: BLE001 — портал важнее правки
         print(f"[startup] отложенные правки не прошли: {err}", flush=True)
+
+    from .database import SessionLocal
+    from .routers.tax import scan_contour_events
+    while True:
+        db = SessionLocal()
+        try:
+            res = scan_contour_events(db)
+            if res.get("added") or res.get("closed"):
+                print(f"[contours] журнал: {res}", flush=True)
+        except Exception as err:  # noqa: BLE001 — журнал не критичен
+            db.rollback()
+            print(f"[contours] журнал не обновлён: {err}", flush=True)
+        finally:
+            db.close()
+        time.sleep(3600)
 
 
 def init_database() -> None:
@@ -469,6 +524,21 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
+_STARTED_AT = time.time()
+
+
+def _rss_mb() -> float | None:
+    """Занятая процессом память, МБ. На Linux — из /proc, без зависимостей."""
+    try:
+        with open("/proc/self/status", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except Exception:  # noqa: BLE001 — диагностика не должна ничего ронять
+        return None
+    return None
+
+
 def _frontend_build() -> dict:
     """Имя главного JS-бандла и время сборки статики — отпечаток версии."""
     try:
@@ -509,6 +579,12 @@ def health():
         # деплой. Это единственный способ отличить «не задеплоилось» от
         # «задеплоилось, но браузер показывает старое».
         "frontend": _frontend_build(),
+        # Сколько памяти занимает процесс и когда он поднялся. Белое окно
+        # «иногда» выглядит именно так: контейнер съедает лимит, Render его
+        # убивает и поднимает заново. По этим двум числам это видно сразу:
+        # свежий uptime при жалобе на «сайт лёг» и есть перезапуск.
+        "rss_mb": _rss_mb(),
+        "uptime_sec": round(time.time() - _STARTED_AT),
         # Видно, поднялась ли база: при обслуживании сервис жив, db=false.
         "db": db_state["ready"],
         "db_error": db_state["error"],
