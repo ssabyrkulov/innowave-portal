@@ -216,6 +216,7 @@ export default function DashboardPage() {
         <DesktopDash data={data} user={user} />
       )}
       <SalesGroupsCard />
+      <ContourGoodsCard />
       <StockSourcesCard />
       <CalcStockCard />
     </>
@@ -819,6 +820,139 @@ function MobileDash({ data }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+
+// Управленка ↔ налоговая по товарным движениям. Остаток — результат всех
+// движений, а не только продаж: пока хоть одно звено в двух контурах разное,
+// остатки не сойдутся, а по итоговой сумме не видно, какое именно звено
+// разъехалось. Поэтому вид за видом и позиция за позицией, в штуках: цены
+// между контурами трансфертные и совпадать не обязаны, штуки — обязаны.
+function ContourGoodsCard() {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [open, setOpen] = useState(null)
+  const [allRows, setAllRows] = useState(false)
+
+  useEffect(() => {
+    api.taxGoodsFlow().then(setData).catch((e) => setError(e.message))
+  }, [])
+
+  if (error || !data) return null
+  const kinds = data.kinds.filter((k) => k.upr || k.nal)
+  if (!kinds.length) return null
+
+  const fmt = (v) => (v == null ? '—'
+    : Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 1 }))
+  const sign = (v) => (Math.abs(v) < 0.001 ? '' : v > 0 ? 'sc-diff' : 'sc-diff')
+  const rowsOf = (k) => (allRows ? k.products : k.mismatch)
+
+  return (
+    <div className="chart-card">
+      <div className="sd-card-title">⚖ Управленка ↔ налоговая: движения товара</div>
+      {data.positions_with_diff > 0 ? (
+        <p className="sc-diff">
+          Расходится видов движения: <b>{data.kinds_with_diff}</b>, позиций с
+          размерами: <b>{data.positions_with_diff}</b>. Пока они не закрыты,
+          остатки двух баз не сойдутся.
+        </p>
+      ) : (
+        <p className="sc-ok">
+          Все виды движений сходятся штука в штуку — по каждой позиции и
+          каждому размеру.
+        </p>
+      )}
+      <div className="table-wrap rc-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Движение</th>
+              <th className="num">Управленка, шт</th>
+              <th className="num">Налоговая, шт</th>
+              <th className="num">Δ шт</th>
+            </tr>
+          </thead>
+          <tbody>
+            {kinds.map((k) => (
+              <Fragment key={k.kind}>
+                <tr
+                  className={k.upr_absent ? 'muted' : 'row-click'}
+                  onClick={() => !k.upr_absent
+                    && setOpen(open === k.kind ? null : k.kind)}
+                >
+                  <td>
+                    {!k.upr_absent && (open === k.kind ? '▾ ' : '▸ ')}
+                    {k.label}
+                    {k.sign === 0 && !k.upr_absent && (
+                      <span className="muted"> · в остаток не идёт</span>
+                    )}
+                  </td>
+                  <td className="num">{k.upr_absent ? '—' : fmt(k.upr)}</td>
+                  <td className="num">{fmt(k.nal)}</td>
+                  <td className={`num ${k.upr_absent ? 'muted' : sign(k.diff)}`}>
+                    {k.upr_absent ? 'нет в управленке' : fmt(k.diff)}
+                  </td>
+                </tr>
+                {open === k.kind && rowsOf(k).map((p, i) => (
+                  <tr key={`${k.kind}-${i}`} className="sub-row">
+                    <td className="muted">— {p.product}</td>
+                    <td className="num">{fmt(p.upr)}</td>
+                    <td className="num">{fmt(p.nal)}</td>
+                    <td className={`num ${sign(p.diff)}`}>{fmt(p.diff)}</td>
+                  </tr>
+                ))}
+                {open === k.kind && !rowsOf(k).length && (
+                  <tr className="sub-row">
+                    <td colSpan={4} className="muted">
+                      расхождений по позициям нет
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td><b>Расчётный остаток по движениям</b></td>
+              <td className="num"><b>{fmt(data.stock.upr)}</b></td>
+              <td className="num"><b>{fmt(data.stock.nal)}</b></td>
+              <td className={`num ${sign(data.stock.diff)}`}>
+                <b>{fmt(data.stock.diff)}</b>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <button className="btn btn-ghost btn-sm" onClick={() => setAllRows(!allRows)}>
+        {allRows ? 'Только расхождения' : 'Показать все позиции'}
+      </button>
+      {data.stock.mismatch.length > 0 && (
+        <p className="muted">
+          Остаток расходится по позициям:{' '}
+          {data.stock.mismatch.slice(0, 6).map((r) => (
+            `${r.product} ${r.diff > 0 ? '+' : ''}${fmt(r.diff)}`
+          )).join(' · ')}
+          {data.stock.mismatch.length > 6
+            ? ` и ещё ${data.stock.mismatch.length - 6}` : ''}
+        </p>
+      )}
+      {data.outside.length > 0 && (
+        <p className="muted">
+          Движения, которых в управленке нет вовсе:{' '}
+          {data.outside.map((k) => `${k.label} — ${fmt(k.nal)} шт`).join(' · ')}.
+          В расчётный остаток они не включены: разница по ним была бы не
+          расхождением учёта, а следствием отсутствующей выгрузки.
+        </p>
+      )}
+      <p className="muted">
+        Сравниваем только количество: цены между контурами трансфертные и
+        совпадать не обязаны, а штуки обязаны сойтись всегда. Из налоговой
+        стороны исключены услуги, доп. расходы (те же товары второй раз, ради
+        разнесения таможни) и нетоварные счета — бензин и мебель приходуются
+        тем же документом, что подгузники.
+      </p>
     </div>
   )
 }

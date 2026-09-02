@@ -3081,3 +3081,11 @@ button.summary-card {
   opacity: 0.65;
   min-width: 2px;
 }
+
+/* Сверка движений управленки и налоговой на главной: строка вида движения
+   раскрывается в позиции с размерами, поэтому она кликабельна, а вложенные
+   строки визуально уходят вправо и вглубь. */
+.row-click { cursor: pointer; }
+.row-click:hover { background: var(--row-hover, rgba(0, 0, 0, 0.03)); }
+.sub-row td { font-size: 12px; padding-top: 3px; padding-bottom: 3px; }
+.sub-row td:first-child { padding-left: 18px; }

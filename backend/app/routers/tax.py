@@ -1555,3 +1555,222 @@ def contour_event_ack(
     e.acked_by = current.id
     db.commit()
     return {"status": "ok"}
+
+
+# --- Товарные движения обоих контуров, по видам и по размерам ---------------
+#
+# Остаток товара — это не одна цифра, а результат всех движений: поступило,
+# оприходовали, вернули покупатели, продали, списали, вернули поставщику,
+# переместили. Пока хоть одно звено в двух контурах разное, остатки не
+# сойдутся, а по итоговой сумме не видно, какое именно звено разъехалось.
+# Здесь оба контура считаются одинаково — по штукам, по каждой позиции с её
+# размером, — и сразу видно, где именно и на сколько штук расхождение.
+#
+# Управленческую сторону двух видов портал не получает вовсе: инвентаризация
+# в 1С проводок не делает (излишки идут оприходованием, недостачи списанием),
+# а возврат поставщику выгружается только по налоговому контуру. Такие виды
+# помечаются отдельно, а не показываются как расхождение на весь объём.
+GOODS_FLOW: tuple[tuple[str, str, int, str | None], ...] = (
+    ("purchase", "Поступления", 1, "Purchase"),
+    ("stock_in", "Оприходования", 1, "StockReceipt"),
+    ("return", "Возвраты от покупателей", 1, "ReturnLine"),
+    ("sale", "Реализации", -1, "Sale"),
+    ("writeoff", "Списания", -1, "WriteOff"),
+    ("return_supplier", "Возвраты поставщикам", -1, None),
+    ("transfer", "Перемещения", 0, "StockTransfer"),
+    ("inventory", "Инвентаризация", 0, None),
+)
+
+# Счета товаров для перепродажи. Бензин, дизтопливо и мебель приходуются тем
+# же документом «Поступление товары», но на счета материалов и МБП — по
+# количеству от подгузников их не отличить, только по счёту.
+_GOODS_ACCOUNTS = ("161", "162", "163", "164")
+
+
+def _goods_account_ok(account) -> bool:
+    """Счёт пустой — берём (у части выгрузок его нет вовсе)."""
+    acc = str(account or "").strip()
+    return not acc or acc.startswith(_GOODS_ACCOUNTS)
+
+
+@router.get("/goods-flow")
+def goods_flow(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+    org: str = Query(default="all"),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    min_diff: float = Query(default=0.001, description="Порог значимой разницы, шт"),
+):
+    """Управленка ↔ налоговая по всем товарным движениям, в штуках и размерах.
+
+    Одна строка верхнего уровня — вид движения; внутри — позиции с размерами.
+    Считаем только количество: цены между контурами трансфертные и совпадать
+    не обязаны, а штуки обязаны совпасть всегда.
+
+    Итог внизу — расчётный остаток по движениям каждого контура: приход минус
+    расход. Он и отвечает на вопрос «бьются ли остатки»: пока список видов
+    чист, остаток сойдётся сам.
+    """
+    from .purchases import _group_of, _norm_product, _size_of
+
+    o = models.normalize_org(org) if (org or "").lower() in models.ORGS else None
+
+    # Ключ сопоставления — нормализованное имя: в двух базах одну и ту же
+    # позицию пишут по-разному, а после нормализации имена совпадают.
+    def bucket(store: dict, name: str | None) -> dict:
+        key = _norm_product(name)
+        e = store.get(key)
+        if e is None:
+            e = store[key] = {"product": name or "—", "upr": 0.0, "nal": 0.0}
+        elif name and (e["product"] == "—" or len(name) < len(e["product"])):
+            # Держим самое короткое написание: оно обычно и есть каноничное.
+            e["product"] = name
+        return e
+
+    def in_range(d) -> bool:
+        if d is None:
+            return False
+        if date_from and d < date_from:
+            return False
+        if date_to and d > date_to:
+            return False
+        return True
+
+    # --- Управленка: по одной таблице на вид, только нужные колонки ---
+    upr_models = {
+        "Purchase": models.Purchase, "StockReceipt": models.StockReceipt,
+        "ReturnLine": models.ReturnLine, "Sale": models.Sale,
+        "WriteOff": models.WriteOff, "StockTransfer": models.StockTransfer,
+    }
+    per_kind: dict[str, dict] = {k: {} for k, *_ in GOODS_FLOW}
+    for kind, _label, _sign, model_name in GOODS_FLOW:
+        model = upr_models.get(model_name or "")
+        if model is None:
+            continue
+        has_account = hasattr(model, "account")
+        cols = [model.date, model.product, model.qty]
+        if has_account:
+            cols.append(model.account)
+        q = db.query(*cols)
+        if o:
+            q = q.filter(model.organization == o)
+        if date_from:
+            q = q.filter(model.date >= date_from)
+        if date_to:
+            q = q.filter(model.date <= date_to)
+        for row in q.all():
+            if has_account and not _goods_account_ok(row[3]):
+                continue
+            bucket(per_kind[kind], row[1])["upr"] += float(row[2] or 0)
+
+    # --- Налоговая: одна таблица на все виды ---
+    tq = db.query(models.TaxOperation.kind, models.TaxOperation.date,
+                  models.TaxOperation.product, models.TaxOperation.qty,
+                  models.TaxOperation.account, models.TaxOperation.source)
+    if o:
+        tq = tq.filter(models.TaxOperation.organization == o)
+    tq = tq.filter(models.TaxOperation.kind.in_([k for k, *_ in GOODS_FLOW]))
+    if date_from:
+        tq = tq.filter(models.TaxOperation.date >= date_from)
+    if date_to:
+        tq = tq.filter(models.TaxOperation.date <= date_to)
+    for kind, _d, product, qty, account, source in tq.all():
+        if not product:
+            continue
+        # «Поступление услуги» — не товар, а «Поступление доп расходов»
+        # перечисляет ТЕ ЖЕ товары второй раз, чтобы разнести на них таможню.
+        src = (source or "").lower()
+        if "услуг" in src or "доп расход" in src:
+            continue
+        if not _goods_account_ok(account):
+            continue
+        bucket(per_kind[kind], product)["nal"] += float(qty or 0)
+
+    # --- Сборка ответа ---
+    stock: dict = {}
+    kinds_out = []
+    for kind, label, sign, model_name in GOODS_FLOW:
+        store = per_kind[kind]
+        products = []
+        upr_total = nal_total = 0.0
+        for e in store.values():
+            upr, nal = round(e["upr"], 3), round(e["nal"], 3)
+            if abs(upr) < 0.001 and abs(nal) < 0.001:
+                continue
+            upr_total += upr
+            nal_total += nal
+            products.append({
+                "product": e["product"],
+                "upr": round(upr, 1), "nal": round(nal, 1),
+                "diff": round(nal - upr, 1),
+            })
+            # В расчётный остаток идут только виды, которые есть в обоих
+            # контурах. Возврат поставщику выгружается лишь по налоговой, и
+            # если считать его, разница окажется не расхождением учёта, а
+            # следствием отсутствующей выгрузки.
+            if sign and model_name:
+                s = bucket(stock, e["product"])
+                s["upr"] += sign * upr
+                s["nal"] += sign * nal
+        products.sort(key=lambda x: (_group_of(x["product"]),
+                                     _size_of(x["product"]),
+                                     x["product"] or ""))
+        kinds_out.append({
+            "kind": kind,
+            "label": label,
+            # Знак движения для остатка: приход, расход или внутреннее.
+            "sign": sign,
+            "upr": round(upr_total, 1),
+            "nal": round(nal_total, 1),
+            "diff": round(nal_total - upr_total, 1),
+            # Контур, которого у этого вида нет вовсе: сравнивать не с чем,
+            # и показывать полный объём как расхождение было бы враньём.
+            "upr_absent": model_name is None,
+            "nal_absent": abs(nal_total) < 0.001 and abs(upr_total) >= 0.001,
+            "mismatch": sorted(
+                (p for p in products if abs(p["diff"]) >= min_diff),
+                key=lambda x: -abs(x["diff"]),
+            ) if model_name else [],
+            "products": products,
+        })
+
+    stock_rows = []
+    for e in stock.values():
+        upr, nal = round(e["upr"], 1), round(e["nal"], 1)
+        if abs(upr) < 0.001 and abs(nal) < 0.001:
+            continue
+        stock_rows.append({"product": e["product"], "upr": upr, "nal": nal,
+                           "diff": round(nal - upr, 1)})
+    stock_rows.sort(key=lambda x: (_group_of(x["product"]),
+                                   _size_of(x["product"]),
+                                   x["product"] or ""))
+
+    matched = [k for k in kinds_out if not k["upr_absent"]]
+    return {
+        "org": o or "all",
+        "from": date_from.isoformat() if date_from else None,
+        "to": date_to.isoformat() if date_to else None,
+        "kinds": kinds_out,
+        # Расчётный остаток по движениям каждого контура: приход минус расход.
+        # Виды без управленческого контура в него не идут — иначе разница
+        # была бы не расхождением, а следствием отсутствующей выгрузки.
+        "stock": {
+            "upr": round(sum(r["upr"] for r in stock_rows), 1),
+            "nal": round(sum(r["nal"] for r in stock_rows), 1),
+            "diff": round(sum(r["diff"] for r in stock_rows), 1),
+            "rows": stock_rows,
+            "mismatch": sorted((r for r in stock_rows
+                                if abs(r["diff"]) >= min_diff),
+                               key=lambda x: -abs(x["diff"])),
+        },
+        # Движения, которых в управленке нет вовсе: в остаток не вошли, но
+        # знать о них надо — на складе они товар двигали.
+        # Инвентаризация сюда не идёт: она товар не двигает, а фиксирует
+        # факт — движение делают созданные по ней оприходование и списание.
+        "outside": [{"kind": k["kind"], "label": k["label"], "nal": k["nal"]}
+                    for k in kinds_out
+                    if k["upr_absent"] and k["sign"] and abs(k["nal"]) >= 0.001],
+        "kinds_with_diff": sum(1 for k in matched if abs(k["diff"]) >= min_diff),
+        "positions_with_diff": sum(len(k["mismatch"]) for k in matched),
+    }

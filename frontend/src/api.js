@@ -109,6 +109,11 @@ export const api = {
   },
   // Когда каждый контур 1С присылал данные последний раз.
   freshness: () => request('/integrations/freshness'),
+  // Сверка товарных движений обоих контуров: по видам и по размерам.
+  taxGoodsFlow: (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    return request(`/tax/goods-flow${q ? '?' + q : ''}`)
+  },
   taxUnposted: () => request('/tax/unposted'),
   contourEvents: (state = 'open') => request(`/tax/contour-events?state=${state}`),
   contourEventsScan: () => request('/tax/contour-events/scan', { method: 'POST' }),
