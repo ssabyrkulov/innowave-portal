@@ -40,8 +40,13 @@ async function request(path, { method = 'GET', body, form, formData } = {}) {
     headers['Content-Type'] = 'application/json'
   }
 
+  // Свой org в адресе вызова главнее глобального. При двух одинаковых
+  // параметрах сервер берёт последний, и дописанный хвост молча затирал
+  // значение, которое передал сам вызов.
   const sep = path.includes('?') ? '&' : '?'
-  const url = `${API_BASE}${path}${sep}org=${encodeURIComponent(getOrg())}`
+  const url = /[?&]org=/.test(path)
+    ? `${API_BASE}${path}`
+    : `${API_BASE}${path}${sep}org=${encodeURIComponent(getOrg())}`
   const res = await fetch(url, { method, headers, body: payload })
 
   if (res.status === 401) {
@@ -250,8 +255,10 @@ export const api = {
   },
   salesdocPaymentsDay: (day, live) =>
     request(`/salesdoc/payments-day?day=${day}${live ? '&live=true' : ''}`),
-  salesdocSetClientFirm: (sd_id, org) =>
-    request(`/salesdoc/client-firm?sd_id=${encodeURIComponent(sd_id)}&org=${encodeURIComponent(org)}`,
+  // Параметр называется firm, а не org: глобальная фирма едет в каждом
+  // запросе как org, и одноимённый параметр вызова она затирала.
+  salesdocSetClientFirm: (sd_id, firm) =>
+    request(`/salesdoc/client-firm?sd_id=${encodeURIComponent(sd_id)}&firm=${encodeURIComponent(firm)}`,
       { method: 'POST' }),
   salesdocWhy: (query) => request(`/salesdoc/why?query=${encodeURIComponent(query)}`),
   salesdocMethodProbe: () => request('/salesdoc/method-probe'),

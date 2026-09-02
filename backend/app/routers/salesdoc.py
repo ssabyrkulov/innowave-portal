@@ -3731,19 +3731,25 @@ def set_client_firm(
     db: Session = Depends(get_db),
     user: models.User = Depends(can_edit),
     sd_id: str = Query(..., description="SD_id точки"),
-    org: str = Query(..., description="hygiene / innowave / clear — снять"),
+    firm: str = Query(..., description="hygiene / innowave / clear — снять"),
 ):
     """Привязать точку SalesDoc к фирме вручную (или снять привязку).
 
     Нужно там, где автоматика бессильна: фирму точки портал выводит по складам
     её реализаций, а SalesDoc отдаёт через API не все документы — у части точек
     заказов не видно вовсе, и они показывались сразу в обеих фирмах.
+
+    Параметр называется firm, а не org, и это принципиально: выбранная в шапке
+    фирма уезжает на сервер в каждом запросе как org. Пока этот параметр звался
+    так же, он получал два значения, сервер брал последнее — и «снять привязку»
+    превращалось в «привязать к текущей фирме». Кнопка выглядела мёртвой, а на
+    деле молча делала обратное.
     """
     sid = (sd_id or "").strip().lower()
     if not sid:
         raise HTTPException(status_code=400, detail="Нужен sd_id точки")
     row = db.query(models.SalesDocClientFirm).filter_by(sd_id=sid).first()
-    o = (org or "").strip().lower()
+    o = (firm or "").strip().lower()
     if o in ("clear", "", "none"):
         if row:
             db.delete(row)
