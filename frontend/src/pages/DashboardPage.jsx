@@ -310,8 +310,13 @@ function StockSourcesCard() {
       )}
       <p className="muted">
         Колонки считаются по-разному и совпадать не обязаны. Управленка — факт
-        склада из отчёта 1С. Налоговая — расчёт «поступления − реализации +
-        возвраты − списания»: снапшота остатков в её выгрузке нет вовсе.
+        склада из отчёта 1С. Налоговая — расчёт по её движениям: поступления,
+        оприходования и возвраты покупателей в плюс, реализации, списания и
+        возвраты поставщику в минус; снапшота остатков в её выгрузке нет
+        вовсе. Это «как есть по документам налоговой». В сверке контуров выше
+        возврат поставщику в итог не входит — управленческой пары под него не
+        выгружается, и сравнивать было бы не с чем; на эту величину итоги
+        двух блоков и различаются.
         SalesDoc — остатки торговых точек, а не своих складов, и только в
         штуках: сумм он не отдаёт.
       </p>
@@ -848,6 +853,16 @@ function ContourGoodsCard() {
     : Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 1 }))
   const sign = (v) => (Math.abs(v) < 0.001 ? '' : v > 0 ? 'sc-diff' : 'sc-diff')
   const rowsOf = (k) => (allRows ? k.products : k.mismatch)
+  // Период и объём выгрузки по контуру. Оборвавшийся период объясняет
+  // разницу лучше любой догадки: «так не проводят» и «файл перестал
+  // приходить» дают одинаково маленькие числа, а лечатся по-разному.
+  const day = (iso) => (iso ? iso.split('-').reverse().join('.') : null)
+  const cover = (c) => {
+    if (!c || !c.rows) return 'движений нет'
+    const period = c.first === c.last
+      ? day(c.first) : `${day(c.first)} — ${day(c.last)}`
+    return `${period}, строк ${c.rows.toLocaleString('ru-RU')}`
+  }
 
   return (
     <div className="chart-card">
@@ -895,6 +910,14 @@ function ContourGoodsCard() {
                     {k.upr_absent ? 'нет в управленке' : fmt(k.diff)}
                   </td>
                 </tr>
+                {open === k.kind && (
+                  <tr className="sub-row">
+                    <td colSpan={4} className="muted">
+                      охват выгрузки — управленка: {cover(k.upr_cover)} ·
+                      налоговая: {cover(k.nal_cover)}
+                    </td>
+                  </tr>
+                )}
                 {open === k.kind && rowsOf(k).map((p, i) => (
                   <tr key={`${k.kind}-${i}`} className="sub-row">
                     <td className="muted">— {p.product}</td>

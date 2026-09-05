@@ -1644,6 +1644,23 @@ def goods_flow(
         "WriteOff": models.WriteOff, "StockTransfer": models.StockTransfer,
     }
     per_kind: dict[str, dict] = {k: {} for k, *_ in GOODS_FLOW}
+    # Охват выгрузки по каждому виду и контуру: сколько строк и за какой
+    # период. Без него не отличить «в налоговой так не проводят» от «файл
+    # перестал приходить»: и там и там просто мало штук, а решения нужны
+    # разные. Оборвавшийся период виден сразу.
+    span: dict[tuple[str, str], dict] = {}
+
+    def touch(kind: str, side: str, d) -> None:
+        e = span.get((kind, side))
+        if e is None:
+            e = span[(kind, side)] = {"rows": 0, "first": None, "last": None}
+        e["rows"] += 1
+        if d is not None:
+            if e["first"] is None or d < e["first"]:
+                e["first"] = d
+            if e["last"] is None or d > e["last"]:
+                e["last"] = d
+
     for kind, _label, _sign, model_name in GOODS_FLOW:
         model = upr_models.get(model_name or "")
         if model is None:
@@ -1663,6 +1680,7 @@ def goods_flow(
             if has_account and not _goods_account_ok(row[3]):
                 continue
             bucket(per_kind[kind], row[1])["upr"] += float(row[2] or 0)
+            touch(kind, "upr", row[0])
 
     # --- Налоговая: одна таблица на все виды ---
     tq = db.query(models.TaxOperation.kind, models.TaxOperation.date,
@@ -1686,6 +1704,7 @@ def goods_flow(
         if not _goods_account_ok(account):
             continue
         bucket(per_kind[kind], product)["nal"] += float(qty or 0)
+        touch(kind, "nal", _d)
 
     # --- Сборка ответа ---
     stock: dict = {}
@@ -1716,9 +1735,22 @@ def goods_flow(
         products.sort(key=lambda x: (_group_of(x["product"]),
                                      _size_of(x["product"]),
                                      x["product"] or ""))
+        def cover(side: str) -> dict:
+            e = span.get((kind, side)) or {"rows": 0, "first": None, "last": None}
+            return {
+                "rows": e["rows"],
+                "first": e["first"].isoformat() if e["first"] else None,
+                "last": e["last"].isoformat() if e["last"] else None,
+            }
+
+        upr_cover, nal_cover = cover("upr"), cover("nal")
         kinds_out.append({
             "kind": kind,
             "label": label,
+            # Строки и период с каждой стороны — чем именно объясняется
+            # разница: в базе так не проводят или выгрузка оборвалась.
+            "upr_cover": upr_cover,
+            "nal_cover": nal_cover,
             # Знак движения для остатка: приход, расход или внутреннее.
             "sign": sign,
             "upr": round(upr_total, 1),
