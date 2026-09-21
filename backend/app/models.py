@@ -22,12 +22,18 @@ class Role(str, enum.Enum):
     viewer = "viewer"
 
 
-# Организации группы. Данные 1С грузятся по фирмам (разные папки Drive) и
-# нигде не смешиваются: разрез по organization есть во всех выгружаемых
-# таблицах. hygiene — Innowave Hygiene (единый налог), innowave — Innowave
-# (общий налог).
+# Организации. Данные 1С грузятся по фирмам (фирма — первое слово в имени
+# файла выгрузки) и нигде не смешиваются: разрез по organization есть во
+# всех выгружаемых таблицах. hygiene — Innowave Hygiene (единый налог),
+# innowave — Innowave (общий налог), bluecarbon — ОсОО «Блю Карбон Трейдинг
+# Компани»: отдельный бизнес (солнечные панели, инверторы, батареи), ведётся
+# в той же 1С и выгружается той же обработкой.
 DEFAULT_ORG = "hygiene"
-ORGS = ("hygiene", "innowave")
+# Группа Innowave — две фирмы одного дела, их портал показывает вместе
+# («Обе фирмы»). Blue Carbon в общий срез не входит: чужой товар и чужие
+# клиенты в сводных остатках и продажах подгузников — это не сумма, а каша.
+GROUP_ORGS = ("hygiene", "innowave")
+ORGS = GROUP_ORGS + ("bluecarbon",)
 
 # Плейсхолдер номенклатуры для документных реализаций (выгрузка без разбивки
 # по товарам — только Дата/Сумма/Контрагент, как у Innowave). По нему такие
@@ -41,11 +47,14 @@ def normalize_org(value: str | None) -> str:
 
 
 def org_scope(query, model, org: str | None):
-    """Фильтрует запрос по организации. 'all'/пусто → обе фирмы вместе."""
+    """Фильтрует запрос по организации. 'all'/пусто → группа Innowave.
+
+    Незнакомое значение — тоже группа, а не «всё подряд»: сторонняя фирма
+    (Blue Carbon) видна только когда её выбрали явно."""
     o = (org or "").strip().lower()
     if o in ORGS:
         return query.filter(model.organization == o)
-    return query
+    return query.filter(model.organization.in_(GROUP_ORGS))
 
 
 class Direction(str, enum.Enum):

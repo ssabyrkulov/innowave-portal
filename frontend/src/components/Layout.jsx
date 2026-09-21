@@ -3,10 +3,13 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { api, getOrg, setOrg } from '../api'
 import { useAuth } from '../auth'
 
+// «Обе фирмы» — группа Innowave. Blue Carbon — отдельный бизнес в той же
+// 1С: свой пункт, в общий срез не входит.
 const ORG_OPTIONS = [
   { value: 'all', label: 'Обе фирмы' },
   { value: 'hygiene', label: 'Innowave Hygiene' },
   { value: 'innowave', label: 'Innowave' },
+  { value: 'bluecarbon', label: 'Blue Carbon' },
 ]
 
 /* Отпечаток версии. Дважды в неделю всплывает один и тот же вопрос —

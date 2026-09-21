@@ -22,7 +22,7 @@ const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
 }
-const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave' }
+const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
 // Момент, когда расхождение заметили, знает только сам портал: 1С про него
 // не помнит, а список «сейчас» ничего не хранит — документ провели во второй
@@ -210,7 +210,7 @@ export default function ContoursPage() {
                     <Fragment key={id}>
                       <tr className="doc-row"
                         onClick={() => setOpenType(open ? null : id)}>
-                        <td>{firm === 'hygiene' ? 'Innowave Hygiene' : 'Innowave'}</td>
+                        <td>{FIRMS[firm] || firm}</td>
                         <td>{open ? '▾' : '▸'} {t.label}</td>
                         <td className={`num ${t.gaps_upr ? 'sc-diff' : ''}`}>
                           {t.upr_absent ? <span className="muted">не ведётся</span>

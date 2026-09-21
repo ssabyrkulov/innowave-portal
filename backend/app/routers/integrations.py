@@ -108,12 +108,22 @@ def org_from_name(filename: str) -> str | None:
 
     Важно: «Хайджин» проверяем ПЕРВЫМ. Полное название фирмы — «Инновейв
     Хайджин», и по подстроке «инновейв» она бы досталась второй фирме.
+
+    Незнакомая фирма в имени раньше молча падала в запасную (папки Drive) —
+    то есть в Хайджин. Так 30 файлов «БлюКарбон_…» ушли бы в чужие таблицы,
+    а журнал проводок и остатки Хайджина заменились бы чужими: эти виды
+    грузятся заменой по фирме. Теперь у Blue Carbon свой код, и он
+    распознаётся здесь же.
     """
     name = (filename or "").lower()
     if "хайджин" in name or "hygiene" in name or "haydzhin" in name:
         return "hygiene"
     if "инновейв" in name or "innowave" in name or "innovejv" in name:
         return "innowave"
+    if ("блюкарбон" in name or "блю карбон" in name or "blue carbon" in name
+            or "bluecarbon" in name or "blue_carbon" in name
+            or "blyukarbon" in name or "blucarbon" in name):
+        return "bluecarbon"
     return None
 
 
@@ -171,7 +181,9 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
 
     Каноничные файлы зависят от организации: у Hygiene реализация = Реал2, а
     возвраты — построчный ТовВозв; у Innowave выгружается только Реал (без «2»)
-    и документный Возв. Поэтому логика ветвится по org.
+    и документный Возв. Поэтому логика ветвится по org. Особенная здесь
+    Hygiene (старая база со своими форматами); все остальные фирмы — базы
+    одной конфигурации с Innowave, и Blue Carbon идёт по ветке Innowave.
     """
     name = (filename or "").lower()
     if name.startswith("~$"):
@@ -212,8 +224,8 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
         # клиентский возврат в 1С называется «…от покупателя».
         if has("поставщик", "postavshik", "postavshchik"):
             return "unsupported"
-        # У Hygiene возвраты выгружаются построчно, у Innowave — документами.
-        return "return_docs" if org == "innowave" else "return_lines"
+        # У Hygiene возвраты выгружаются построчно, у остальных — документами.
+        return "return_lines" if org == "hygiene" else "return_docs"
     if has("остатк", "ostatk"):
         # «Остатки …»: деньги, если названы деньги/банк/касса, иначе товары.
         if has("денег", "денежн", "deneg", "denejn", "банк", "bank", "касс", "kass"):
@@ -319,8 +331,8 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
 
     # --- Продажи ---
     if "реал" in name:
-        if org == "innowave":
-            return "sales"  # у Innowave каноничен обычный Реал
+        if org != "hygiene":
+            return "sales"  # у Innowave и остальных каноничен обычный Реал
         return "sales" if "реал2" in name else "dup_sales"
 
     # --- Возвраты ---
@@ -328,7 +340,7 @@ def classify_by_name(filename: str, org: str = models.DEFAULT_ORG) -> str | None
         return "return_lines"
     if "возв" in name:
         # У Innowave нет построчного ТовВозв — значит документный Возв каноничен
-        return "return_docs" if org == "innowave" else "dup_returns"
+        return "dup_returns" if org == "hygiene" else "return_docs"
 
     # --- Остальные типы (по одному файлу) ---
     if "банккасса" in name:
@@ -775,17 +787,23 @@ def _source_of(filename: str):
         name = name[m.end():]
     low = name.lower()
     firm = ("hygiene" if "хайджин" in low or "haydj" in low or "hydj" in low
-            else "innowave" if "инновейв" in low or "innov" in low else None)
+            else "innowave" if "инновейв" in low or "innov" in low
+            else "bluecarbon" if "карбон" in low or "carbon" in low else None)
+    # Контур в имени есть у Хайджина и Инновейва («…_УПРАВЛЕНКА_…»); у
+    # Blue Carbon база одна, и файл зовётся просто «БлюКарбон_Журнал
+    # проводок» — без слова о контуре это управленка.
     ledger = ("nal" if "налогов" in low or "nalog" in low
-              else "upr" if "управленк" in low or "upravlenk" in low else None)
+              else "upr" if "управленк" in low or "upravlenk" in low
+              else "upr" if firm else None)
     if not firm or not ledger:
         return None, None, None
     parts = name.split("_", 2)
-    kind = (parts[2] if len(parts) > 2 else name).rsplit(".", 1)[0].strip()
+    kind = (parts[-1] if len(parts) > 1 else name).rsplit(".", 1)[0].strip()
     return firm, ledger, kind or "(без вида)"
 
 
-FIRM_LABEL = {"hygiene": "Хайджин", "innowave": "Инновейв"}
+FIRM_LABEL = {"hygiene": "Хайджин", "innowave": "Инновейв",
+              "bluecarbon": "Блю Карбон"}
 LEDGER_LABEL = {"upr": "управленка", "nal": "налоговая"}
 
 
