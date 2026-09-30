@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    LargeBinary,
     Numeric,
     String,
 )
@@ -80,6 +81,9 @@ class User(Base):
     # Если задано — пользователь является торговым агентом (значение совпадает
     # с именем агента в продажах); он видит только своих клиентов в «Мой день».
     agent_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Согласование платежей: до какой суммы (сом) пользователь может утверждать
+    # заявки сам. Пусто = не утверждает (кроме администратора, у него лимита нет).
+    approve_limit: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     payments: Mapped[list["Payment"]] = relationship(
@@ -1320,3 +1324,138 @@ class Payment(Base):
     )
 
     creator: Mapped["User"] = relationship(back_populates="payments")
+
+
+# ---------- Согласование платежей ----------
+#
+# Заявка на платёж проходит цепочку: черновик → проверка бухгалтера →
+# согласование руководителя → утверждена (ждёт оплаты) → оплачена → сверена
+# с фактом из 1С. Каждый шаг пишется в историю (PaymentRequestEvent), ничего
+# не удаляется. Статус хранится строкой, а не Enum: список статусов будет
+# расти, а менять тип Enum в Postgres на живой базе больно.
+
+
+class RequestStatus(str, enum.Enum):
+    draft = "draft"            # черновик
+    review = "review"          # на проверке у бухгалтера
+    approval = "approval"      # на согласовании
+    approved = "approved"      # утверждена, ждёт оплаты
+    paid = "paid"              # оплачена
+    reconciled = "reconciled"  # оплата найдена в 1С
+    rejected = "rejected"      # отклонена
+    cancelled = "cancelled"    # отменена инициатором
+
+
+class PaymentRequest(Base):
+    __tablename__ = "payment_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="KGS", nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    counterparty: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    counterparty_guid: Mapped[str | None] = mapped_column(String, nullable=True)
+    article: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # статья ДДС
+    method: Mapped[str] = mapped_column(String(8), default="bank", nullable=False)  # bank|cash|card
+    basis: Mapped[str | None] = mapped_column(String, nullable=True)   # счёт/договор: номер и дата
+    purpose: Mapped[str | None] = mapped_column(String, nullable=True)  # назначение платежа
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default=RequestStatus.draft.value,
+                                        nullable=False, index=True)
+
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    checked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    paid_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paid_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    paid_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    paid_doc: Mapped[str | None] = mapped_column(String, nullable=True)  # номер платёжки/РКО
+    decision_comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Найденная в выгрузке 1С оплата — заявка «в учёте».
+    expense_id: Mapped[int | None] = mapped_column(ForeignKey("expenses.id"), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    creator: Mapped["User"] = relationship(foreign_keys=[created_by])
+    checker: Mapped["User | None"] = relationship(foreign_keys=[checked_by])
+    approver: Mapped["User | None"] = relationship(foreign_keys=[approved_by])
+    payer: Mapped["User | None"] = relationship(foreign_keys=[paid_by])
+    events: Mapped[list["PaymentRequestEvent"]] = relationship(
+        back_populates="request", cascade="all, delete-orphan",
+        order_by="PaymentRequestEvent.id",
+    )
+    files: Mapped[list["PaymentRequestFile"]] = relationship(
+        back_populates="request", cascade="all, delete-orphan",
+        order_by="PaymentRequestFile.id",
+    )
+
+
+class PaymentRequestEvent(Base):
+    """История заявки: кто, когда, что сделал и с каким комментарием."""
+
+    __tablename__ = "payment_request_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    request_id: Mapped[int] = mapped_column(
+        ForeignKey("payment_requests.id"), nullable=False, index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    to_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    request: Mapped["PaymentRequest"] = relationship(back_populates="events")
+    user: Mapped["User | None"] = relationship()
+
+
+class PaymentRequestFile(Base):
+    """Вложение к заявке (счёт, договор, платёжка). Хранится в базе: диск на
+    хостинге не переживает редеплой, а документы терять нельзя."""
+
+    __tablename__ = "payment_request_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    request_id: Mapped[int] = mapped_column(
+        ForeignKey("payment_requests.id"), nullable=False, index=True
+    )
+    filename: Mapped[str] = mapped_column(String, nullable=False)
+    content_type: Mapped[str] = mapped_column(String, default="application/octet-stream")
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), default="basis", nullable=False)  # basis|payment
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    request: Mapped["PaymentRequest"] = relationship(back_populates="files")
+
+
+class ApprovalSettings(Base):
+    """Правила согласования по фирме. Одна строка на организацию; 'all' —
+    значения по умолчанию для фирм без своей строки."""
+
+    __tablename__ = "approval_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    # До этой суммы бухгалтер может утвердить заявку сам, без руководителя.
+    accountant_limit: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    # Неснижаемый остаток денег: если после оплаты остаток на счетах фирмы
+    # падает ниже, заявка помечается предупреждением.
+    cash_cushion: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    # Обязательно ли вложение (счёт/договор) для отправки на согласование.
+    require_basis_file: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )

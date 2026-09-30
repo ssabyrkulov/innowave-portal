@@ -10,6 +10,7 @@ import CalendarPage from './pages/CalendarPage'
 import ChecksPage from './pages/ChecksPage'
 import ContoursPage from './pages/ContoursPage'
 import PaymentsPage from './pages/PaymentsPage'
+import ApprovalsPage from './pages/ApprovalsPage'
 import UsersPage from './pages/UsersPage'
 import UnitEconomicsPage from './pages/UnitEconomicsPage'
 import BudgetPage from './pages/BudgetPage'
@@ -44,6 +45,7 @@ export default function App() {
         <Route index element={<DashboardPage />} />
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="payments" element={<PaymentsPage />} />
+        <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="checks" element={<ChecksPage />} />
         <Route path="debt" element={<DebtPage />} />

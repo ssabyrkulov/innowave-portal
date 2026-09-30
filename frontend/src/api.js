@@ -95,6 +95,53 @@ export const api = {
   updatePayment: (id, body) => request(`/payments/${id}`, { method: 'PATCH', body }),
   deletePayment: (id) => request(`/payments/${id}`, { method: 'DELETE' }),
 
+  // Согласование платежей (заявки)
+  approvalsList: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== '' && v != null)
+    ).toString()
+    return request(`/approvals${qs ? `?${qs}` : ''}`)
+  },
+  approvalsSummary: () => request('/approvals/summary'),
+  approvalsArticles: () => request('/approvals/articles'),
+  approvalsCounterparties: (q) =>
+    request(`/approvals/counterparties?q=${encodeURIComponent(q)}`),
+  approvalsSettings: () => request('/approvals/settings'),
+  approvalsSettingsSave: (body) => request('/approvals/settings', { method: 'PUT', body }),
+  approvalGet: (id) => request(`/approvals/${id}`),
+  approvalCreate: (body) => request('/approvals', { method: 'POST', body }),
+  approvalUpdate: (id, body) => request(`/approvals/${id}`, { method: 'PATCH', body }),
+  approvalAction: (id, action, body = {}) =>
+    request(`/approvals/${id}/${action}`, { method: 'POST', body }),
+  approvalUpload: (id, file, kind = 'basis') => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request(`/approvals/${id}/files?kind=${kind}`, { method: 'POST', formData: fd })
+  },
+  approvalFileUrl: (id, fileId) => `${API_BASE}/approvals/${id}/files/${fileId}`,
+  // Файлы отдаются только с токеном, а обычная ссылка его не несёт —
+  // скачиваем через fetch и открываем как blob в новой вкладке.
+  approvalFileOpen: async (id, fileId, filename) => {
+    const headers = {}
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(`${API_BASE}/approvals/${id}/files/${fileId}`, { headers })
+    if (!res.ok) throw new Error('Не удалось получить файл')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.target = '_blank'
+    a.rel = 'noreferrer'
+    if (!/^(image|application\/pdf)/.test(blob.type)) a.download = filename || 'file'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  },
+  approvalFileDelete: (id, fileId) =>
+    request(`/approvals/${id}/files/${fileId}`, { method: 'DELETE' }),
+
   importLog: () => request('/sales/imports'),
   // Виды выгрузок, которые 1С присылает, а портал пока не грузит.
   // ФОТ — только для администратора: персональные данные.

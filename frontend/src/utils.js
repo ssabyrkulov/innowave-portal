@@ -4,6 +4,37 @@ export const STATUS_LABELS = {
   overdue: 'Просрочен',
 }
 
+export const REQUEST_STATUS_LABELS = {
+  draft: 'Черновик',
+  review: 'На проверке',
+  approval: 'На согласовании',
+  approved: 'Утверждена',
+  paid: 'Оплачена',
+  reconciled: 'В учёте 1С',
+  rejected: 'Отклонена',
+  cancelled: 'Отменена',
+}
+
+export const ORG_LABELS = {
+  hygiene: 'Innowave Hygiene',
+  innowave: 'Innowave',
+  bluecarbon: 'Blue Carbon',
+}
+
+export const METHOD_LABELS = { bank: 'Банк', cash: 'Касса', card: 'Карта' }
+
+export function formatDateRu(iso) {
+  if (!iso) return '—'
+  const [y, m, d] = String(iso).slice(0, 10).split('-')
+  return `${d}.${m}.${y}`
+}
+
+export function formatDateTimeRu(iso) {
+  if (!iso) return '—'
+  const dt = new Date(iso.endsWith('Z') ? iso : iso + 'Z')
+  return dt.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 export const DIRECTION_LABELS = {
   incoming: 'Входящий',
   outgoing: 'Исходящий',

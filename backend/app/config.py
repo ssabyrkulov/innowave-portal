@@ -33,5 +33,12 @@ class Settings(BaseSettings):
     salesdoc_token: str = ""
     salesdoc_user_id: str = ""
 
+    # --- Уведомления о согласовании платежей (Telegram) ---
+    # Пусто = уведомления выключены. Значения только в окружении хостинга.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    # Публичный адрес портала для ссылок в уведомлениях.
+    portal_url: str = ""
+
 
 settings = Settings()

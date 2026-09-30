@@ -125,6 +125,7 @@ function UserModal({ initial, isSelf, onClose, onSaved }) {
     role: initial.role || 'viewer',
     password: '',
     agent_name: initial.agent_name || '',
+    approve_limit: initial.approve_limit ?? '',
   })
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -146,11 +147,19 @@ function UserModal({ initial, isSelf, onClose, onSaved }) {
     setSaving(true)
     try {
       if (isEdit) {
-        const body = { full_name: form.full_name, role: form.role, agent_name: form.agent_name }
+        const body = {
+          full_name: form.full_name,
+          role: form.role,
+          agent_name: form.agent_name,
+          approve_limit: form.approve_limit === '' ? null : String(form.approve_limit),
+        }
         if (form.password) body.password = form.password
         await api.updateUser(initial.id, body)
       } else {
-        await api.createUser(form)
+        await api.createUser({
+          ...form,
+          approve_limit: form.approve_limit === '' ? null : String(form.approve_limit),
+        })
       }
       await onSaved()
       onClose()
@@ -209,6 +218,21 @@ function UserModal({ initial, isSelf, onClose, onSaved }) {
             </select>
             <span className="hint-line">
               Если выбрать агента — пользователь будет видеть только своих клиентов в разделе «Мой день».
+            </span>
+          </label>
+
+          <label>
+            Утверждает платежи до суммы (KGS)
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={form.approve_limit}
+              onChange={(e) => update('approve_limit', e.target.value)}
+              placeholder="Пусто — не утверждает"
+            />
+            <span className="hint-line">
+              Администратор утверждает без ограничений. Для остальных — личный лимит в разделе «Согласование».
             </span>
           </label>
 

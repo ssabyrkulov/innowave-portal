@@ -78,6 +78,7 @@ const PRIMARY = [
 ]
 const SECONDARY = [
   { to: '/work', icon: '🧭', label: 'Мой день', workOnly: true },
+  { to: '/approvals', icon: '✅', label: 'Согласование', approvalsBadge: true },
   { to: '/payments', icon: '📋', label: 'Платежи' },
   { to: '/analytics', icon: '📊', label: 'Аналитика' },
   { to: '/operations', icon: '🗂', label: 'Операции' },
@@ -101,6 +102,8 @@ export default function Layout() {
   // не проведённый в другой. Без счётчика о нём узнают, только если зайти
   // на страницу, — а узнать надо сразу.
   const [contour, setContour] = useState(null)
+  // Заявки на платёж, которые ждут решения именно этого пользователя.
+  const [inbox, setInbox] = useState(0)
   const [moreOpen, setMoreOpen] = useState(false)
   // Свёрнутая боковая панель (только десктоп) — состояние запоминаем.
   const [collapsed, setCollapsed] = useState(
@@ -126,6 +129,10 @@ export default function Layout() {
       .contourEvents('open')
       .then((d) => setContour(d.open_gaps))
       .catch(() => {})
+    api
+      .approvalsSummary()
+      .then((d) => setInbox(d.inbox || 0))
+      .catch(() => {})
   }, [location.pathname])
 
   // Закрываем лист «Ещё» при любой навигации
@@ -149,6 +156,13 @@ export default function Layout() {
       <span className="nav-badge nav-badge-critical"
         title={`Документов, пропущенных во второй базе 1С: ${contour}`}>
         {contour > 99 ? '99+' : contour}
+      </span>
+    ) : null
+
+  const approvalsBadge =
+    inbox > 0 ? (
+      <span className="nav-badge" title={`Заявок ждут вашего решения: ${inbox}`}>
+        {inbox > 99 ? '99+' : inbox}
       </span>
     ) : null
 
@@ -206,6 +220,7 @@ export default function Layout() {
               <span className="nav-ico">{i.icon}</span>
               <span className="nav-txt">{i.label}</span>
               {i.contourBadge && contourBadge}
+              {i.approvalsBadge && approvalsBadge}
             </NavLink>
           ))}
         </nav>
@@ -285,6 +300,7 @@ export default function Layout() {
                   <span className="sheet-link-icon">{i.icon}</span>
                   {i.label}
                   {i.contourBadge && contourBadge}
+                  {i.approvalsBadge && approvalsBadge}
                 </NavLink>
               ))}
             </div>

@@ -16,6 +16,7 @@ from . import models
 from .database import Base, SessionLocal, database_url, engine
 from .routers import (
     advances,
+    approvals,
     agents,
     auth,
     balances,
@@ -602,6 +603,7 @@ def health():
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(payments.router)
+app.include_router(approvals.router)
 app.include_router(sales.router)
 app.include_router(checks.router)
 app.include_router(receipts.router)
