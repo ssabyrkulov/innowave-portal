@@ -228,9 +228,33 @@ function sendFile(folder, name) {
   });
 }
 
+// Сколько времени прогон тратит на отправку. У Apps Script на всё шесть
+// минут; дальше он падает с «Exceeded maximum execution time», и файлы,
+// до которых очередь не дошла, остаются без отметки. 1С перевыгружает
+// всю папку каждый час, список по алфавиту начинается с «Авансовый
+// отчёт», и до «Реализации» прогон доходил не всегда: дебиторка жила на
+// старых продажах. Останавливаемся за минуту до лимита, хвост уедет
+// следующим запуском через 15 минут.
+const BUDGET_MS = 5 * 60 * 1000;
+
+// Что слать первым. Деньги и продажи важнее справочников: если прогон не
+// успеет, пусть не успеют контрагенты и номенклатура, а не реализация.
+const PRIORITY = [
+  /реализац|realizac/i,
+  /приходный кассов|пко|pko/i,
+  /пп входящ|банк.*вх|bank.*in/i,
+  /возврат товаров от покупател|товвозв/i,
+  /остатки/i,
+];
+function priorityOf(name) {
+  for (var i = 0; i < PRIORITY.length; i++) if (PRIORITY[i].test(name)) return i;
+  return PRIORITY.length;
+}
+
 function syncNewFiles() {
   const props = PropertiesService.getScriptProperties();
-  let seen = 0, sent = 0, known = 0, failed = 0;
+  const startedAt = Date.now();
+  let seen = 0, sent = 0, known = 0, failed = 0, deferred = 0;
   const notSent = [];
   const retryLater = [];  // упали на лежащем портале — дошлём в конце
 
@@ -243,11 +267,21 @@ function syncNewFiles() {
     const names = [];
     const it = DriveApp.getFolderById(folder.id).getFiles();
     while (it.hasNext()) names.push(it.next().getName());
-    names.sort();
+    // Сначала по важности, внутри — те, что дольше всех не доставлялись:
+    // иначе файл в конце алфавита мог не доезжать прогон за прогоном.
+    names.sort(function (a, b) {
+      const pa = priorityOf(a), pb = priorityOf(b);
+      if (pa !== pb) return pa - pb;
+      const ta = Number(props.getProperty('at_' + folder.org + '_' + a) || 0);
+      const tb = Number(props.getProperty('at_' + folder.org + '_' + b) || 0);
+      if (ta !== tb) return ta - tb;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
     console.log('В папке файлов: ' + names.length);
 
     const tag = '[' + folder.org + '/' + (folder.ledger || 'upr') + '] ';
     names.forEach(function (name) {
+      if (Date.now() - startedAt > BUDGET_MS) { deferred++; return; }
       const found = DriveApp.getFolderById(folder.id).getFilesByName(name);
       if (!found.hasNext()) { notSent.push(name + ' — исчез из папки'); return; }
       const f = found.next();
@@ -269,6 +303,7 @@ function syncNewFiles() {
         const code = res.getResponseCode();
         if (code === 200) {
           props.setProperty(key, mod); // запомнили — файл доставлен
+          props.setProperty('at_' + folder.org + '_' + name, String(Date.now()));
           sent++;
           console.log(tag + name + ' -> ' + res.getContentText());
         } else {
@@ -301,6 +336,7 @@ function syncNewFiles() {
         const code = res.getResponseCode();
         if (code === 200) {
           props.setProperty(r.key, r.mod);
+          props.setProperty('at_' + r.folder.org + '_' + r.name, String(Date.now()));
           sent++;
           console.log(r.tag + r.name + ' -> ' + res.getContentText() + ' (со второго прохода)');
         } else {
@@ -319,7 +355,8 @@ function syncNewFiles() {
   // Итог прогона. Без него понять, что часть файлов не доехала, можно было
   // только вручную сверив список лога со списком папки.
   console.log('ИТОГ: файлов ' + seen + ' · отправлено ' + sent +
-              ' · без изменений ' + known + ' · ошибок ' + failed);
+              ' · без изменений ' + known + ' · ошибок ' + failed +
+              ' · отложено до следующего запуска ' + deferred);
   if (notSent.length) console.warn('НЕ ДОСТАВЛЕНЫ:\n' + notSent.join('\n'));
 }
 
