@@ -607,7 +607,13 @@ def _dispatch_import(db, kind, content, auto_name, robot, filename, org, file_ha
         # Формат реализации: построчный (есть «НоменклатураНаименование») или
         # документный (Дата/Сумма/Контрагент, как у Innowave).
         if _is_line_sales(content):
-            result = import_sales_workbook(db, content, auto_name, robot.id, org=org)
+            # Выгрузка реализации из 1С — полный снимок, а не дозагрузка.
+            # Без замены периода переделанный документ (сменили дату или
+            # сумму, как фура Байго №649: 08.10 → 04.10) остаётся в базе
+            # старой строкой рядом с новой, и дебиторка считает его дважды.
+            result = import_sales_workbook(
+                db, content, auto_name, robot.id, replace_period=True, org=org
+            )
         else:
             result = import_sales_docs_workbook(db, content, auto_name, robot.id, org=org)
     elif kind == "receipts":
