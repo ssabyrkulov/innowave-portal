@@ -288,6 +288,19 @@ def import_sales_workbook(
                     models.Sale.date >= dmin, models.Sale.date <= dmax)
             .delete(synchronize_session=False)
         )
+        # Документ, которому в 1С сдвинули дату назад, в периоде нового
+        # файла уже не виден: старая строка лежит позже dmax и под замену
+        # периода не попадает. Так фура Байго №649, перенесённая с 08.10 на
+        # 04.10, считалась в дебиторке дважды. Поэтому строки тех же
+        # документов (по ДокументGUID) убираем независимо от даты.
+        guids = sorted({p["doc_guid"] for p in parsed_rows if p.get("doc_guid")})
+        for i in range(0, len(guids), 400):
+            replaced += (
+                db.query(models.Sale)
+                .filter(models.Sale.organization == org,
+                        models.Sale.doc_guid.in_(guids[i:i + 400]))
+                .delete(synchronize_session=False)
+            )
         db.flush()
 
     # --- Документные строки того же периода стали лишними ---
