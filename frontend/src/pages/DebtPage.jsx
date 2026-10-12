@@ -39,7 +39,13 @@ const SORTS = {
   paid: { label: 'Оплачено', kind: 'num', get: (c) => c.paid },
   debt: { label: 'Долг', kind: 'num', get: (c) => c.debt },
   last_shipment: { label: 'Посл. отгрузка', kind: 'date', get: (c) => c.last_shipment },
-  last_payment: { label: 'Посл. оплата', kind: 'date', get: (c) => c.last_payment },
+  // Кто не платил ни разу, должен с даты отгрузки — так же считает колонка
+  // «Без оплат». Иначе такие точки уходили в конец списка, и клиент без
+  // единой оплаты за два года стоял рядом с теми, кто взял товар вчера.
+  last_payment: {
+    label: 'Посл. оплата', kind: 'date',
+    get: (c) => c.last_payment || c.last_shipment,
+  },
   days: { label: 'Без оплат', kind: 'num', get: (c) => daysNoPay(c) },
 }
 const DEFAULT_SORT = { key: 'debt', dir: 'desc' }
@@ -64,9 +70,8 @@ function loadSort() {
   return DEFAULT_SORT
 }
 
-// Пустые значения (нет агента, не было оплат) всегда в конце списка, в какую
-// сторону ни сортируй: иначе при сортировке по дате оплаты наверх всплывают
-// не самые давние должники, а те, кто не платил вовсе, вперемешку.
+// Пустые значения (нет агента, нет ни одной даты) всегда в конце списка, в
+// какую сторону ни сортируй: сравнивать их не с чем.
 function sortClients(list, { key, dir }) {
   const s = SORTS[key]
   const sign = dir === 'asc' ? 1 : -1
@@ -85,14 +90,14 @@ function sortClients(list, { key, dir }) {
 
 // Заголовок колонки, по которому можно сортировать. Кнопка внутри th — чтобы
 // сортировка работала и с клавиатуры.
-function SortTh({ k, sort, onSort, className = '', children }) {
+function SortTh({ k, sort, onSort, className = '', title, children }) {
   const active = sort.key === k
   return (
     <th
       className={`${className} th-sortable`}
       aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
     >
-      <button type="button" className={`th-sort ${active ? 'active' : ''}`} onClick={() => onSort(k)}>
+      <button type="button" className={`th-sort ${active ? 'active' : ''}`} onClick={() => onSort(k)} title={title}>
         {children}
         <span className="th-sort-arrow">{active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
       </button>
@@ -582,7 +587,8 @@ export default function DebtPage() {
                   <SortTh k="paid" sort={sort} onSort={onSort} className="num">Оплачено</SortTh>
                   <SortTh k="debt" sort={sort} onSort={onSort} className="num">Долг</SortTh>
                   <SortTh k="last_shipment" sort={sort} onSort={onSort} className="hide-mobile">Посл. отгрузка</SortTh>
-                  <SortTh k="last_payment" sort={sort} onSort={onSort} className="hide-mobile">Посл. оплата</SortTh>
+                  <SortTh k="last_payment" sort={sort} onSort={onSort} className="hide-mobile"
+                    title="Кто не платил ни разу — по дате последней отгрузки">Посл. оплата</SortTh>
                   <SortTh k="days" sort={sort} onSort={onSort} className="hide-mobile">Без оплат</SortTh>
                   {can.editPayments && <th className="debt-act-col">Пометить</th>}
                 </tr>
