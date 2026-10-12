@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { formatMoney } from '../utils'
+import { buildDebtHtml, printHtml } from '../lib/debtPdf'
 
 const STALE_DAYS = 30
 
@@ -25,6 +26,78 @@ function daysNoPay(c) {
 function noPayText(c) {
   const d = daysNoPay(c)
   return d != null ? `${d} дн.` : '—'
+}
+
+// Сортировка активной дебиторки. kind решает, в какую сторону сортировать по
+// первому клику и как подписать направление: суммы и сроки интересны «сначала
+// большие», имена — по алфавиту, даты — «сначала свежие».
+const SORTS = {
+  client: { label: 'Клиент', kind: 'text', get: (c) => c.client || '' },
+  agent: { label: 'Агент', kind: 'text', get: (c) => c.agent || '' },
+  shipped: { label: 'Отгружено', kind: 'num', get: (c) => c.shipped },
+  returned: { label: 'Возвраты', kind: 'num', get: (c) => c.returned || 0 },
+  paid: { label: 'Оплачено', kind: 'num', get: (c) => c.paid },
+  debt: { label: 'Долг', kind: 'num', get: (c) => c.debt },
+  last_shipment: { label: 'Посл. отгрузка', kind: 'date', get: (c) => c.last_shipment },
+  last_payment: { label: 'Посл. оплата', kind: 'date', get: (c) => c.last_payment },
+  days: { label: 'Без оплат', kind: 'num', get: (c) => daysNoPay(c) },
+}
+const DEFAULT_SORT = { key: 'debt', dir: 'desc' }
+const SORT_STORE = 'debt.sort'
+
+const DIR_WORDS = {
+  text: { asc: 'А → Я', desc: 'Я → А' },
+  num: { asc: 'меньшие сверху', desc: 'большие сверху' },
+  date: { asc: 'старые сверху', desc: 'свежие сверху' },
+}
+
+function sortLabel({ key, dir }) {
+  const s = SORTS[key]
+  return `${s.label}, ${DIR_WORDS[s.kind][dir]}`
+}
+
+function loadSort() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SORT_STORE))
+    if (v && SORTS[v.key] && (v.dir === 'asc' || v.dir === 'desc')) return v
+  } catch { /* нет хранилища — сортировка по умолчанию */ }
+  return DEFAULT_SORT
+}
+
+// Пустые значения (нет агента, не было оплат) всегда в конце списка, в какую
+// сторону ни сортируй: иначе при сортировке по дате оплаты наверх всплывают
+// не самые давние должники, а те, кто не платил вовсе, вперемешку.
+function sortClients(list, { key, dir }) {
+  const s = SORTS[key]
+  const sign = dir === 'asc' ? 1 : -1
+  return [...list].sort((a, b) => {
+    const va = s.get(a)
+    const vb = s.get(b)
+    const ea = va == null || va === ''
+    const eb = vb == null || vb === ''
+    if (ea || eb) return ea === eb ? b.debt - a.debt : ea ? 1 : -1
+    const r = s.kind === 'text'
+      ? String(va).localeCompare(String(vb), 'ru')
+      : va < vb ? -1 : va > vb ? 1 : 0
+    return r !== 0 ? r * sign : b.debt - a.debt
+  })
+}
+
+// Заголовок колонки, по которому можно сортировать. Кнопка внутри th — чтобы
+// сортировка работала и с клавиатуры.
+function SortTh({ k, sort, onSort, className = '', children }) {
+  const active = sort.key === k
+  return (
+    <th
+      className={`${className} th-sortable`}
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button type="button" className={`th-sort ${active ? 'active' : ''}`} onClick={() => onSort(k)}>
+        {children}
+        <span className="th-sort-arrow">{active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+      </button>
+    </th>
+  )
 }
 
 // Категории пометок контрагента. Помеченные уходят из активной дебиторки в
@@ -152,6 +225,17 @@ export default function DebtPage() {
   const [agentFilter, setAgentFilter] = useState('')   // '' | имя | __none__ | __fired__
   const [minDebt, setMinDebt] = useState('')
   const [staleOnly, setStaleOnly] = useState(false)
+  const [sort, setSort] = useState(loadSort)
+
+  useEffect(() => {
+    try { localStorage.setItem(SORT_STORE, JSON.stringify(sort)) } catch { /* не критично */ }
+  }, [sort])
+
+  function onSort(key) {
+    setSort((s) => s.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: SORTS[key].kind === 'text' ? 'asc' : 'desc' })
+  }
 
   async function load() {
     setError(null)
@@ -255,11 +339,35 @@ export default function DebtPage() {
     if (staleOnly && !(daysSince(c.last_payment) > STALE_DAYS)) return false
     return true
   })
+  const sorted = sortClients(shown, sort)
   const shownDebt = shown.reduce((s, c) => s + c.debt, 0)
   const filtersOn = Boolean(needle || agentFilter || min || staleOnly)
   const agents = data?.agents || []
   const noAgentCount = debtors.filter((c) => !c.agent).length
   const firedCount = debtors.filter((c) => c.agent_active === false).length
+
+  // В шапку PDF — какой срез выгружен, словами: через неделю по листу должно
+  // быть понятно, это вся дебиторка или только один агент.
+  function filtersText() {
+    const parts = []
+    if (needle) parts.push(`поиск «${q.trim()}»`)
+    if (agentFilter === '__none__') parts.push('без агента')
+    else if (agentFilter === '__fired__') parts.push('агент уволен')
+    else if (agentFilter) parts.push(`агент ${agentFilter}`)
+    if (min) parts.push(`долг от ${formatMoney(min)}`)
+    if (staleOnly) parts.push(`без оплат больше ${STALE_DAYS} дн.`)
+    return parts.length ? `фильтр: ${parts.join(', ')}` : 'все активные должники'
+  }
+
+  function exportPdf() {
+    printHtml(buildDebtHtml({
+      rows: sorted,
+      daysOf: daysNoPay,
+      staleDays: STALE_DAYS,
+      filters: filtersText(),
+      sortLabel: sortLabel(sort),
+    }))
+  }
 
   return (
     <div>
@@ -417,6 +525,33 @@ export default function DebtPage() {
                   />
                   Только без оплат &gt; {STALE_DAYS} дн.
                 </label>
+                {/* На телефоне часть колонок скрыта, сортировать по их
+                    заголовкам нельзя — поэтому выбор порядка дублируется тут */}
+                <select
+                  className="debt-sort-select"
+                  value={`${sort.key}:${sort.dir}`}
+                  onChange={(e) => {
+                    const [key, dir] = e.target.value.split(':')
+                    setSort({ key, dir })
+                  }}
+                  title="Порядок строк"
+                >
+                  {Object.keys(SORTS).flatMap((key) =>
+                    ['desc', 'asc'].map((dir) => (
+                      <option key={`${key}:${dir}`} value={`${key}:${dir}`}>
+                        {sortLabel({ key, dir })}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <button
+                  className="btn btn-sm"
+                  onClick={exportPdf}
+                  disabled={sorted.length === 0}
+                  title="Список как на экране — с фильтрами и сортировкой. В окне печати выберите «Сохранить как PDF»"
+                >
+                  Выгрузить PDF
+                </button>
                 {filtersOn && (
                   <button
                     className="btn btn-sm"
@@ -440,15 +575,15 @@ export default function DebtPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Клиент</th>
-                  <th>Агент</th>
-                  <th className="num hide-mobile">Отгружено</th>
-                  <th className="num hide-mobile">Возвраты</th>
-                  <th className="num">Оплачено</th>
-                  <th className="num">Долг</th>
-                  <th className="hide-mobile">Посл. отгрузка</th>
-                  <th className="hide-mobile">Посл. оплата</th>
-                  <th className="hide-mobile"></th>
+                  <SortTh k="client" sort={sort} onSort={onSort}>Клиент</SortTh>
+                  <SortTh k="agent" sort={sort} onSort={onSort}>Агент</SortTh>
+                  <SortTh k="shipped" sort={sort} onSort={onSort} className="num hide-mobile">Отгружено</SortTh>
+                  <SortTh k="returned" sort={sort} onSort={onSort} className="num hide-mobile">Возвраты</SortTh>
+                  <SortTh k="paid" sort={sort} onSort={onSort} className="num">Оплачено</SortTh>
+                  <SortTh k="debt" sort={sort} onSort={onSort} className="num">Долг</SortTh>
+                  <SortTh k="last_shipment" sort={sort} onSort={onSort} className="hide-mobile">Посл. отгрузка</SortTh>
+                  <SortTh k="last_payment" sort={sort} onSort={onSort} className="hide-mobile">Посл. оплата</SortTh>
+                  <SortTh k="days" sort={sort} onSort={onSort} className="hide-mobile">Без оплат</SortTh>
                   {can.editPayments && <th className="debt-act-col">Пометить</th>}
                 </tr>
               </thead>
@@ -460,7 +595,7 @@ export default function DebtPage() {
                     </td>
                   </tr>
                 )}
-                {shown.map((c) => {
+                {sorted.map((c) => {
                   const stale = daysSince(c.last_payment) > STALE_DAYS
                   return (
                     <tr key={c.client}>
@@ -488,10 +623,12 @@ export default function DebtPage() {
                       <td className="hide-mobile">{fmtDate(c.last_shipment)}</td>
                       <td className="hide-mobile">{fmtDate(c.last_payment)}</td>
                       <td className="hide-mobile">
-                        {stale && (
+                        {stale ? (
                           <span className="badge badge-overdue" title={`Оплат не было больше ${STALE_DAYS} дней`}>
                             {noPayText(c)}
                           </span>
+                        ) : (
+                          <span className="muted">{noPayText(c)}</span>
                         )}
                       </td>
                       {can.editPayments && (

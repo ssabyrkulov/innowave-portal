@@ -2618,6 +2618,34 @@ button.summary-card {
   white-space: nowrap;
 }
 .debt-filter-total { margin: 8px 0 0; }
+.debt-filter-row .debt-sort-select { min-width: 200px; }
+
+/* Сортируемые заголовки: кнопка выглядит как обычный заголовок колонки,
+   стрелка показывает текущий порядок, у неактивных — бледная. */
+.th-sortable { padding: 0; }
+.th-sort {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 16px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+th.num .th-sort { justify-content: flex-end; }
+.th-sort:hover, .th-sort.active { color: var(--text); }
+.th-sort:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.th-sort-arrow { font-size: 9px; opacity: .35; }
+.th-sort.active .th-sort-arrow { opacity: 1; color: var(--primary); }
+@media (max-width: 840px) {
+  .table-wrap.compact .th-sortable { padding: 0; }
+  .table-wrap.compact .th-sort { padding: 9px 7px; }
+}
 /* Колонка агента: имя и подпись «откуда знаем» не должны распирать таблицу. */
 .debt-agent-col { max-width: 210px; }
 .debt-agent-badge { margin-left: 6px; }
