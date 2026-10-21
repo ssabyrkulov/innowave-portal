@@ -476,30 +476,45 @@ def reconcile_debt(
         l.client_1c: l.sd_id.lower()
         for l in db.query(models.SalesDocClientLink).all()
     }
+
+    def link_entry(name: str):
+        """Точка SalesDoc для контрагента 1С → (точка, связка ручная, ИД из имени).
+
+        Порядок связки: 0) ручная, 1) ИД SalesDoc из названия контрагента,
+        2) название. Связки по коду 1С здесь НЕТ и быть пока не может:
+        `sd_by_code` строится из code_1C точек SalesDoc, а со стороны 1С
+        GUID контрагента в выгрузках отсутствует — сопоставлять не с чем.
+        Появится КонтрагентGUID (шаг 0 плана работ) — код станет самым
+        надёжным ключом и должен встать выше ИД из названия: код проставляет
+        обмен, а ИД в название вписывает человек и может ошибиться."""
+        if name in links and links[name] in sd_by_id:
+            return sd_by_id[links[name]], True, None
+        sid = _extract_sd_id(name)
+        if sid and sid in sd_by_id:
+            return sd_by_id[sid], False, sid
+        return sd_by_name.get(_match_key(name)), False, sid
+
+    # Долг той же точки в 1С других фирм. Нужен в двух местах: точку, которую
+    # SalesDoc не отнёс ни к одной фирме, но в 1С она есть у другой фирмы,
+    # отдаём той фирме, а не показываем здесь как «нет в 1С»; а точке, которая
+    # торгует через обе фирмы, подписываем долг второй — иначе разница с общим
+    # балансом SalesDoc выглядит ошибкой, хотя это долг соседней фирмы.
+    other_org_debt: dict[str, dict[str, float]] = {}  # sd_id → {фирма: долг}
+    if o in models.ORGS:
+        for firm in models.ORGS:
+            if firm == o:
+                continue
+            for c in receivables(db=db, _=user, org=firm)["clients"]:
+                e, _, _ = link_entry(c["client"])
+                if e:
+                    d = other_org_debt.setdefault(e["sd_id"], {})
+                    d[firm] = round(d.get(firm, 0.0) + c["debt"], 2)
+
     for c in rec["clients"]:
         name = c["client"]
         our_debt = round(c["debt"], 2)
         client_org = c.get("organization")
-        # Порядок связки: 0) ручная, 1) ИД SalesDoc из названия контрагента,
-        # 2) название. Связки по коду 1С здесь НЕТ и быть пока не может:
-        # `sd_by_code` строится из code_1C точек SalesDoc, а со стороны 1С
-        # GUID контрагента в выгрузках отсутствует — сопоставлять не с чем.
-        # Появится КонтрагентGUID (шаг 0 плана работ) — код станет самым
-        # надёжным ключом и должен встать выше ИД из названия: код проставляет
-        # обмен, а ИД в название вписывает человек и может ошибиться.
-        entry = None
-        linked_by_hand = False
-        if name in links and links[name] in sd_by_id:
-            entry = sd_by_id[links[name]]
-            linked_by_hand = True
-        if entry is None:
-            sid = _extract_sd_id(name)
-            if sid and sid in sd_by_id:
-                entry = sd_by_id[sid]
-        else:
-            sid = None
-        if entry is None:
-            entry = sd_by_name.get(_match_key(name))
+        entry, linked_by_hand, sid = link_entry(name)
         if entry:
             matched_ids.add(entry["sd_id"])
         sd_debt = entry["debt"] if entry else 0.0
@@ -525,6 +540,7 @@ def reconcile_debt(
             # эту связку было негде.
             "linked_by_hand": linked_by_hand,
             "organization": client_org,
+            "other_org_debt": other_org_debt.get(entry["sd_id"]) if entry else None,
             # Компоненты долга 1С — для «причины расхождения».
             "our_sales": round(c.get("shipped", 0.0), 2),
             "our_returns": round(c.get("returned", 0.0), 2),
@@ -558,6 +574,11 @@ def reconcile_debt(
                     f"{s['name']} — {s['count']} шт., "
                     f"{s['first']} … {s['last']}" for s in named
                 )) if named else None
+            elif entry["sd_id"] in other_org_debt:
+                # SalesDoc фирму не подсказал (реализаций нет или они на
+                # складах без фирмы), а в 1С точка есть у другой фирмы — значит
+                # она той фирмы. Там она и покажется, уже со своим долгом 1С.
+                continue
             elif info is None:
                 org_note = "фирма не определена: в SalesDoc нет реализаций этой точки"
                 org_note_warn = True
@@ -569,6 +590,8 @@ def reconcile_debt(
                 org_note_warn = True
             else:
                 continue  # точка другой фирмы
+        elif o in models.ORGS and entry["sd_id"] in other_org_debt:
+            continue  # складов фирм нет, но по 1С точка — другой фирмы
         row_org = manual or (list(entry_orgs)[0] if len(entry_orgs) == 1 else None)
         rows.append({
             "firm_manual": manual,

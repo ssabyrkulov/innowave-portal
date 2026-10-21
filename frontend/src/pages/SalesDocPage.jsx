@@ -578,6 +578,15 @@ export default function SalesDocPage() {
                           {r.org_note}
                         </div>
                       )}
+                      {/* Точка торгует через обе фирмы: баланс SalesDoc общий,
+                          а долг 1С — только выбранной. Без этой подписи
+                          разница выглядит ошибкой, хотя это долг соседней фирмы. */}
+                      {r.other_org_debt && Object.entries(r.other_org_debt).map(([firm, d]) => (
+                        <div key={firm} className="rc-org-note">
+                          в 1С {ORG_LABELS[firm] || firm} долг этой точки {money(d)} —
+                          баланс SalesDoc общий по фирмам
+                        </div>
+                      ))}
                     </td>
                     <td data-label="Фирма" className="muted">
                       {ORG_LABELS[r.organization] || '—'}
