@@ -248,6 +248,14 @@ def _sd_component(maps: dict, sd_id, code) -> float:
     return round(s, 2)
 
 
+def _name_words(v: str) -> set:
+    """Слова названия без ИД точки и пунктуации — но со скобками, в отличие
+    от `match_key`."""
+    v = salesdoc_mirror._CODE_RE.sub(" ", (v or "").lower().replace("ё", "е"))
+    v = re.sub(r"[^\w\s]", " ", v)
+    return {w for w in v.split() if len(w) > 1}
+
+
 def _names_diverge(one_c: str, sd: str) -> bool:
     """Расходятся ли названия контрагента 1С и точки SalesDoc «по сути».
 
@@ -257,12 +265,7 @@ def _names_diverge(one_c: str, sd: str) -> bool:
     сохраняем и выбрасываем только ИД точки и пунктуацию, а сравниваем набор
     слов: совпадение меньше половины короткого названия — разные точки.
     """
-    def words(v: str) -> set:
-        v = salesdoc_mirror._CODE_RE.sub(" ", (v or "").lower().replace("ё", "е"))
-        v = re.sub(r"[^\w\s]", " ", v)
-        return {w for w in v.split() if len(w) > 1}
-
-    a, b = words(one_c), words(sd)
+    a, b = _name_words(one_c), _name_words(sd)
     if not a or not b:
         return False
     return len(a & b) * 2 < min(len(a), len(b))
@@ -419,7 +422,10 @@ def reconcile_debt(
     # Справочник SalesDoc: индексы по ИД, коду 1С и по имени.
     sd_by_id: dict[str, dict] = {}
     sd_by_code: dict[str, dict] = {}
-    sd_by_name: dict[str, dict] = {}
+    # Под одним ключом имени бывает несколько точек: ключ выбрасывает скобки,
+    # и «Глобус 8 Ак Босого» совпадает с неактивной «(Инновейв) Глобус 8 Ак
+    # Босого». Храним всех, а выбираем в `by_name`.
+    sd_by_name: dict[str, list[dict]] = {}
     for c in sd_clients:
         sid = (c["sd_id"] or "").lower()
         entry = {
@@ -435,7 +441,36 @@ def reconcile_debt(
             sd_by_code[str(c["code_1C"])] = entry
         k = _match_key(c["name"])
         if k:
-            sd_by_name.setdefault(k, entry)
+            sd_by_name.setdefault(k, []).append(entry)
+
+    # Точки с реализациями — из одноимённых предпочитаем рабочую.
+    with_orders: set[str] = set()
+    if mirror_ready:
+        with_orders = {
+            (cid or "").lower()
+            for (cid,) in db.query(models.SalesDocOrder.client_sd_id)
+            .filter(models.SalesDocOrder.status != salesdoc.CANCELLED_STATUS)
+            .distinct()
+        }
+
+    def by_name(name: str):
+        """Точка SalesDoc по названию контрагента 1С.
+
+        Раньше брали первую попавшуюся под ключом — и контрагент 1С молча
+        садился на пустую неактивную точку-двойник с одним «возвратом с
+        полки», а настоящая точка вылезала отдельной строкой «нет в 1С»: в
+        списке два одинаковых названия. Теперь из одноимённых выбираем ту,
+        что совпадает по словам целиком (со скобками), затем активную, затем
+        с реализациями."""
+        cands = sd_by_name.get(_match_key(name)) or []
+        if len(cands) < 2:
+            return cands[0] if cands else None
+        words = _name_words(name)
+        return max(cands, key=lambda e: (
+            _name_words(e["name"]) == words,
+            e.get("active", True),
+            e["sd_id"] in with_orders,
+        ))
 
     # Фирма клиента SalesDoc — по складам его заказов. Нужна, чтобы при выборе
     # одной фирмы показывать только её точки (в т.ч. «только SD»).
@@ -492,7 +527,7 @@ def reconcile_debt(
         sid = _extract_sd_id(name)
         if sid and sid in sd_by_id:
             return sd_by_id[sid], False, sid
-        return sd_by_name.get(_match_key(name)), False, sid
+        return by_name(name), False, sid
 
     # Долг той же точки в 1С других фирм. Нужен в двух местах: точку, которую
     # SalesDoc не отнёс ни к одной фирме, но в 1С она есть у другой фирмы,
@@ -605,6 +640,9 @@ def reconcile_debt(
             "in_sd": True,
             "code_1C": entry["code_1C"],
             "sd_id": entry["sd_id"],
+            # Неактивную точку не видно в списке клиентов SalesDoc — без
+            # пометки строка про неё выглядит выдумкой портала.
+            "sd_active": entry.get("active", True),
             "organization": row_org,  # фирма по складам заказов SalesDoc
             "our_sales": 0.0,
             "our_returns": 0.0,
