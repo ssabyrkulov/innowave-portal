@@ -414,6 +414,10 @@ export default function SalesDocPage() {
         <UnmappedStoresBanner stores={debt.unmapped_stores} />
       )}
 
+      {debt?.inactive_sd?.clients > 0 && (
+        <InactiveSdBanner inactive={debt.inactive_sd} onOpen={setDetail} />
+      )}
+
       {debt?.sd_account_wide && (
         <p className="note-readonly sd-warn">
           Выбрана одна фирма. Реализации SalesDoc делятся по складу, а <b>баланс
@@ -764,6 +768,48 @@ function SyncState({ sync }) {
           </span>
         ))}
     </span>
+  )
+}
+
+// Неактивные точки SalesDoc без пары в 1С, на которых остался баланс.
+// В списке сверки они висели «нет в 1С» вперемешку с настоящими
+// расхождениями, хотя точку в SalesDoc закрыли сознательно. Убраны сюда —
+// но баланс на них никуда не делся, и это надо видеть.
+function InactiveSdBanner({ inactive, onOpen }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="note-readonly sd-warn">
+      <b>Неактивные точки SalesDoc с остатком: {inactive.clients} на {money(inactive.amount)}.</b>{' '}
+      Точки закрыты в SalesDoc, поэтому в списке выше их нет, но баланс на
+      них остался и входит в общий долг клиентов SalesDoc. Чтобы он ушёл,
+      документы на этих точках надо удалить или перенести на рабочую точку
+      в самом SalesDoc.{' '}
+      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
+        {open ? 'Свернуть' : 'Показать точки'}
+      </button>
+      {open && (
+        <div className="table-wrap rc-table">
+          <table>
+            <thead>
+              <tr><th>Точка</th><th>ИД</th><th className="num">Долг SD</th></tr>
+            </thead>
+            <tbody>
+              {inactive.top.map((r) => (
+                <tr key={r.sd_id}>
+                  <td>
+                    <button className="client-link" onClick={() => onOpen(r)}>
+                      {r.name}
+                    </button>
+                  </td>
+                  <td><code>{r.sd_id}</code></td>
+                  <td className="num">{money(r.sd_debt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
 

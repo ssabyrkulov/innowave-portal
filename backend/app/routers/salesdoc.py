@@ -583,6 +583,7 @@ def reconcile_debt(
         })
 
     # Клиенты, которые есть только в SalesDoc и там висит долг.
+    inactive_rows: list[dict] = []
     for entry in sd_by_id.values():
         if entry["sd_id"] in matched_ids or abs(entry["debt"]) < 0.5:
             continue
@@ -628,7 +629,7 @@ def reconcile_debt(
         elif o in models.ORGS and entry["sd_id"] in other_org_debt:
             continue  # складов фирм нет, но по 1С точка — другой фирмы
         row_org = manual or (list(entry_orgs)[0] if len(entry_orgs) == 1 else None)
-        rows.append({
+        sd_row = {
             "firm_manual": manual,
             "org_note": org_note,
             "org_note_warn": org_note_warn,
@@ -640,14 +641,20 @@ def reconcile_debt(
             "in_sd": True,
             "code_1C": entry["code_1C"],
             "sd_id": entry["sd_id"],
-            # Неактивную точку не видно в списке клиентов SalesDoc — без
-            # пометки строка про неё выглядит выдумкой портала.
             "sd_active": entry.get("active", True),
             "organization": row_org,  # фирма по складам заказов SalesDoc
             "our_sales": 0.0,
             "our_returns": 0.0,
             "our_pay": 0.0,
-        })
+        }
+        # Неактивную точку в SalesDoc закрыли сознательно, но баланс на ней
+        # остался — например, возвраты, проведённые на точку-двойник. В
+        # общем списке она висела «нет в 1С» среди настоящих расхождений;
+        # убираем её в отдельную сводку, чтобы остаток не потерялся совсем.
+        if not sd_row["sd_active"]:
+            inactive_rows.append(sd_row)
+            continue
+        rows.append(sd_row)
 
     rows.sort(key=lambda x: -abs(x["diff"]))
 
@@ -781,6 +788,12 @@ def reconcile_debt(
             "clients": len(hidden_rows),
             "amount": round(sum(h["amount"] for h in hidden_rows), 2),
             "top": hidden_rows,
+        },
+        # Неактивные точки SalesDoc без пары в 1С, на которых висит баланс.
+        "inactive_sd": {
+            "clients": len(inactive_rows),
+            "amount": round(sum(r["sd_debt"] for r in inactive_rows), 2),
+            "top": sorted(inactive_rows, key=lambda r: -abs(r["sd_debt"])),
         },
         "rows": rows,
     }
