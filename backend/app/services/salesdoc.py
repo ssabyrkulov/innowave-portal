@@ -604,7 +604,9 @@ def fetch_clients(use_cache: bool = False) -> list[dict]:
             "sd_id": r.get("SD_id"),
             "code_1C": r.get("code_1C"),
             "name": r.get("name") or "",
-            "active": r.get("active"),
+            # SalesDoc отдаёт признак строкой "Y"/"N", а bool("N") — истина:
+            # закрытые точки годами считались рабочими.
+            "active": r.get("active") not in ("N", "n", False, 0, "0"),
             "agents": [
                 {"sd_id": str(a.get("id") or "").lower(),
                  "code_1C": a.get("code"),
