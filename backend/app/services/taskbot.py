@@ -13,8 +13,10 @@
   открыта;
 - в 18:00 — сводка, и задачи старше срока эскалации уходят руководителю.
 
-Токен бота — переменная окружения TELEGRAM_BOT_TOKEN (тот же бот, что
-шлёт согласования платежей). Группу бот узнаёт по команде /bind с кодом из
+Бот отдельный — «Задачи бухгалтерии», токен в переменной окружения
+TASKBOT_TOKEN. Бот согласований платежей (TELEGRAM_BOT_TOKEN) его не
+заменяет: у бота один вебхук на всё, и кнопки задач не должны делить его с
+уведомлениями о платежах. Группу бот узнаёт по команде /bind с кодом из
 портала, людей — по ссылке /start из портала.
 """
 
@@ -85,7 +87,7 @@ def get_settings(db: Session) -> models.TaskBotSettings:
 # --- Telegram Bot API ------------------------------------------------------
 
 def configured() -> bool:
-    return bool(settings.telegram_bot_token)
+    return bool(settings.taskbot_token)
 
 
 def api(method: str, **payload) -> dict | None:
@@ -93,7 +95,7 @@ def api(method: str, **payload) -> dict | None:
     ронять ни пересчёт, ни вебхук."""
     if not configured():
         return None
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/{method}"
+    url = f"https://api.telegram.org/bot{settings.taskbot_token}/{method}"
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})

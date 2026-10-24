@@ -102,8 +102,8 @@ def connect(payload: ConnectIn, db: Session = Depends(get_db),
     """Подключить бота: вебхук на портал и код для команды /bind в группе."""
     if not taskbot.configured():
         raise HTTPException(status_code=400, detail=(
-            "Не задан токен бота: добавьте TELEGRAM_BOT_TOKEN в переменные "
-            "окружения на Render и перезапустите сервис."))
+            "Не задан токен бота «Задачи бухгалтерии»: добавьте TASKBOT_TOKEN "
+            "в переменные окружения на Render."))
     cfg = taskbot.get_settings(db)
     bot = taskbot.api("getMe")
     if not bot:
