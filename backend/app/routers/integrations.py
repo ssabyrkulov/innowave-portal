@@ -505,8 +505,15 @@ async def inbox(
     # работает даже с черновыми именами без метки.
     is_nal = (ledger or "").strip().lower().startswith("nal") or kind == "tax"
     low = filename.lower().replace("\u0451", "\u0435")
-    if is_nal and any(t in low for t in ("журнал проводок", "jurnal provodok",
-                                         "zhurnal provodok")):
+    journal = next((t for t in ("журнал проводок", "jurnal provodok",
+                                "zhurnal provodok") if t in low), None)
+    # У налоговой базы два журнала: «…Журнал проводок Типовой» — бухучёт, с
+    # ним и сверяется управленка, и «…Журнал проводок Налоговый» — регистр
+    # налогового учёта со своими счетами. Оба легли бы в одно место, и
+    # пришедший последним затирал бы другой. Берём только типовой.
+    if journal and "налогов" in low.split(journal, 1)[1]:
+        journal = None
+    if is_nal and journal:
         # Налоговый журнал проводок ложится рядом с управленческим, со своей
         # меткой контура: по двум журналам сверяются остатки товаров и
         # оплаты, и любое расхождение становится задачей бухгалтеру.
