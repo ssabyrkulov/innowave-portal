@@ -167,6 +167,13 @@ export const api = {
   contourEvents: (state = 'open') => request(`/tax/contour-events?state=${state}`),
   contourEventsScan: () => request('/tax/contour-events/scan', { method: 'POST' }),
   contourEventAck: (id) => request(`/tax/contour-events/${id}/ack`, { method: 'POST' }),
+  // Задачи бухгалтерии в Telegram
+  taskbotSettings: () => request('/taskbot/settings'),
+  taskbotSave: (body) => request('/taskbot/settings', { method: 'PUT', body }),
+  taskbotConnect: (portal_url) =>
+    request('/taskbot/connect', { method: 'POST', body: { portal_url } }),
+  taskbotSync: () => request('/taskbot/sync', { method: 'POST' }),
+  taskbotTasks: () => request('/taskbot/tasks'),
   skippedKinds: () => request('/integrations/skipped-kinds'),
   // Непроведённые и помеченные на удаление документы 1С — и проверка,
   // не посчитал ли их портал.

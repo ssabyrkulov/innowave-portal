@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from 'react'
 import { api } from '../api'
+import TaskBotPanel from '../components/TaskBotPanel'
 import { formatMoney } from '../utils'
 
 // Даты читают как в 1С — «27.08.2026», а не «2026-08-27».
@@ -21,6 +22,7 @@ const pairs = (n) => {
 const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
+  payment: 'Оплата', stock: 'Остаток',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
@@ -113,12 +115,21 @@ function Journal() {
                 <tr key={e.id}>
                   <td>{fdate(e.first_seen.slice(0, 10))}</td>
                   <td className="muted">{FIRMS[e.organization] || e.organization}</td>
-                  <td>
-                    {KINDS[e.kind] || e.kind} {e.number || '—'}
-                    <span className="muted"> · {e.side === 'upr'
-                      ? 'только в управленке' : 'только в налоговой'}</span>
-                    <div className="muted skipped-cols">от {fdate(e.date)}</div>
-                  </td>
+                  {e.kind === 'stock' ? (
+                    // Остаток — не документ: товар, у которого штуки в
+                    // налоговой не равны управленке.
+                    <td>
+                      Остаток <span className="muted">· {e.number}</span>
+                      <div className="muted skipped-cols">замечено {fdate(e.date)}</div>
+                    </td>
+                  ) : (
+                    <td>
+                      {KINDS[e.kind] || e.kind} {e.number || '—'}
+                      <span className="muted"> · {e.side === 'upr'
+                        ? 'только в управленке' : 'только в налоговой'}</span>
+                      <div className="muted skipped-cols">от {fdate(e.date)}</div>
+                    </td>
+                  )}
                   <td>{e.party || '—'}</td>
                   <td className="num">{e.qty ? e.qty.toLocaleString('ru-RU') : '—'}</td>
                   <td className="num">{formatMoney(e.amount, '')}</td>
@@ -170,6 +181,8 @@ export default function ContoursPage() {
             : 'Загрузка…'}
         </span>
       </div>
+
+    <TaskBotPanel />
 
     {unposted?.firms?.length > 0 && (
       <div className="fresh-block">

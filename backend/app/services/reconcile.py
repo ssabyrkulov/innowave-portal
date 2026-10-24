@@ -19,6 +19,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..routers.ledger import base_scope
 
 # Счета товаров: 1610 товары, 1620 материалы (бензин, упаковка), 1640 товары
 # в налоговой Хайджина. Остаток считается по всем — забытый бензин в
@@ -35,13 +36,6 @@ MIN_PAYMENT = 50.0
 AMOUNT_TOLERANCE = 1.0
 # Оплату в две базы сажают в разные дни: выписку разносят пакетом.
 PAYMENT_DAYS = 3
-
-
-def _base_filter(query, base: str):
-    if base == "upr":
-        return query.filter(or_(models.LedgerEntry.base == "upr",
-                                models.LedgerEntry.base.is_(None)))
-    return query.filter(models.LedgerEntry.base == base)
 
 
 def has_nal_ledger(db: Session, org: str) -> bool:
@@ -77,7 +71,7 @@ def stock_by_item(db: Session, org: str, base: str,
     E = models.LedgerEntry
     goods = [E.debit_account.like(p + "%") for p in GOODS_PREFIXES] + \
             [E.credit_account.like(p + "%") for p in GOODS_PREFIXES]
-    q = _base_filter(
+    q = base_scope(
         db.query(E.debit_account, E.debit_sub, E.debit_qty,
                  E.credit_account, E.credit_sub, E.credit_qty)
         .filter(E.organization == org, or_(*goods)), base)
@@ -123,7 +117,7 @@ def stock_diffs(db: Session, org: str,
 def _receipts(db: Session, org: str, base: str, since: date) -> list[dict]:
     """Поступления от покупателей — по документу, с суммой и плательщиком."""
     E = models.LedgerEntry
-    q = _base_filter(
+    q = base_scope(
         db.query(E.doc_guid, E.doc, E.date, E.credit_sub, E.amount,
                  E.debit_account)
         .filter(E.organization == org, E.date >= since,
