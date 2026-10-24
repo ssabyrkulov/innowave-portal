@@ -84,6 +84,11 @@ class User(Base):
     # Согласование платежей: до какой суммы (сом) пользователь может утверждать
     # заявки сам. Пусто = не утверждает (кроме администратора, у него лимита нет).
     approve_limit: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # Telegram-аккаунт, привязанный через бота (/start с кодом из портала):
+    # по нему кнопки «Внесла» в группе знают, кто нажал, и задачи
+    # ответственного подписываются его именем.
+    telegram_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    telegram_name: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     payments: Mapped[list["Payment"]] = relationship(
@@ -365,6 +370,11 @@ class LedgerEntry(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     organization: Mapped[str] = mapped_column(String, default=DEFAULT_ORG, nullable=False, index=True)
+    # Контур: upr — управленка, nal — налоговая. Журналы обоих контуров
+    # лежат рядом, чтобы сверять остатки и оплаты проводка к проводке.
+    # Пусто — строки, загруженные до появления налогового журнала: это
+    # управленка.
+    base: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     doc: Mapped[str | None] = mapped_column(String, nullable=True)
     doc_guid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
@@ -375,6 +385,12 @@ class LedgerEntry(Base):
     credit_account: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     credit_name: Mapped[str | None] = mapped_column(String, nullable=True)
     credit_sub: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Второе субконто — у товарных счетов это склад.
+    debit_sub2: Mapped[str | None] = mapped_column(String, nullable=True)
+    credit_sub2: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Количество — по ним считаются остатки товаров в штуках.
+    debit_qty: Mapped[float | None] = mapped_column(Numeric(16, 3), nullable=True)
+    credit_qty: Mapped[float | None] = mapped_column(Numeric(16, 3), nullable=True)
     amount: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
     content: Mapped[str | None] = mapped_column(String, nullable=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -1243,6 +1259,19 @@ class ContourEvent(Base):
     acked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     acked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     note: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Задача для бухгалтера: расхождение, которое надо закрыть, а не
+    # справочный хвост. Считается при каждом пересчёте журнала.
+    is_task: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    # «Внесла» — бухгалтер говорит, что исправила. Задача не закрывается:
+    # закроет её следующая выгрузка, если расхождение и правда ушло.
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Сообщение о задаче в Telegram — его бот правит, когда задача закрылась.
+    tg_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Сообщение-вопрос «напишите причину» после кнопки «Не нужно».
+    tg_prompt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Сообщение о задаче уже переписано на «закрыто» — второй раз не трогаем.
+    tg_closed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 
 class AppMigration(Base):
@@ -1456,6 +1485,56 @@ class ApprovalSettings(Base):
     cash_cushion: Mapped[float] = mapped_column(Numeric(14, 2), default=0, nullable=False)
     # Обязательно ли вложение (счёт/договор) для отправки на согласование.
     require_basis_file: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class TaskBotSettings(Base):
+    """Настройки задач бухгалтерии в Telegram. Одна строка на портал.
+
+    Бот пишет в группу бухгалтерии: присылает новые расхождения между
+    управленкой и налоговой с кнопками и держит закреплённый список задач,
+    в котором закрытые зачёркиваются. Закрывает задачу не кнопка, а
+    следующая выгрузка: расхождение ушло — задача выполнена."""
+
+    __tablename__ = "task_bot_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    chat_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    chat_title: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Код для команды /bind в группе: так бот узнаёт, какая группа наша.
+    bind_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    bot_username: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Адрес портала для ссылок в сообщениях и для вебхука Telegram.
+    portal_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Закреплённый список задач и день, на который он собран: с новым днём
+    # бот заводит новый список, а вчерашний остаётся в истории чата.
+    list_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    list_day: Mapped[date | None] = mapped_column(Date, nullable=True)
+    list_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    # С какой даты документы и оплаты считаются задачами. Всё, что раньше, —
+    # история, которую разбирают отдельно, а не поток уведомлений.
+    control_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Фирмы через запятую, по каждой проверке отдельно: остатки Hygiene в
+    # налоговой законно расходятся до проведения ККМ, оплаты — нет.
+    stock_orgs: Mapped[str | None] = mapped_column(String, nullable=True)
+    payment_orgs: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc_orgs: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Кто отвечает: за управленку, за налоговую, и кому эскалация.
+    upr_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    nal_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    escalate_days: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    # Сколько дней документ может догонять вторую базу, прежде чем стать
+    # задачей: «день в день» значит 1.
+    grace_days: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Соответствие названий товара в налоговой и управленке, по строке
+    # «налоговое = управленческое».
+    item_aliases: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_digest_day: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_scan_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

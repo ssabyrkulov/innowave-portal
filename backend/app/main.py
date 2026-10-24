@@ -43,6 +43,7 @@ from .routers import (
     stock_receipts,
     stock_transfers,
     tax,
+    taskbot,
     users,
 )
 from .seed import seed_initial_admin
@@ -381,18 +382,39 @@ def _deferred_migrations() -> None:
 
     from .database import SessionLocal
     from .routers.tax import scan_contour_events
+    from .services import taskbot
+
+    # Пересчёт — после выгрузки, а не по часам: задача бухгалтеру должна
+    # прийти через полчаса после того, как расхождение появилось. Автосинк
+    # присылает файлы пачкой за несколько минут, поэтому ждём, пока пачка
+    # уляжется (QUIET), и не чаще раза в MIN_GAP. Без новых файлов — раз в
+    # час, как раньше: журнал закрывает то, что закрылось без выгрузок.
+    TICK, QUIET, MIN_GAP, IDLE = 300, 180, 900, 3600
+    last_scan = 0.0
     while True:
         db = SessionLocal()
         try:
-            res = scan_contour_events(db)
-            if res.get("added") or res.get("closed"):
-                print(f"[contours] журнал: {res}", flush=True)
+            now = time.time()
+            latest = (db.query(models.ImportLog.created_at)
+                      .order_by(models.ImportLog.id.desc()).first())
+            latest_ts = (latest[0].replace(tzinfo=timezone.utc).timestamp()
+                         if latest and latest[0] else 0.0)
+            fresh = latest_ts > last_scan and now - latest_ts >= QUIET
+            if (fresh and now - last_scan >= MIN_GAP) or now - last_scan >= IDLE:
+                last_scan = now
+                res = scan_contour_events(db)
+                if res.get("added") or res.get("closed"):
+                    print(f"[contours] журнал: {res}", flush=True)
+                tg = taskbot.sync(db)
+                if tg.get("sent") or tg.get("closed"):
+                    print(f"[taskbot] {tg}", flush=True)
+            taskbot.periodic(db)
         except Exception as err:  # noqa: BLE001 — журнал не критичен
             db.rollback()
             print(f"[contours] журнал не обновлён: {err}", flush=True)
         finally:
             db.close()
-        time.sleep(3600)
+        time.sleep(TICK)
 
 
 def init_database() -> None:
@@ -629,6 +651,7 @@ app.include_router(manual_entries.router)
 app.include_router(advances.router)
 app.include_router(payroll.router)
 app.include_router(ledger.router)
+app.include_router(taskbot.router)
 
 # --- Frontend (single-service deploy) -------------------------------------
 # When the built React app is present in backend/static (created by the

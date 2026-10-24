@@ -8,11 +8,17 @@
 
 Строки с «Активность: Нет» отбрасываются при импорте: 1С помечает так
 проводки выключенных операций, в итогах базы их нет.
+
+Журналы обоих контуров — управленки и налоговой — хранятся рядом, каждый
+со своей меткой base. Отчёты этой страницы считают управленку; налоговый
+журнал нужен сверке баз: по нему остатки товаров и оплаты сравниваются с
+управленкой проводка к проводке.
 """
 
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -32,20 +38,38 @@ HEADERS = {
     "СчетКт": "credit_account",
     "НаименованиеСчетаКт": "credit_name",
     "СубконтоКт1": "credit_sub",
+    "СубконтоДт2": "debit_sub2",
+    "СубконтоКт2": "credit_sub2",
+    "КоличествоДт": "debit_qty",
+    "КоличествоКт": "credit_qty",
     "Сумма": "amount",
     "Содержание": "content",
     "Активность": "active",
 }
 
 
+BASES = ("upr", "nal")
+
+
+def base_scope(query, base: str = "upr"):
+    """Проводки одного контура. Строки без метки — управленка: их загрузили
+    до того, как рядом лёг налоговый журнал."""
+    if base == "upr":
+        return query.filter(or_(models.LedgerEntry.base == "upr",
+                                models.LedgerEntry.base.is_(None)))
+    return query.filter(models.LedgerEntry.base == base)
+
+
 def import_ledger_workbook(db: Session, content: bytes, filename: str,
                            user_id: int,
-                           org: str = models.DEFAULT_ORG) -> dict:
-    """Импорт журнала проводок заменой данных организации целиком."""
+                           org: str = models.DEFAULT_ORG,
+                           base: str = "upr") -> dict:
+    """Импорт журнала проводок заменой данных организации и контура целиком."""
     from ..services import xlsx  # читалка с починкой архива 1С ред. 1.7
     from .tax import _day, _num
 
     org = models.normalize_org(org)
+    base = base if base in BASES else "upr"
     # Журнал — самый большой файл выгрузки (у Хайджина полтора мегабайта,
     # двадцать тысяч строк). Раньше он читался в память целиком, потом из
     # него строился список объектов, и только затем шла запись; на плане
@@ -95,9 +119,9 @@ def import_ledger_workbook(db: Session, content: bytes, filename: str,
             # разбора всего файла: так не нужно держать файл целиком. Это
             # одна транзакция с записью — если файл оборвётся посередине,
             # откат вернёт прежний журнал.
-            db.query(models.LedgerEntry).filter(
+            base_scope(db.query(models.LedgerEntry).filter(
                 models.LedgerEntry.organization == org
-            ).delete(synchronize_session=False)
+            ), base).delete(synchronize_session=False)
             replaced = True
         db.bulk_insert_mappings(models.LedgerEntry, batch)
         db.flush()
@@ -111,6 +135,7 @@ def import_ledger_workbook(db: Session, content: bytes, filename: str,
             continue
         chunk.append(dict(
             organization=org,
+            base=base,
             date=d,
             doc=text(row, "doc"),
             doc_guid=(text(row, "doc_guid") or "").lower() or None,
@@ -121,6 +146,10 @@ def import_ledger_workbook(db: Session, content: bytes, filename: str,
             credit_account=text(row, "credit_account"),
             credit_name=text(row, "credit_name"),
             credit_sub=text(row, "credit_sub"),
+            debit_sub2=text(row, "debit_sub2"),
+            credit_sub2=text(row, "credit_sub2"),
+            debit_qty=_num(cell(row, "debit_qty")),
+            credit_qty=_num(cell(row, "credit_qty")),
             amount=_num(cell(row, "amount")),
             content=text(row, "content"),
         ))
@@ -136,7 +165,8 @@ def import_ledger_workbook(db: Session, content: bytes, filename: str,
         # данные не трогаем.
         return {"added": 0, "skipped_inactive": inactive, "empty": True}
 
-    db.add(models.ImportLog(filename=f"[проводки:{org}] {filename}",
+    label = org if base == "upr" else f"{org}:налоговая"
+    db.add(models.ImportLog(filename=f"[проводки:{label}] {filename}",
                             user_id=user_id, added=added,
                             skipped=inactive, errors_count=0))
     db.commit()
@@ -166,13 +196,13 @@ def trial_balance(
             a["name"] = name
         return a
 
-    rows = models.org_scope(
+    rows = base_scope(models.org_scope(
         db.query(models.LedgerEntry.debit_account,
                  models.LedgerEntry.debit_name,
                  models.LedgerEntry.credit_account,
                  models.LedgerEntry.credit_name,
                  models.LedgerEntry.amount),
-        models.LedgerEntry, org).all()
+        models.LedgerEntry, org)).all()
     for da, dn, ca, cn, amount in rows:
         amt = float(amount or 0)
         if da:
@@ -211,8 +241,8 @@ def entries(
     limit: int = Query(default=200, le=1000),
 ):
     """Проводки: по счёту (в дебете или кредите) и поиску, свежие сверху."""
-    query = models.org_scope(db.query(models.LedgerEntry),
-                             models.LedgerEntry, org)
+    query = base_scope(models.org_scope(db.query(models.LedgerEntry),
+                                        models.LedgerEntry, org))
     if account.strip():
         a = account.strip()
         query = query.filter((models.LedgerEntry.debit_account == a)

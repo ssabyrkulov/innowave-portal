@@ -1413,16 +1413,46 @@ def scan_contour_events(db: Session) -> dict:
     """
     from datetime import datetime
 
+    from ..services import reconcile, taskbot
+
     data = tax_unposted(db=db, _=None, org="all", limit=100000)
     now = datetime.utcnow()
+    today = taskbot.local_today()
+    cfg = taskbot.get_settings(db)
+    since = cfg.control_from or today.replace(day=1)
+    doc_orgs = reconcile.split_orgs(cfg.doc_orgs)
     seen: set[str] = set()
     added = closed = 0
     existing = {e.key: e for e in db.query(models.ContourEvent).all()}
 
+    def is_task(o: str, r: dict, partial: bool) -> bool:
+        """Задача — документ, которого нет во второй базе, хотя должен быть.
+
+        База, которая ведёт вид документов лишь частично (налоговая Хайджина
+        — только юрлица и сводные ККМ), задач по нему не даёт: розничная
+        продажа без пары — устройство учёта, а не пропуск. Свежий документ
+        тоже не задача: у бухгалтера есть grace_days, чтобы внести его во
+        вторую базу."""
+        d = date.fromisoformat(r["date"])
+        if o not in doc_orgs or d < since or partial:
+            return False
+        return bool(r.get("gap")) or (today - d).days >= (cfg.grace_days or 0)
+
+    def reopen(e: models.ContourEvent) -> None:
+        if e.resolved_at is None:
+            return
+        e.resolved_at = None
+        # Закрытое расхождение вернулось — это новая задача: бот напишет о
+        # ней заново, а не промолчит из-за старого «закрыто».
+        e.tg_message_id = e.tg_closed = None
+        e.claimed_at = e.claimed_by = None
+
     for firm in data["firms"]:
         o = firm["org"]
         for t in firm["types"]:
-            for side, rows in (("upr", t["only_upr"]), ("tax", t["only_tax"])):
+            for side, rows, partial in (
+                    ("upr", t["only_upr"], t["partial_upr"]),
+                    ("tax", t["only_tax"], t["partial_tax"])):
                 # Порядок фиксируем: по нему нумеруются одинаковые документы,
                 # и при следующем пересчёте нумерация должна получиться той
                 # же, иначе события заводились бы заново каждый раз.
@@ -1453,15 +1483,50 @@ def scan_contour_events(db: Session) -> dict:
                             doc_number=r["number"], party=r["party"],
                             qty=r["qty"], amount=r["amount"],
                             gap=bool(r.get("gap")),
+                            is_task=is_task(o, r, partial),
                             first_seen=now, last_seen=now))
                         added += 1
                     else:
                         e.last_seen = now
                         # Документ снова без пары — событие снова открыто.
-                        e.resolved_at = None
+                        reopen(e)
                         e.gap = bool(r.get("gap"))
+                        e.is_task = is_task(o, r, partial)
+
+    # Остатки товаров и оплаты — по журналам проводок двух контуров. Они
+    # ловят то, чего документная сверка не видит: забытое списание, оплату
+    # в одной базе, ручную операцию, бензин, не списанный в налоговой.
+    try:
+        # Точка сохранения: упавший запрос сверки не должен откатить уже
+        # собранные события документов.
+        with db.begin_nested():
+            extra = reconcile.extra_events(db, cfg, today)
+    except Exception as err:  # noqa: BLE001 — документный журнал важнее
+        print(f"[contours] остатки и оплаты не сверены: {err}", flush=True)
+        extra = None
+    for r in extra or []:
+        seen.add(r["key"])
+        e = existing.get(r["key"])
+        if e is None:
+            db.add(models.ContourEvent(
+                key=r["key"], organization=r["organization"], kind=r["kind"],
+                side=r["side"], doc_date=r["doc_date"],
+                doc_number=r["doc_number"], party=r["party"], qty=r["qty"],
+                amount=r["amount"], gap=r["is_task"], is_task=r["is_task"],
+                first_seen=now, last_seen=now))
+            added += 1
+        else:
+            e.last_seen = now
+            reopen(e)
+            # У остатка цифры меняются, а задача та же: товар не сошёлся.
+            e.doc_number, e.qty = r["doc_number"], r["qty"]
+            e.is_task = r["is_task"]
 
     for key, e in existing.items():
+        if extra is None and e.kind in ("stock", "payment"):
+            # Сверка остатков упала — её события не трогаем, иначе все они
+            # «закрылись бы сами» и в Telegram ушли бы ложные галочки.
+            continue
         if key not in seen and e.resolved_at is None:
             # Пара нашлась — расхождение закрылось само.
             e.resolved_at = now
