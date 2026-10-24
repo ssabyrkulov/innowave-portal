@@ -503,7 +503,19 @@ async def inbox(
     # меткой НАЛ в имени грузятся своими импортёрами в отдельную таблицу —
     # автоматом, как и управленка. Тип определяется по колонкам, поэтому
     # работает даже с черновыми именами без метки.
-    if (ledger or "").strip().lower().startswith("nal") or kind == "tax":
+    is_nal = (ledger or "").strip().lower().startswith("nal") or kind == "tax"
+    low = filename.lower().replace("\u0451", "\u0435")
+    if is_nal and any(t in low for t in ("журнал проводок", "jurnal provodok",
+                                         "zhurnal provodok")):
+        # Налоговый журнал проводок ложится рядом с управленческим, со своей
+        # меткой контура: по двум журналам сверяются остатки товаров и
+        # оплаты, и любое расхождение становится задачей бухгалтеру.
+        from .ledger import import_ledger_workbook
+        robot = _robot_user(db)
+        result = import_ledger_workbook(db, content, f"[авто:{org}] {filename}",
+                                        robot.id, org, base="nal")
+        return {"type": "ledger_nal", "status": "imported", **result}
+    if is_nal:
         from .tax import import_tax_workbook
         robot = _robot_user(db)
         try:

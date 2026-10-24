@@ -3210,3 +3210,19 @@ th.num .th-sort { justify-content: flex-end; }
   .req-head { flex-direction: column; }
   .req-flags { display: none; }
 }
+
+/* Задачи в Telegram (страница «Контуры 1С») */
+.tb-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tb-head .section-title { margin: 0; }
+.tb-steps ol { margin: 8px 0; padding-left: 20px; }
+.tb-steps li { margin: 4px 0; }
+.tb-settings { margin: 12px 0; }
+.tb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-bottom: 10px; }
+.tb-grid label, .tb-aliases { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.tb-aliases { margin: 8px 0; }
+.tb-aliases textarea { width: 100%; font: inherit; }
+.tb-checks { margin: 8px 0; }
+.tb-checks td, .tb-checks th { padding: 4px 10px 4px 0; text-align: left; vertical-align: top; }
+.tb-done { opacity: 0.6; }
+.tb-enabled { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; font-weight: normal; }
+.tb-enabled input { width: auto; margin: 0; }
