@@ -229,6 +229,24 @@ def tasks_for_list(db: Session, today: date) -> list[models.ContourEvent]:
             or (e.acked_at and e.acked_at >= start)]
 
 
+def waiting_reason(db: Session, cfg: models.TaskBotSettings) -> str | None:
+    """Почему сверять пока нечего. Пустой список без причины читается как
+    «всё сходится» — а это неправда, пока налоговых журналов нет или
+    сверка ещё ни разу не прошла."""
+    from . import reconcile
+
+    if cfg.last_scan_at is None:
+        return "⏳ Сверка ещё не запускалась — список заполнится после неё."
+    orgs = reconcile.split_orgs(cfg.stock_orgs) | reconcile.split_orgs(cfg.payment_orgs)
+    missing = [FIRM.get(o, o) for o in sorted(orgs)
+               if not reconcile.has_nal_ledger(db, o)]
+    if missing:
+        return ("⏳ Жду налоговый журнал проводок из 1С: "
+                + ", ".join(missing)
+                + ". Остатки и оплаты сверю, когда он придёт с выгрузкой.")
+    return None
+
+
 def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
     today = local_today()
     users = {u.id: u for u in db.query(models.User).all()}
@@ -276,7 +294,10 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
             shown += 1
         if shown > LIST_LINES:
             lines.append(f"…ещё {shown - LIST_LINES} — в портале")
-    if not tasks:
+    waiting = waiting_reason(db, cfg)
+    if waiting:
+        lines += ["", waiting]
+    elif not tasks:
         lines += ["", "✅ Всё сходится: управленка и налоговая совпадают."]
     lines += ["", f"<i>Обновлено {local_now():%H:%M} · открыто {n_open} · "
                   f"проверяю {n_check} · закрыто сегодня {n_done}</i>"]
@@ -414,9 +435,10 @@ def digest(db: Session, cfg: models.TaskBotSettings) -> None:
     users = {u.id: u for u in db.query(models.User).all()}
     open_tasks = [e for e in tasks_for_list(db, today) if is_open(e)]
     if not open_tasks:
+        waiting = waiting_reason(db, cfg)
         api("sendMessage", chat_id=cfg.chat_id, parse_mode="HTML",
-            text=f"📋 <b>Сводка на {today:%d.%m}</b>\n✅ Всё сходится, "
-                 f"открытых задач нет.")
+            text=f"📋 <b>Сводка на {today:%d.%m}</b>\n"
+                 + (waiting or "✅ Всё сходится, открытых задач нет."))
         return
     by_user: dict[int | None, list] = {}
     for e in open_tasks:
