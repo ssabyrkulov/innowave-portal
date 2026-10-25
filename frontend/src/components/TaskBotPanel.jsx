@@ -14,7 +14,7 @@ const CHECKS = [
   ['stock_orgs', 'Остатки', 'штуки по товару в налоговой ≠ управленке'],
 ]
 const STATE = {
-  open: ['☐', ''],
+  open: ['🔴', ''],
   done: ['✅', 'tb-done'],
   acked: ['✅', 'tb-done'],
 }
@@ -235,7 +235,7 @@ export default function TaskBotPanel() {
                 return (
                   <tr key={t.id} className={cls}>
                     <td>{icon}</td>
-                    <td className="muted">{SHORT[t.organization] || t.organization}</td>
+                    <td><b>{SHORT[t.organization] || t.organization}</b></td>
                     <td>
                       {t.text}
                       {t.state === 'acked' && <span className="muted"> — норма: {t.note}</span>}
