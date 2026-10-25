@@ -463,18 +463,23 @@ def _deferred_migrations() -> None:
             latest_ts = (latest[0].replace(tzinfo=timezone.utc).timestamp()
                          if latest and latest[0] else 0.0)
             fresh = latest_ts > last_scan and now - latest_ts >= QUIET
-            if (fresh and now - last_scan >= MIN_GAP) or now - last_scan >= IDLE:
-                last_scan = now
-                res = scan_contour_events(db)
-                if res.get("added") or res.get("closed"):
-                    print(f"[contours] журнал: {res}", flush=True)
-                tg = taskbot.sync(db)
-                if tg.get("sent") or tg.get("closed"):
-                    print(f"[taskbot] {tg}", flush=True)
-                # Пересчёт держал в памяти документы обеих фирм — отдаём её
-                # сразу, а не когда сборщик соберётся сам.
-                db.expunge_all()
-                gc.collect()
+            due = (fresh and now - last_scan >= MIN_GAP) or now - last_scan >= IDLE
+            # Идёт пересчёт по кнопке «Сверить сейчас» — этот круг пропускаем.
+            if due and taskbot.scan_lock.acquire(blocking=False):
+                try:
+                    last_scan = now
+                    res = scan_contour_events(db)
+                    if res.get("added") or res.get("closed"):
+                        print(f"[contours] журнал: {res}", flush=True)
+                    tg = taskbot.sync(db)
+                    if tg.get("sent") or tg.get("closed"):
+                        print(f"[taskbot] {tg}", flush=True)
+                    # Пересчёт держал в памяти документы обеих фирм — отдаём
+                    # её сразу, а не когда сборщик соберётся сам.
+                    db.expunge_all()
+                    gc.collect()
+                finally:
+                    taskbot.scan_lock.release()
             taskbot.periodic(db)
         except Exception as err:  # noqa: BLE001 — журнал не критичен
             db.rollback()

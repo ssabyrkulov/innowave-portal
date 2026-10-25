@@ -571,6 +571,16 @@ DOCS_CAP = 500
 # одинаковых по количеству отгрузок много, и пары станут случайными.
 PAIR_WINDOW = 150
 
+# Реализация от стольких штук — опт: отгрузка юрлицу, которая обязана быть
+# в налоговой, даже если розницу налоговая ведёт сводно. У Хайджина из
+# ~1 900 реализаций таких 48, почти все — Байго; розница вся ниже.
+WHOLESALE_QTY = 1000
+_RETAIL_SUMMARY = re.compile(r"ккм|обезлич", re.IGNORECASE)
+
+
+def _qty(x: float) -> str:
+    return f"{x:,.0f}".replace(",", " ") if abs(x - round(x)) < 0.001 else f"{x:g}"
+
 
 def _items_label(items: dict[str, float]) -> str:
     """«ONE размер M 80 · ONE размер L 96 · STARKID №3/M 180» — что именно в
@@ -711,6 +721,29 @@ def _tax_doc_rows(db: Session, org: str, kind: str) -> list[dict]:
     return list(acc.values())
 
 
+def _ref_shortage(upr: list[dict], tax: list[dict], refs: dict) -> None:
+    """Сколько штук не довнесено по документам управленки, на которые
+    ссылаются налоговые.
+
+    Штуки налогового документа раздаются документам, на которые он
+    ссылается, пропорционально их размеру: №1000 и №1001 ушли тремя
+    реализациями со ссылкой на оба — каждому достаётся его доля. Что не
+    покрыто — u["short"] (из u["short_of"]). Излишек не помечаем: налоговая
+    иногда докладывает в реализацию товар соседней отгрузки, а та без
+    ссылки и так станет задачей."""
+    got: dict = defaultdict(float)
+    for j, ii in refs.items():
+        total = sum(upr[i]["qty"] or 0 for i in ii)
+        for i in ii:
+            share = (upr[i]["qty"] or 0) / total if total else 1 / len(ii)
+            got[i] += (tax[j]["qty"] or 0) * share
+    for i, q in got.items():
+        short = round((upr[i]["qty"] or 0) - q)
+        if short >= 1:
+            upr[i]["short"] = short
+            upr[i]["short_of"] = round(upr[i]["qty"] or 0, 3)
+
+
 def _pair_docs(upr: list[dict], tax: list[dict]) -> tuple[dict, int]:
     """Сопоставляет документы двух баз. Возвращает {индекс налогового: документ
     управленки} и число пар.
@@ -727,19 +760,44 @@ def _pair_docs(upr: list[dict], tax: list[dict]) -> tuple[dict, int]:
 
     # 1) По номеру управленки из комментария налогового документа — прямая
     #    ссылка, поставленная руками бухгалтера, сильнее любых догадок.
+    #    Ссылка бывает «многие к одному»: отгрузку Байго №1000+№1001 налоговая
+    #    делит на три реализации разным ИП, и все три ссылаются на оба
+    #    номера. Поэтому документ управленки не «занимается» первой ссылкой —
+    #    его закрывают все налоговые, что на него ссылаются, а штуки
+    #    сверяются по группе целиком: недовнесённое — задача.
     by_number: dict = defaultdict(list)
     for i, u in enumerate(upr):
         if u["number"]:
             by_number[u["number"]].append(i)
+    refs: dict = {}
     for j, t in enumerate(tax):
-        for n in _UPR_NUMBER.findall(t.get("comment") or ""):
-            free = [i for i in by_number.get(n, []) if i not in used_u]
-            if not free:
-                continue
-            # Номера повторяются по годам — берём ближайший по дате.
-            i = min(free, key=lambda i: abs((upr[i]["date"] - t["date"]).days))
-            used_u.add(i)
-            pairs[j] = upr[i]
+        nums = set(_UPR_NUMBER.findall(t.get("comment") or ""))
+        got = set()
+        for n in nums:
+            cands = by_number.get(n, [])
+            # Номера повторяются по годам: «0000-000560» в 2026-м — розничная
+            # накладная на 6 шт, а налоговая на 9 049 шт ссылается на
+            # отгрузку Байго 2025-го. Сначала — те, что по штукам могут быть
+            # этой ссылкой, из них ближайший по дате.
+            # И ссылка смотрит назад: в декабре 2025-го «0000-000132» — это
+            # №132 начала 2025-го, а не отгрузка Байго марта 2026-го, хотя та
+            # ближе по дате. Позже налогового (с запасом в месяц) — только
+            # если раньше ничего нет.
+            share = (t["qty"] or 0) / len(nums) / 2
+            fit = [i for i in cands if (upr[i]["qty"] or 0) >= share] or cands
+            fit = [i for i in fit
+                   if (upr[i]["date"] - t["date"]).days <= 31] or fit
+            if fit:
+                got.add(min(fit, key=lambda i: abs((upr[i]["date"] - t["date"]).days)))
+        if got:
+            refs[j] = got
+            used_u |= got
+            # Пара в словаре одна (для показа), а закрыты все, на кого
+            # ссылка: №34 и №35 ссылаются на №239 и №240 разом.
+            for i in got:
+                upr[i]["ref_paired"] = True
+            pairs[j] = upr[min(got, key=lambda i: abs((upr[i]["date"] - t["date"]).days))]
+    _ref_shortage(upr, tax, refs)
 
     # 2) По количеству, а где количества нет (возвраты приходят документом,
     #    без товарных строк) — по сумме.
@@ -1384,8 +1442,21 @@ def tax_unposted(
         upr_last = max((u["date"] for u in upr), default=None)
         tax_last = max((t["date"] for t in tax), default=None)
         pairs, paired = _pair_docs(upr, tax)
-        only_u = [u for u in upr if u not in pairs.values()]
+        only_u = [u for u in upr
+                  if u not in pairs.values() and not u.get("ref_paired")]
         only_t = [t for j, t in enumerate(tax) if j not in pairs]
+        # Внесено в налоговую, но не всё: отгрузку Байго №132 на 17 766 шт
+        # провели реализацией на 17 406. Недостача — отдельная строка с
+        # недостающими штуками.
+        for u in upr:
+            if u.get("short") and u.get("ref_paired"):
+                part = u["short"] / u["qty"] if u["qty"] else 0
+                only_u.append({
+                    **u, "qty": u["short"], "amount": u["amount"] * part,
+                    "items": (f"{u['party'] or '—'} — внесено частично: не "
+                              f"хватает {_qty(u['short'])} из "
+                              f"{_qty(u['short_of'])} шт"),
+                    "partial_doc": True})
 
         def out(rows, other_last):
             return [{
@@ -1396,6 +1467,19 @@ def tax_unposted(
                 "items": r.get("items"),
                 "amount": round(r["amount"], 2),
                 "qty": round(r["qty"], 3),
+                # Опт и недовнесённое — задача даже там, где база ведёт вид
+                # лишь частично: розница Хайджина в налоговую идёт сводным
+                # ККМ, а отгрузка Байго на 18 тыс. шт — нет.
+                "partial_doc": bool(r.get("partial_doc")),
+                # Сводная розница налоговой — ККМ за период, «Обезличенный»:
+                # в управленке розница идёт накладными по точкам, пары у
+                # сводного документа нет по устройству учёта.
+                "summary": key == "sale" and bool(
+                    _RETAIL_SUMMARY.search(r["party"] or "")),
+                # У недовнесённого остатка мерило — весь документ: «не
+                # хватает 360 из 17 766» — это опт, хоть 360 и меньше порога.
+                "wholesale": key == "sale" and (
+                    r.get("short_of") or r["qty"] or 0) >= WHOLESALE_QTY,
                 # Свежее последнего документа второй базы — документ просто
                 # ждёт очереди, бухгалтерия ещё не дошла. Если во второй базе
                 # документов этого вида нет вовсе, она его не ведёт (налоговая,
@@ -1421,13 +1505,13 @@ def tax_unposted(
         # даст «покрытие 67%» и молча спрячет настоящий пропуск.
         partial_u = cover_u < FULL and len(upr) >= ENOUGH
         partial_t = cover_t < FULL and len(tax) >= ENOUGH
-        gaps_u = [] if partial_u else [r for r in rows_u
-                                       if not r["tail"] and not r["acked"]]
-        gaps_t = [] if partial_t else [r for r in rows_t
-                                       if not r["tail"] and not r["acked"]]
         for rows, partial in ((rows_u, partial_u), (rows_t, partial_t)):
             for r in rows:
-                r["gap"] = not r["tail"] and not partial and not r["acked"]
+                r["gap"] = (not r["tail"] and not r["acked"]
+                            and not r["summary"]
+                            and (not partial or r["wholesale"]))
+        gaps_u = [r for r in rows_u if r["gap"]]
+        gaps_t = [r for r in rows_t if r["gap"]]
         return {
             "key": key,
             "label": label,
@@ -1509,11 +1593,14 @@ def scan_contour_events(db: Session) -> dict:
 
         База, которая ведёт вид документов лишь частично (налоговая Хайджина
         — только юрлица и сводные ККМ), задач по нему не даёт: розничная
-        продажа без пары — устройство учёта, а не пропуск. Свежий документ
-        тоже не задача: у бухгалтера есть grace_days, чтобы внести его во
-        вторую базу."""
+        продажа без пары — устройство учёта, а не пропуск. Кроме опта и
+        недовнесённого: отгрузка Байго на целую фуру в налоговой обязана быть.
+        Свежий документ тоже не задача: у бухгалтера есть grace_days, чтобы
+        внести его во вторую базу."""
         d = date.fromisoformat(r["date"])
-        if o not in doc_orgs or d < since or partial:
+        if o not in doc_orgs or d < since or r.get("summary"):
+            return False
+        if partial and not r.get("wholesale"):
             return False
         return bool(r.get("gap")) or (today - d).days >= (cfg.grace_days or 0)
 
@@ -1543,7 +1630,11 @@ def scan_contour_events(db: Session) -> dict:
                     key = r["key"]  # см. _assign_event_keys
                     seen.add(key)
                     d = date.fromisoformat(r["date"])
-                    if d >= since and not partial and not r.get("acked"):
+                    # Недовнесённый остаток документа — не весь документ:
+                    # его товары вычитать из остатков нельзя.
+                    if (d >= since and not r.get("acked")
+                            and not r.get("partial_doc")
+                            and (not partial or r.get("wholesale"))):
                         number = re.sub(r"^[0\-]+(?=\d)", "", r["number"] or "")
                         # У возвратов управленки номера нет — называем датой.
                         ref = (f"№{number}" if number

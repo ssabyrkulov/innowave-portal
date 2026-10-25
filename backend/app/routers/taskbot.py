@@ -133,10 +133,25 @@ def sync_now(db: Session = Depends(get_db),
                                                     models.Role.accountant))):
     """Пересчитать расхождения и обновить Telegram сейчас, не дожидаясь
     фонового цикла."""
+    import gc
+    import time
+
     from .tax import scan_contour_events
-    res = scan_contour_events(db)
-    res["telegram"] = taskbot.sync(db)
-    return res
+    if not taskbot.scan_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail=(
+            "Сверка уже идёт (фоновая, после выгрузки или запуска сервиса) — "
+            "через минуту обновите страницу."))
+    try:
+        t0 = time.time()
+        res = scan_contour_events(db)
+        res["telegram"] = taskbot.sync(db)
+        print(f"[taskbot] сверка по кнопке: {res}, {time.time() - t0:.1f} c",
+              flush=True)
+        return res
+    finally:
+        taskbot.scan_lock.release()
+        db.expunge_all()
+        gc.collect()
 
 
 @router.get("/taskbot/tasks")
