@@ -16,7 +16,7 @@ const CHECKS = [
 const STATE = {
   open: ['☐', ''],
   done: ['✅', 'tb-done'],
-  acked: ['🚫', 'tb-done'],
+  acked: ['✅', 'tb-done'],
 }
 
 export default function TaskBotPanel() {
@@ -237,8 +237,8 @@ export default function TaskBotPanel() {
                     <td>{icon}</td>
                     <td className="muted">{SHORT[t.organization] || t.organization}</td>
                     <td>
-                      {t.state === 'done' || t.state === 'acked' ? <s>{t.text}</s> : t.text}
-                      {t.state === 'acked' && <span className="muted"> — {t.note}</span>}
+                      {t.text}
+                      {t.state === 'acked' && <span className="muted"> — норма: {t.note}</span>}
                     </td>
                     <td className="muted">{t.responsible || 'не назначен'}</td>
                     <td className={t.state === 'open' && t.age_days >= tasks.escalate_days ? 'sc-diff' : 'muted'}>

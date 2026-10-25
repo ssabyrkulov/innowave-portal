@@ -311,10 +311,10 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
                 line = f"☐ {text}{late}"
             elif e.acked_at:
                 n_done += 1
-                line = f"🚫 <s>{text}</s> — {_e(e.note or 'не нужно')}"
+                line = f"✅ {text} — норма: {_e(e.note or 'не нужно')}"
             else:
                 n_done += 1
-                line = f"✅ <s>{text}</s> · {_local(e.resolved_at):%H:%M}"
+                line = f"✅ {text} · {_local(e.resolved_at):%H:%M}"
             if shown < LIST_LINES:
                 lines.append(line)
             shown += 1
@@ -399,17 +399,21 @@ def sync(db: Session) -> dict:
     for e in tasks:
         if is_open(e) or not e.tg_message_id or e.tg_closed:
             continue
-        if e.resolved_at:
-            head = f"✅ <b>Закрыто</b> · {_local(e.resolved_at):%d.%m %H:%M}"
-            tail = "Расхождение ушло: найдено в выгрузке."
-        else:
-            head = "🚫 <b>Не нужно</b>"
-            tail = _e(e.note or "")
-        api("editMessageText", chat_id=cfg.chat_id, message_id=e.tg_message_id,
-            text=(f"{head}\n<s>{FIRM.get(e.organization, e.organization)}: "
-                  f"{task_text(e)}</s>\n{tail}").strip(),
-            parse_mode="HTML", disable_web_page_preview=True,
-            reply_markup=NO_BUTTONS)
+        # Сделанная задача из ленты уходит — галочка остаётся в закреплённом
+        # списке. Удалить можно только сообщение моложе 48 часов (так
+        # устроен Telegram); старое переписываем коротким «Закрыто».
+        if not api("deleteMessage", chat_id=cfg.chat_id,
+                   message_id=e.tg_message_id):
+            if e.resolved_at:
+                head = f"✅ <b>Закрыто</b> · {_local(e.resolved_at):%d.%m %H:%M}"
+            else:
+                head = f"✅ <b>Норма</b> · {_e(e.note or '')}"
+            api("editMessageText", chat_id=cfg.chat_id,
+                message_id=e.tg_message_id,
+                text=(f"{head}\n{FIRM.get(e.organization, e.organization)}: "
+                      f"{task_text(e)}"),
+                parse_mode="HTML", disable_web_page_preview=True,
+                reply_markup=NO_BUTTONS)
         e.tg_closed = True
         closed += 1
 
