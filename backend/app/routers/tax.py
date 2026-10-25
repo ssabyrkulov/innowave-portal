@@ -14,7 +14,7 @@
 
 import re
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import or_
@@ -571,10 +571,11 @@ DOCS_CAP = 500
 # одинаковых по количеству отгрузок много, и пары станут случайными.
 PAIR_WINDOW = 150
 
-# Реализация от стольких штук — опт: отгрузка юрлицу, которая обязана быть
-# в налоговой, даже если розницу налоговая ведёт сводно. У Хайджина из
-# ~1 900 реализаций таких 48, почти все — Байго; розница вся ниже.
-WHOLESALE_QTY = 1000
+# Юрлицо — тот, кому положен ЭСФ. Узнаём по форме в названии (ОсОО, ИП, ОАО,
+# ЗАО) и по Байго, у которого в справочнике управленки формы нет. «Ангар Б 6
+# Моторс» и «Элиза Оптом» — точки на рынке, розница через ККМ.
+_LEGAL_PARTY = re.compile(r"(^|[\s\"«(])(осоо|оао|зао|ип)(?=[\s\"»)]|$)|байго",
+                          re.IGNORECASE)
 _RETAIL_SUMMARY = re.compile(r"ккм|обезлич", re.IGNORECASE)
 
 
@@ -710,7 +711,7 @@ def _tax_doc_rows(db: Session, org: str, kind: str) -> list[dict]:
         key = t.doc_guid or f"{t.doc_number}|{t.date}|{t.counterparty}"
         e = acc.setdefault(key, {
             "date": t.date, "number": t.doc_number, "party": t.counterparty,
-            "amount": 0.0, "qty": 0.0, "comment": ""})
+            "amount": 0.0, "qty": 0.0, "comment": "", "key": key})
         e["amount"] += float(t.amount or 0)
         e["qty"] += float(t.qty or 0)
         if t.comment:
@@ -721,27 +722,361 @@ def _tax_doc_rows(db: Session, org: str, kind: str) -> list[dict]:
     return list(acc.values())
 
 
-def _ref_shortage(upr: list[dict], tax: list[dict], refs: dict) -> None:
-    """Сколько штук не довнесено по документам управленки, на которые
-    ссылаются налоговые.
+def _numbers_index(upr: list[dict]) -> dict:
+    by_number: dict = defaultdict(list)
+    for i, u in enumerate(upr):
+        if u["number"]:
+            by_number[u["number"]].append(i)
+    return by_number
 
-    Штуки налогового документа раздаются документам, на которые он
-    ссылается, пропорционально их размеру: №1000 и №1001 ушли тремя
-    реализациями со ссылкой на оба — каждому достаётся его доля. Что не
-    покрыто — u["short"] (из u["short_of"]). Излишек не помечаем: налоговая
-    иногда докладывает в реализацию товар соседней отгрузки, а та без
-    ссылки и так станет задачей."""
-    got: dict = defaultdict(float)
-    for j, ii in refs.items():
-        total = sum(upr[i]["qty"] or 0 for i in ii)
-        for i in ii:
-            share = (upr[i]["qty"] or 0) / total if total else 1 / len(ii)
-            got[i] += (tax[j]["qty"] or 0) * share
-    for i, q in got.items():
-        short = round((upr[i]["qty"] or 0) - q)
-        if short >= 1:
-            upr[i]["short"] = short
-            upr[i]["short_of"] = round(upr[i]["qty"] or 0, 3)
+
+def _ref_targets(upr: list[dict], by_number: dict, t: dict) -> set:
+    """Документы управленки, на номера которых ссылается налоговый документ
+    в комментарии («0000-001000/0000-001001»)."""
+    nums = set(_UPR_NUMBER.findall(t.get("comment") or ""))
+    got = set()
+    for n in nums:
+        cands = by_number.get(n, [])
+        # Номера повторяются по годам: «0000-000560» в 2026-м — розничная
+        # накладная на 6 шт, а налоговая на 9 049 шт ссылается на отгрузку
+        # Байго 2025-го. Сначала — те, что по штукам могут быть этой
+        # ссылкой, из них ближайший по дате. И ссылка смотрит назад: в
+        # декабре 2025-го «0000-000132» — это №132 начала 2025-го, а не
+        # отгрузка Байго марта 2026-го, хотя та ближе по дате. Позже
+        # налогового (с запасом в месяц) — только если раньше ничего нет.
+        share = (t["qty"] or 0) / len(nums) / 2
+        fit = [i for i in cands if (upr[i]["qty"] or 0) >= share] or cands
+        fit = [i for i in fit if (upr[i]["date"] - t["date"]).days <= 31] or fit
+        if fit:
+            got.add(min(fit, key=lambda i: abs((upr[i]["date"] - t["date"]).days)))
+    return got
+
+
+# «Хайджин» — хвост в карточке Байго («БАЙГО ТРЕЙД (j8_530) ХАЙДЖИН»), а
+# «Инновейв» — настоящий покупатель Хайджина, его не выкидываем.
+_CUSTOMER_STOP = {"осоо", "оао", "зао", "ооо", "хайджин"}
+
+
+def _customer_tokens(name: str | None) -> frozenset:
+    """Имя покупателя без кода карточки и формы: «ИП Саттаров Искендер 3
+    (f1_1197)» и «ИП Саттаров Искендер Ибрахимжанович» — один человек, «БАЙГО
+    ТРЕЙД (j8_530) ХАЙДЖИН» и «Байго Трейд ОсОО» — одна фирма."""
+    s = re.sub(r"\([^)]*\)", " ", (name or "").lower().replace("ё", "е"))
+    return frozenset(w for w in re.findall(r"[a-zа-я]{4,}", s)
+                     if w not in _CUSTOMER_STOP)
+
+
+def _clean_customer(name: str | None) -> str:
+    s = re.sub(r"\([^)]*\)", " ", name or "")
+    s = re.sub(r"[()]", " ", s)
+    return re.sub(r"\s+", " ", s).strip(" ,.-") or "—"
+
+
+def _is_legal(name: str | None) -> bool:
+    return bool(_LEGAL_PARTY.search(name or "")) and not _RETAIL_SUMMARY.search(name or "")
+
+
+def _sale_classes(db: Session, org: str) -> dict:
+    """Кому продано: юрлицу (ключ покупателя) или в розницу (None).
+
+    Юрлицо в управленке узнаём по форме в названии (ОсОО, ИП…) и по Байго.
+    Но у юрлица бывают точки, названные в управленке как розница: магазины
+    «Алдей Алдей …» — это Императив ОсОО. Связь берём из налоговой: если
+    реализация юрлицу ссылается на номер документа точки, точка — его.
+    Налоговый документ относится к покупателю по ссылке на номер управленки
+    (отгрузку Байго налоговая делит между ИП), иначе — по имени. Без ссылки
+    и без юрлица — розница: ККМ, «Обезличенный», ЭСФ по ИНН физлицу."""
+    upr = _upr_docs(db, org, "sale")
+    tax = _tax_doc_rows(db, org, "sale")
+    by_number = _numbers_index(upr)
+    refs = [_ref_targets(upr, by_number, t) for t in tax]
+
+    link: dict = {}
+    for j, t in enumerate(tax):
+        if _is_legal(t["party"]):
+            for i in refs[j]:
+                if not _is_legal(upr[i]["party"]):
+                    link.setdefault(_customer_tokens(upr[i]["party"]),
+                                    (_customer_tokens(t["party"]), t["party"]))
+    names: dict = {}
+
+    def upr_key(name):
+        tok = _customer_tokens(name)
+        if tok and _is_legal(name):
+            names.setdefault(tok, _clean_customer(name))
+            return tok
+        if tok in link:
+            k, legal_name = link[tok]
+            names.setdefault(k, _clean_customer(legal_name))
+            return k
+        return None
+
+    ukey = [upr_key(u["party"]) for u in upr]
+
+    def match(name):
+        """Покупатель по имени: больше всего общих слов, и не меньше двух
+        (или всё имя, если оно из одного слова)."""
+        t = _customer_tokens(name)
+        best, score = None, 0
+        for k in names:
+            n = len(t & k)
+            if n >= min(2, len(t), len(k)) and n > score:
+                best, score = k, n
+        return best
+
+    def tax_key(name):
+        if _RETAIL_SUMMARY.search(name or ""):
+            return None
+        k = match(name)
+        if k is None and _is_legal(name):
+            k = frozenset(["~"]) | _customer_tokens(name)
+            names.setdefault(k, _clean_customer(name))
+        return k
+
+    tparts = []
+    for j, t in enumerate(tax):
+        got = refs[j]
+        if _RETAIL_SUMMARY.search(t["party"] or ""):
+            tparts.append([])
+            continue
+        if got:
+            mine = [i for i in got if ukey[i]]
+            total = sum(upr[i]["qty"] or 0 for i in mine)
+            tparts.append([(ukey[i], (upr[i]["qty"] or 0) / total if total
+                            else 1 / len(mine)) for i in mine])
+            continue
+        k = tax_key(t["party"])
+        tparts.append([(k, 1.0)] if k else [])
+    return {"upr": upr, "ukey": ukey, "tax": tax, "tparts": tparts,
+            "refs": refs, "names": names, "upr_key": upr_key, "tax_key": tax_key}
+
+
+def customer_diffs(db: Session, org: str, since: date, cutoff: date,
+                   cls: dict | None = None) -> list[dict]:
+    """Сверка продаж юрлицам по покупателю: отгружено (за вычетом
+    возвратов) в управленке против проведённого в налоговой.
+
+    Документ к документу здесь не сходится по устройству учёта: отгрузку
+    Байго налоговая делит между несколькими ИП, мелочь ИП Саттарову
+    выписывает сводно, реализацию, почти целиком закрытую потом возвратом,
+    — нет вовсе. Сумма по покупателю от этого не зависит.
+
+    since — с какой даты сверяем. cutoff — по какую дату отгрузка уже
+    должна быть в налоговой (день в день: вчерашняя — должна)."""
+    cls = cls or _sale_classes(db, org)
+    upr, ukey, tax = cls["upr"], cls["ukey"], cls["tax"]
+    cust: dict = {}
+
+    def card(k):
+        c = cust.get(k)
+        if c is None:
+            c = cust[k] = {"name": cls["names"].get(k, "—"), "u_all": 0.0,
+                           "u_due": 0.0, "t_all": 0.0, "t_due": 0.0,
+                           "docs": [], "first": None, "t_first": None}
+        return c
+
+    for i, u in enumerate(upr):
+        if ukey[i] and u["date"] >= since:
+            c = card(ukey[i])
+            c["u_all"] += u["qty"] or 0
+            if u["date"] <= cutoff:
+                c["u_due"] += u["qty"] or 0
+
+    # Возврат уменьшает отгрузку, только если покупателю в периоде есть что
+    # возвращать: возврат 2026-го за продажу 2025-го (Туратов, 637 шт) —
+    # история, а не «отрицательная отгрузка».
+    R = models.ReturnLine
+    for d, client, qty in db.query(R.date, R.client, R.qty).filter(
+            R.organization == org, R.date >= since).all():
+        k = cls["upr_key"](client)
+        if k and k in cust:
+            c = cust[k]
+            c["u_all"] = max(c["u_all"] - float(qty or 0), 0.0)
+            if d <= cutoff:
+                c["u_due"] = max(c["u_due"] - float(qty or 0), 0.0)
+
+    referenced: set = set()
+    entries = []
+    for j, t in enumerate(tax):
+        got = cls["refs"][j]
+        referenced |= got
+        if t["date"] < since or (got and all(upr[i]["date"] < since for i in got)):
+            continue  # закрывает отгрузку прошлого периода
+        for k, share in cls["tparts"][j]:
+            entries.append((k, t["date"], (t["qty"] or 0) * share))
+    for t in _tax_doc_rows(db, org, "return"):
+        k = cls["tax_key"](t["party"])
+        if k and t["date"] >= since and k in cust:
+            entries.append((k, t["date"], -(t["qty"] or 0)))
+    for k, d, q in entries:
+        c = card(k)
+        c["t_all"] += q
+        if d <= cutoff:
+            c["t_due"] += q
+            if c["t_first"] is None or d < c["t_first"]:
+                c["t_first"] = d
+
+    for i, u in enumerate(upr):
+        if ukey[i] and u["date"] >= since and i not in referenced:
+            c = card(ukey[i])
+            c["docs"].append(u)
+            if c["first"] is None or u["date"] < c["first"]:
+                c["first"] = u["date"]
+
+    out = []
+    for k, c in cust.items():
+        missing = round(c["u_due"] - c["t_all"])
+        extra = round(c["t_due"] - c["u_all"])
+        if missing < 1 and extra < 1:
+            continue
+        side = "upr" if missing >= 1 else "tax"
+        hint = ""
+        if side == "upr" and c["docs"]:
+            last = sorted(c["docs"], key=lambda u: u["date"], reverse=True)[:3]
+            # Налоговая по нему пуста — значит, не выписаны именно эти; если
+            # что-то выписано сводно, это лишь последние отгрузки без ссылки.
+            hint = ("; не выписаны: " if c["t_all"] <= 0
+                    else "; последние отгрузки без ссылки: ") + ", ".join(
+                f"№{re.sub(r'^[0-]+(?=[1-9])', '', u['number'] or '')} от "
+                f"{u['date']:%d.%m}" for u in last)
+            if len(c["docs"]) > 3:
+                hint += f" и ещё {len(c['docs']) - 3}"
+        out.append({
+            "key": f"{org}|customer|{'+'.join(sorted(k))}|{side}",
+            "organization": org, "kind": "customer", "side": side,
+            "doc_date": (c["first"] if side == "upr" else c["t_first"]) or since,
+            "doc_number": (f"упр {_qty(c['u_all'])} · нал {_qty(c['t_all'])}"
+                           f"{hint}"),
+            "party": c["name"], "qty": missing if side == "upr" else extra,
+            "amount": 0,
+        })
+    return out
+
+
+_MONTHS = ("январь", "февраль", "март", "апрель", "май", "июнь", "июль",
+           "август", "сентябрь", "октябрь", "ноябрь", "декабрь")
+# ККМ за месяц — сводный документ по рознице, не позднее 10-го рабочего дня
+# следующего месяца (Порядок применения счёта-фактуры, ПКМ №141 от
+# 18.03.2022 в редакции 2025 г.). Праздники не учитываем — только выходные.
+KKM_WORKDAYS = 10
+
+
+def kkm_deadline(year: int, month: int) -> date:
+    d = date(year + month // 12, month % 12 + 1, 1)
+    n = 0
+    while True:
+        if d.weekday() < 5:
+            n += 1
+            if n == KKM_WORKDAYS:
+                return d
+        d += timedelta(days=1)
+
+
+def kkm_diffs(db: Session, org: str, since: date, today: date,
+              cls: dict | None = None) -> list[dict]:
+    """Розница за месяц в управленке против ККМ (сводной розницы) в
+    налоговой — по товарам и штукам.
+
+    Розница — всё, что продано не юрлицам: точки, рынок, физлица. В
+    налоговой это сводный ККМ, «Обезличенный» и ЭСФ физлицам по ИНН.
+    Сверяем штуки по каждому товару: ККМ одной строкой «1 шт на 337 297 сом»
+    склад налоговой не сводит. Задача — когда прошёл срок (10-й рабочий
+    день следующего месяца), а штуки не сошлись."""
+    from .purchases import _norm_product
+
+    cls = cls or _sale_classes(db, org)
+    retail_upr = {(u["number"], u["date"]) for u, k in zip(cls["upr"], cls["ukey"])
+                  if not k}
+    retail_tax = {t["key"] for t, parts in zip(cls["tax"], cls["tparts"])
+                  if not parts}
+    months = []
+    y, m = since.year, since.month - 1 or 12
+    if since.month == 1:
+        y -= 1
+    while (y, m) < (today.year, today.month):
+        dl = kkm_deadline(y, m)
+        if since <= dl < today:
+            months.append((y, m))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    if not months:
+        return []
+    first = date(*months[0], 1)
+    bucket = lambda d: (d.year, d.month)
+    want = set(months)
+    U: dict = defaultdict(lambda: defaultdict(float))
+    N: dict = defaultdict(lambda: defaultdict(float))
+    money: dict = defaultdict(lambda: [0.0, 0.0])
+    shown: dict = {}
+
+    S = models.Sale
+    for d, num, client, product, qty, amount in db.query(
+            S.date, S.doc_number, S.client, S.product, S.qty, S.amount).filter(
+            S.organization == org, S.date >= first).all():
+        if bucket(d) in want and (num, d) in retail_upr:
+            k = _norm_product(product)
+            shown.setdefault(k, product)
+            U[bucket(d)][k] += float(qty or 0)
+            money[bucket(d)][0] += float(amount or 0)
+    R = models.ReturnLine
+    for d, client, product, qty in db.query(
+            R.date, R.client, R.product, R.qty).filter(
+            R.organization == org, R.date >= first).all():
+        if bucket(d) in want and not cls["upr_key"](client):
+            U[bucket(d)][_norm_product(product)] -= float(qty or 0)
+    T = models.TaxOperation
+    for kind, d, num, party, guid, product, qty, amount in db.query(
+            T.kind, T.date, T.doc_number, T.counterparty, T.doc_guid,
+            T.product, T.qty, T.amount).filter(
+            T.organization == org, T.kind.in_(("sale", "return")),
+            T.date >= first).all():
+        if bucket(d) not in want:
+            continue
+        if kind == "sale":
+            if (guid or f"{num}|{d}|{party}") not in retail_tax:
+                continue
+            sign = 1
+            money[bucket(d)][1] += float(amount or 0)
+        else:
+            if cls["tax_key"](party):
+                continue
+            sign = -1
+        k = _norm_product(product)
+        shown.setdefault(k, product)
+        N[bucket(d)][k] += sign * float(qty or 0)
+
+    def name(k):
+        return re.sub(r"(?i)^(детские\s+)?подгузники\s+", "", shown.get(k) or k)
+
+    out = []
+    for ym in months:
+        # Возвратов с точек за месяц бывает больше, чем продаж (вернули
+        # консигнацию прошлых месяцев) — ККМ отрицательным не бывает.
+        diffs = [(k, max(U[ym].get(k, 0.0), 0.0), max(N[ym].get(k, 0.0), 0.0))
+                 for k in set(U[ym]) | set(N[ym])]
+        diffs = [x for x in diffs if abs(x[1] - x[2]) >= 1]
+        if not diffs:
+            continue
+        diffs.sort(key=lambda x: -abs(x[1] - x[2]))
+        rows = [f"{name(k)} — должно быть {_qty(u)} (сейчас {_qty(n)})"
+                for k, u, n in diffs]
+        label = f"{_MONTHS[ym[1] - 1]} {ym[0]}"
+        out.append({
+            "key": f"{org}|kkm|{ym[0]}-{ym[1]:02d}",
+            "organization": org, "kind": "kkm", "side": "upr",
+            "doc_date": kkm_deadline(*ym),
+            # До 8 товаров — все; больше — первые 6, остальное в портале.
+            "doc_number": (f"{label}: " + "; ".join(
+                rows if len(rows) <= 8 else rows[:6])
+                + (f"; и ещё {len(rows) - 6} поз. — в портале"
+                   if len(rows) > 8 else "")),
+            "party": (f"розница {_qty(sum(max(v, 0) for v in U[ym].values()))} шт на "
+                      f"{_qty(round(money[ym][0]))} сом, в налоговой "
+                      f"{_qty(sum(max(v, 0) for v in N[ym].values()))} шт на "
+                      f"{_qty(round(money[ym][1]))} сом"),
+            "qty": round(sum(max(u - n, 0) for _, u, n in diffs)),
+            "amount": round(money[ym][0], 2),
+        })
+    return out
 
 
 def _pair_docs(upr: list[dict], tax: list[dict]) -> tuple[dict, int]:
@@ -763,32 +1098,11 @@ def _pair_docs(upr: list[dict], tax: list[dict]) -> tuple[dict, int]:
     #    Ссылка бывает «многие к одному»: отгрузку Байго №1000+№1001 налоговая
     #    делит на три реализации разным ИП, и все три ссылаются на оба
     #    номера. Поэтому документ управленки не «занимается» первой ссылкой —
-    #    его закрывают все налоговые, что на него ссылаются, а штуки
-    #    сверяются по группе целиком: недовнесённое — задача.
-    by_number: dict = defaultdict(list)
-    for i, u in enumerate(upr):
-        if u["number"]:
-            by_number[u["number"]].append(i)
+    #    его закрывают все налоговые, что на него ссылаются.
+    by_number = _numbers_index(upr)
     refs: dict = {}
     for j, t in enumerate(tax):
-        nums = set(_UPR_NUMBER.findall(t.get("comment") or ""))
-        got = set()
-        for n in nums:
-            cands = by_number.get(n, [])
-            # Номера повторяются по годам: «0000-000560» в 2026-м — розничная
-            # накладная на 6 шт, а налоговая на 9 049 шт ссылается на
-            # отгрузку Байго 2025-го. Сначала — те, что по штукам могут быть
-            # этой ссылкой, из них ближайший по дате.
-            # И ссылка смотрит назад: в декабре 2025-го «0000-000132» — это
-            # №132 начала 2025-го, а не отгрузка Байго марта 2026-го, хотя та
-            # ближе по дате. Позже налогового (с запасом в месяц) — только
-            # если раньше ничего нет.
-            share = (t["qty"] or 0) / len(nums) / 2
-            fit = [i for i in cands if (upr[i]["qty"] or 0) >= share] or cands
-            fit = [i for i in fit
-                   if (upr[i]["date"] - t["date"]).days <= 31] or fit
-            if fit:
-                got.add(min(fit, key=lambda i: abs((upr[i]["date"] - t["date"]).days)))
+        got = _ref_targets(upr, by_number, t)
         if got:
             refs[j] = got
             used_u |= got
@@ -797,8 +1111,6 @@ def _pair_docs(upr: list[dict], tax: list[dict]) -> tuple[dict, int]:
             for i in got:
                 upr[i]["ref_paired"] = True
             pairs[j] = upr[min(got, key=lambda i: abs((upr[i]["date"] - t["date"]).days))]
-    _ref_shortage(upr, tax, refs)
-
     # 2) По количеству, а где количества нет (возвраты приходят документом,
     #    без товарных строк) — по сумме.
     def greedy(field: str, tol: float) -> None:
@@ -1445,19 +1757,6 @@ def tax_unposted(
         only_u = [u for u in upr
                   if u not in pairs.values() and not u.get("ref_paired")]
         only_t = [t for j, t in enumerate(tax) if j not in pairs]
-        # Внесено в налоговую, но не всё: отгрузку Байго №132 на 17 766 шт
-        # провели реализацией на 17 406. Недостача — отдельная строка с
-        # недостающими штуками.
-        for u in upr:
-            if u.get("short") and u.get("ref_paired"):
-                part = u["short"] / u["qty"] if u["qty"] else 0
-                only_u.append({
-                    **u, "qty": u["short"], "amount": u["amount"] * part,
-                    "items": (f"{u['party'] or '—'} — внесено частично: не "
-                              f"хватает {_qty(u['short'])} из "
-                              f"{_qty(u['short_of'])} шт"),
-                    "partial_doc": True})
-
         def out(rows, other_last):
             return [{
                 "date": r["date"].isoformat(),
@@ -1467,19 +1766,14 @@ def tax_unposted(
                 "items": r.get("items"),
                 "amount": round(r["amount"], 2),
                 "qty": round(r["qty"], 3),
-                # Опт и недовнесённое — задача даже там, где база ведёт вид
-                # лишь частично: розница Хайджина в налоговую идёт сводным
-                # ККМ, а отгрузка Байго на 18 тыс. шт — нет.
-                "partial_doc": bool(r.get("partial_doc")),
+                # Реализация юрлицу — задача даже там, где база ведёт вид
+                # лишь частично: розница Хайджина идёт в налоговую сводным
+                # ККМ, а отгрузка Байго на 18 тыс. шт — своим ЭСФ.
                 # Сводная розница налоговой — ККМ за период, «Обезличенный»:
                 # в управленке розница идёт накладными по точкам, пары у
                 # сводного документа нет по устройству учёта.
                 "summary": key == "sale" and bool(
                     _RETAIL_SUMMARY.search(r["party"] or "")),
-                # У недовнесённого остатка мерило — весь документ: «не
-                # хватает 360 из 17 766» — это опт, хоть 360 и меньше порога.
-                "wholesale": key == "sale" and (
-                    r.get("short_of") or r["qty"] or 0) >= WHOLESALE_QTY,
                 # Свежее последнего документа второй базы — документ просто
                 # ждёт очереди, бухгалтерия ещё не дошла. Если во второй базе
                 # документов этого вида нет вовсе, она его не ведёт (налоговая,
@@ -1505,11 +1799,15 @@ def tax_unposted(
         # даст «покрытие 67%» и молча спрячет настоящий пропуск.
         partial_u = cover_u < FULL and len(upr) >= ENOUGH
         partial_t = cover_t < FULL and len(tax) >= ENOUGH
+        # Продажи такой базы сверяются по покупателю (customer_diffs), и
+        # налоговая реализация без пары — тоже не задача по документу:
+        # сводный ЭСФ ИП Саттарову за месяц пары по документу не имеет.
+        if key == "sale" and partial_u:
+            partial_t = True
         for rows, partial in ((rows_u, partial_u), (rows_t, partial_t)):
             for r in rows:
                 r["gap"] = (not r["tail"] and not r["acked"]
-                            and not r["summary"]
-                            and (not partial or r["wholesale"]))
+                            and not r["summary"] and not partial)
         gaps_u = [r for r in rows_u if r["gap"]]
         gaps_t = [r for r in rows_t if r["gap"]]
         return {
@@ -1598,9 +1896,7 @@ def scan_contour_events(db: Session) -> dict:
         Свежий документ тоже не задача: у бухгалтера есть grace_days, чтобы
         внести его во вторую базу."""
         d = date.fromisoformat(r["date"])
-        if o not in doc_orgs or d < since or r.get("summary"):
-            return False
-        if partial and not r.get("wholesale"):
+        if o not in doc_orgs or d < since or partial or r.get("summary"):
             return False
         return bool(r.get("gap")) or (today - d).days >= (cfg.grace_days or 0)
 
@@ -1630,11 +1926,7 @@ def scan_contour_events(db: Session) -> dict:
                     key = r["key"]  # см. _assign_event_keys
                     seen.add(key)
                     d = date.fromisoformat(r["date"])
-                    # Недовнесённый остаток документа — не весь документ:
-                    # его товары вычитать из остатков нельзя.
-                    if (d >= since and not r.get("acked")
-                            and not r.get("partial_doc")
-                            and (not partial or r.get("wholesale"))):
+                    if d >= since and not partial and not r.get("acked"):
                         number = re.sub(r"^[0\-]+(?=\d)", "", r["number"] or "")
                         # У возвратов управленки номера нет — называем датой.
                         ref = (f"№{number}" if number
@@ -1666,6 +1958,24 @@ def scan_contour_events(db: Session) -> dict:
                         e.gap = bool(r.get("gap"))
                         e.is_task = is_task(o, r, partial)
 
+    # Продажи юрлицам там, где налоговая ведёт реализации лишь частично
+    # (Хайджин: розница — сводным ККМ), сверяются не документами, а по
+    # покупателю: отгружено за вычетом возвратов против проведённого в
+    # налоговой. Документ к документу там не сходится по устройству учёта.
+    by_customer = {firm["org"] for firm in data["firms"] for t in firm["types"]
+                   if t["key"] == "sale" and t["partial_upr"]}
+    customer_rows: list = []
+    try:
+        with db.begin_nested():
+            cutoff = today - timedelta(days=cfg.grace_days or 0)
+            for o in sorted(by_customer & doc_orgs):
+                cls = _sale_classes(db, o)
+                customer_rows += customer_diffs(db, o, since, cutoff, cls)
+                customer_rows += kkm_diffs(db, o, since, today, cls)
+    except Exception as err:  # noqa: BLE001 — документный журнал важнее
+        print(f"[contours] сверка по покупателям не прошла: {err}", flush=True)
+        customer_rows = None
+
     # Остатки товаров и оплаты — по журналам проводок двух контуров. Они
     # ловят то, чего документная сверка не видит: забытое списание, оплату
     # в одной базе, ручную операцию, бензин, не списанный в налоговой.
@@ -1677,7 +1987,9 @@ def scan_contour_events(db: Session) -> dict:
     except Exception as err:  # noqa: BLE001 — документный журнал важнее
         print(f"[contours] остатки и оплаты не сверены: {err}", flush=True)
         extra = None
-    for r in extra or []:
+    for r in customer_rows or []:
+        r["is_task"] = True
+    for r in (extra or []) + (customer_rows or []):
         seen.add(r["key"])
         e = existing.get(r["key"])
         if e is None:
@@ -1694,9 +2006,12 @@ def scan_contour_events(db: Session) -> dict:
             # У остатка цифры меняются, а задача та же: товар не сошёлся.
             e.doc_number, e.qty = r["doc_number"], r["qty"]
             e.is_task = r["is_task"]
+            if r["kind"] in ("customer", "kkm"):
+                e.doc_date, e.party = r["doc_date"], r["party"]
 
     for key, e in existing.items():
-        if extra is None and e.kind in ("stock", "payment"):
+        if (extra is None and e.kind in ("stock", "payment")) or (
+                customer_rows is None and e.kind in ("customer", "kkm")):
             # Сверка остатков упала — её события не трогаем, иначе все они
             # «закрылись бы сами» и в Telegram ушли бы ложные галочки.
             continue
