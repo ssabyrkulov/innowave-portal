@@ -52,7 +52,7 @@ LIST_LINES = 30
 FIRM = {"hygiene": "Hygiene", "innowave": "Innowave", "bluecarbon": "BC"}
 KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": "Списание",
         "purchase": "Поступление", "payment": "Оплата", "stock": "Остаток",
-        "customer": "Покупатель"}
+        "customer": "Покупатель", "kkm": "ККМ"}
 
 
 def local_now() -> datetime:
@@ -184,6 +184,12 @@ def task_text(e: models.ContourEvent) -> str:
     Не «остаток упр 43, нал 193», а действие: внести документ, найти
     лишнее. Управленка сверена с фактом, поэтому лишнее или недостающее в
     налоговой ищется в налоговой."""
+    if e.kind == "kkm":
+        # doc_number: «сентябрь 2026: ONE размер L — должно быть 1 240
+        # (сейчас 0); …», party: итог розницы и налоговой.
+        period, _, items = (e.doc_number or "").partition(": ")
+        return (f"Провести ККМ за {_e(period)} по товарам и штукам: "
+                f"{_e(items)} ({_e(e.party)})")
     if e.kind == "customer":
         n = _money(abs(float(e.qty or 0)))
         if e.side == "upr":

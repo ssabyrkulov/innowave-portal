@@ -574,7 +574,7 @@ PAIR_WINDOW = 150
 # Юрлицо — тот, кому положен ЭСФ. Узнаём по форме в названии (ОсОО, ИП, ОАО,
 # ЗАО) и по Байго, у которого в справочнике управленки формы нет. «Ангар Б 6
 # Моторс» и «Элиза Оптом» — точки на рынке, розница через ККМ.
-_LEGAL_PARTY = re.compile(r"(^|[\s\"«(])(осоо|оао|зао|ип)(?=[\s\"»])|байго",
+_LEGAL_PARTY = re.compile(r"(^|[\s\"«(])(осоо|оао|зао|ип)(?=[\s\"»)]|$)|байго",
                           re.IGNORECASE)
 _RETAIL_SUMMARY = re.compile(r"ккм|обезлич", re.IGNORECASE)
 
@@ -711,7 +711,7 @@ def _tax_doc_rows(db: Session, org: str, kind: str) -> list[dict]:
         key = t.doc_guid or f"{t.doc_number}|{t.date}|{t.counterparty}"
         e = acc.setdefault(key, {
             "date": t.date, "number": t.doc_number, "party": t.counterparty,
-            "amount": 0.0, "qty": 0.0, "comment": ""})
+            "amount": 0.0, "qty": 0.0, "comment": "", "key": key})
         e["amount"] += float(t.amount or 0)
         e["qty"] += float(t.qty or 0)
         if t.comment:
@@ -752,7 +752,9 @@ def _ref_targets(upr: list[dict], by_number: dict, t: dict) -> set:
     return got
 
 
-_CUSTOMER_STOP = {"осоо", "оао", "зао", "ооо", "хайджин", "инновейв"}
+# «Хайджин» — хвост в карточке Байго («БАЙГО ТРЕЙД (j8_530) ХАЙДЖИН»), а
+# «Инновейв» — настоящий покупатель Хайджина, его не выкидываем.
+_CUSTOMER_STOP = {"осоо", "оао", "зао", "ооо", "хайджин"}
 
 
 def _customer_tokens(name: str | None) -> frozenset:
@@ -765,111 +767,161 @@ def _customer_tokens(name: str | None) -> frozenset:
 
 
 def _clean_customer(name: str | None) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"\([^)]*\)", " ", name or "")).strip() or "—"
+    s = re.sub(r"\([^)]*\)", " ", name or "")
+    s = re.sub(r"[()]", " ", s)
+    return re.sub(r"\s+", " ", s).strip(" ,.-") or "—"
 
 
-def customer_diffs(db: Session, org: str, since: date, cutoff: date) -> list[dict]:
-    """Сверка продаж юрлицам по покупателю: сколько штук отгружено (за
-    вычетом возвратов) в управленке и сколько проведено в налоговой.
+def _is_legal(name: str | None) -> bool:
+    return bool(_LEGAL_PARTY.search(name or "")) and not _RETAIL_SUMMARY.search(name or "")
 
-    Документ к документу здесь не сходится по устройству учёта: отгрузку
-    Байго налоговая делит между несколькими ИП (со ссылкой на номер
-    управленки в комментарии), мелочь ИП Саттарову выписывает сводно, а
-    реализацию, почти целиком закрытую потом возвратом, — нет вовсе. Сумма
-    по покупателю от этого не зависит.
 
-    since — с какой даты сверяем. cutoff — по какой дате отгрузка уже
-    должна быть в налоговой (день в день: вчерашняя — должна). Налоговый
-    документ относится к покупателю по ссылке на номер управленки, иначе —
-    по имени."""
-    upr = [u for u in _upr_docs(db, org, "sale")]
+def _sale_classes(db: Session, org: str) -> dict:
+    """Кому продано: юрлицу (ключ покупателя) или в розницу (None).
+
+    Юрлицо в управленке узнаём по форме в названии (ОсОО, ИП…) и по Байго.
+    Но у юрлица бывают точки, названные в управленке как розница: магазины
+    «Алдей Алдей …» — это Императив ОсОО. Связь берём из налоговой: если
+    реализация юрлицу ссылается на номер документа точки, точка — его.
+    Налоговый документ относится к покупателю по ссылке на номер управленки
+    (отгрузку Байго налоговая делит между ИП), иначе — по имени. Без ссылки
+    и без юрлица — розница: ККМ, «Обезличенный», ЭСФ по ИНН физлицу."""
+    upr = _upr_docs(db, org, "sale")
+    tax = _tax_doc_rows(db, org, "sale")
     by_number = _numbers_index(upr)
-    legal = lambda n: bool(_LEGAL_PARTY.search(n or "")) and not _RETAIL_SUMMARY.search(n or "")
+    refs = [_ref_targets(upr, by_number, t) for t in tax]
 
-    cust: dict = {}
+    link: dict = {}
+    for j, t in enumerate(tax):
+        if _is_legal(t["party"]):
+            for i in refs[j]:
+                if not _is_legal(upr[i]["party"]):
+                    link.setdefault(_customer_tokens(upr[i]["party"]),
+                                    (_customer_tokens(t["party"]), t["party"]))
+    names: dict = {}
 
-    def card(key, name):
-        c = cust.get(key)
-        if c is None:
-            c = cust[key] = {"name": _clean_customer(name), "u_all": 0.0,
-                             "u_due": 0.0, "t_all": 0.0, "t_due": 0.0,
-                             "docs": [], "first": None, "t_first": None}
-        return c
+    def upr_key(name):
+        tok = _customer_tokens(name)
+        if tok and _is_legal(name):
+            names.setdefault(tok, _clean_customer(name))
+            return tok
+        if tok in link:
+            k, legal_name = link[tok]
+            names.setdefault(k, _clean_customer(legal_name))
+            return k
+        return None
 
-    keys = {}  # индекс документа управленки -> ключ покупателя
-    for i, u in enumerate(upr):
-        if u["date"] < since or not legal(u["party"]):
-            continue
-        k = _customer_tokens(u["party"])
-        if not k:
-            continue
-        keys[i] = k
-        c = card(k, u["party"])
-        c["u_all"] += u["qty"] or 0
-        if u["date"] <= cutoff:
-            c["u_due"] += u["qty"] or 0
+    ukey = [upr_key(u["party"]) for u in upr]
 
     def match(name):
-        """Карточка управленки по имени из налоговой: больше всего общих
-        слов, и не меньше двух (или всё имя, если оно из одного слова)."""
+        """Покупатель по имени: больше всего общих слов, и не меньше двух
+        (или всё имя, если оно из одного слова)."""
         t = _customer_tokens(name)
         best, score = None, 0
-        for k in cust:
+        for k in names:
             n = len(t & k)
             if n >= min(2, len(t), len(k)) and n > score:
                 best, score = k, n
         return best
 
+    def tax_key(name):
+        if _RETAIL_SUMMARY.search(name or ""):
+            return None
+        k = match(name)
+        if k is None and _is_legal(name):
+            k = frozenset(["~"]) | _customer_tokens(name)
+            names.setdefault(k, _clean_customer(name))
+        return k
+
+    tparts = []
+    for j, t in enumerate(tax):
+        got = refs[j]
+        if _RETAIL_SUMMARY.search(t["party"] or ""):
+            tparts.append([])
+            continue
+        if got:
+            mine = [i for i in got if ukey[i]]
+            total = sum(upr[i]["qty"] or 0 for i in mine)
+            tparts.append([(ukey[i], (upr[i]["qty"] or 0) / total if total
+                            else 1 / len(mine)) for i in mine])
+            continue
+        k = tax_key(t["party"])
+        tparts.append([(k, 1.0)] if k else [])
+    return {"upr": upr, "ukey": ukey, "tax": tax, "tparts": tparts,
+            "refs": refs, "names": names, "upr_key": upr_key, "tax_key": tax_key}
+
+
+def customer_diffs(db: Session, org: str, since: date, cutoff: date,
+                   cls: dict | None = None) -> list[dict]:
+    """Сверка продаж юрлицам по покупателю: отгружено (за вычетом
+    возвратов) в управленке против проведённого в налоговой.
+
+    Документ к документу здесь не сходится по устройству учёта: отгрузку
+    Байго налоговая делит между несколькими ИП, мелочь ИП Саттарову
+    выписывает сводно, реализацию, почти целиком закрытую потом возвратом,
+    — нет вовсе. Сумма по покупателю от этого не зависит.
+
+    since — с какой даты сверяем. cutoff — по какую дату отгрузка уже
+    должна быть в налоговой (день в день: вчерашняя — должна)."""
+    cls = cls or _sale_classes(db, org)
+    upr, ukey, tax = cls["upr"], cls["ukey"], cls["tax"]
+    cust: dict = {}
+
+    def card(k):
+        c = cust.get(k)
+        if c is None:
+            c = cust[k] = {"name": cls["names"].get(k, "—"), "u_all": 0.0,
+                           "u_due": 0.0, "t_all": 0.0, "t_due": 0.0,
+                           "docs": [], "first": None, "t_first": None}
+        return c
+
+    for i, u in enumerate(upr):
+        if ukey[i] and u["date"] >= since:
+            c = card(ukey[i])
+            c["u_all"] += u["qty"] or 0
+            if u["date"] <= cutoff:
+                c["u_due"] += u["qty"] or 0
+
+    # Возврат уменьшает отгрузку, только если покупателю в периоде есть что
+    # возвращать: возврат 2026-го за продажу 2025-го (Туратов, 637 шт) —
+    # история, а не «отрицательная отгрузка».
     R = models.ReturnLine
     for d, client, qty in db.query(R.date, R.client, R.qty).filter(
             R.organization == org, R.date >= since).all():
-        k = _customer_tokens(client)
-        if k in cust:
-            cust[k]["u_all"] -= float(qty or 0)
+        k = cls["upr_key"](client)
+        if k and k in cust:
+            c = cust[k]
+            c["u_all"] = max(c["u_all"] - float(qty or 0), 0.0)
             if d <= cutoff:
-                cust[k]["u_due"] -= float(qty or 0)
+                c["u_due"] = max(c["u_due"] - float(qty or 0), 0.0)
 
     referenced: set = set()
-    for kind, sign in (("sale", 1), ("return", -1)):
-        for t in _tax_doc_rows(db, org, kind):
-            if t["date"] < since or _RETAIL_SUMMARY.search(t["party"] or ""):
-                continue
-            q = (t["qty"] or 0) * sign
-            parts: list = []
-            if kind == "sale":
-                got = _ref_targets(upr, by_number, t)
-                if got and all(upr[i]["date"] < since for i in got):
-                    continue  # закрывает отгрузку прошлого периода
-                total = sum(upr[i]["qty"] or 0 for i in got if i in keys)
-                for i in got:
-                    referenced.add(i)
-                    if i in keys:
-                        parts.append((keys[i], q * (upr[i]["qty"] or 0) / total
-                                      if total else 0))
-                if got and not parts:
-                    continue  # ссылка на розницу — не наше дело
-            if not parts:
-                k = match(t["party"])
-                if k is None:
-                    if not legal(t["party"]):
-                        continue
-                    k = frozenset(["~"]) | _customer_tokens(t["party"])
-                    card(k, t["party"])
-                parts.append((k, q))
-            for k, part in parts:
-                c = cust[k]
-                c["t_all"] += part
-                if t["date"] <= cutoff:
-                    c["t_due"] += part
-                    if c["t_first"] is None or t["date"] < c["t_first"]:
-                        c["t_first"] = t["date"]
+    entries = []
+    for j, t in enumerate(tax):
+        got = cls["refs"][j]
+        referenced |= got
+        if t["date"] < since or (got and all(upr[i]["date"] < since for i in got)):
+            continue  # закрывает отгрузку прошлого периода
+        for k, share in cls["tparts"][j]:
+            entries.append((k, t["date"], (t["qty"] or 0) * share))
+    for t in _tax_doc_rows(db, org, "return"):
+        k = cls["tax_key"](t["party"])
+        if k and t["date"] >= since and k in cust:
+            entries.append((k, t["date"], -(t["qty"] or 0)))
+    for k, d, q in entries:
+        c = card(k)
+        c["t_all"] += q
+        if d <= cutoff:
+            c["t_due"] += q
+            if c["t_first"] is None or d < c["t_first"]:
+                c["t_first"] = d
 
-    for i, k in keys.items():
-        if i not in referenced:
-            u = upr[i]
-            cust[k]["docs"].append(u)
-            if cust[k]["first"] is None or u["date"] < cust[k]["first"]:
-                cust[k]["first"] = u["date"]
+    for i, u in enumerate(upr):
+        if ukey[i] and u["date"] >= since and i not in referenced:
+            c = card(ukey[i])
+            c["docs"].append(u)
+            if c["first"] is None or u["date"] < c["first"]:
+                c["first"] = u["date"]
 
     out = []
     for k, c in cust.items():
@@ -897,6 +949,132 @@ def customer_diffs(db: Session, org: str, since: date, cutoff: date) -> list[dic
                            f"{hint}"),
             "party": c["name"], "qty": missing if side == "upr" else extra,
             "amount": 0,
+        })
+    return out
+
+
+_MONTHS = ("январь", "февраль", "март", "апрель", "май", "июнь", "июль",
+           "август", "сентябрь", "октябрь", "ноябрь", "декабрь")
+# ККМ за месяц — сводный документ по рознице, не позднее 10-го рабочего дня
+# следующего месяца (Порядок применения счёта-фактуры, ПКМ №141 от
+# 18.03.2022 в редакции 2025 г.). Праздники не учитываем — только выходные.
+KKM_WORKDAYS = 10
+
+
+def kkm_deadline(year: int, month: int) -> date:
+    d = date(year + month // 12, month % 12 + 1, 1)
+    n = 0
+    while True:
+        if d.weekday() < 5:
+            n += 1
+            if n == KKM_WORKDAYS:
+                return d
+        d += timedelta(days=1)
+
+
+def kkm_diffs(db: Session, org: str, since: date, today: date,
+              cls: dict | None = None) -> list[dict]:
+    """Розница за месяц в управленке против ККМ (сводной розницы) в
+    налоговой — по товарам и штукам.
+
+    Розница — всё, что продано не юрлицам: точки, рынок, физлица. В
+    налоговой это сводный ККМ, «Обезличенный» и ЭСФ физлицам по ИНН.
+    Сверяем штуки по каждому товару: ККМ одной строкой «1 шт на 337 297 сом»
+    склад налоговой не сводит. Задача — когда прошёл срок (10-й рабочий
+    день следующего месяца), а штуки не сошлись."""
+    from .purchases import _norm_product
+
+    cls = cls or _sale_classes(db, org)
+    retail_upr = {(u["number"], u["date"]) for u, k in zip(cls["upr"], cls["ukey"])
+                  if not k}
+    retail_tax = {t["key"] for t, parts in zip(cls["tax"], cls["tparts"])
+                  if not parts}
+    months = []
+    y, m = since.year, since.month - 1 or 12
+    if since.month == 1:
+        y -= 1
+    while (y, m) < (today.year, today.month):
+        dl = kkm_deadline(y, m)
+        if since <= dl < today:
+            months.append((y, m))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    if not months:
+        return []
+    first = date(*months[0], 1)
+    bucket = lambda d: (d.year, d.month)
+    want = set(months)
+    U: dict = defaultdict(lambda: defaultdict(float))
+    N: dict = defaultdict(lambda: defaultdict(float))
+    money: dict = defaultdict(lambda: [0.0, 0.0])
+    shown: dict = {}
+
+    S = models.Sale
+    for d, num, client, product, qty, amount in db.query(
+            S.date, S.doc_number, S.client, S.product, S.qty, S.amount).filter(
+            S.organization == org, S.date >= first).all():
+        if bucket(d) in want and (num, d) in retail_upr:
+            k = _norm_product(product)
+            shown.setdefault(k, product)
+            U[bucket(d)][k] += float(qty or 0)
+            money[bucket(d)][0] += float(amount or 0)
+    R = models.ReturnLine
+    for d, client, product, qty in db.query(
+            R.date, R.client, R.product, R.qty).filter(
+            R.organization == org, R.date >= first).all():
+        if bucket(d) in want and not cls["upr_key"](client):
+            U[bucket(d)][_norm_product(product)] -= float(qty or 0)
+    T = models.TaxOperation
+    for kind, d, num, party, guid, product, qty, amount in db.query(
+            T.kind, T.date, T.doc_number, T.counterparty, T.doc_guid,
+            T.product, T.qty, T.amount).filter(
+            T.organization == org, T.kind.in_(("sale", "return")),
+            T.date >= first).all():
+        if bucket(d) not in want:
+            continue
+        if kind == "sale":
+            if (guid or f"{num}|{d}|{party}") not in retail_tax:
+                continue
+            sign = 1
+            money[bucket(d)][1] += float(amount or 0)
+        else:
+            if cls["tax_key"](party):
+                continue
+            sign = -1
+        k = _norm_product(product)
+        shown.setdefault(k, product)
+        N[bucket(d)][k] += sign * float(qty or 0)
+
+    def name(k):
+        return re.sub(r"(?i)^(детские\s+)?подгузники\s+", "", shown.get(k) or k)
+
+    out = []
+    for ym in months:
+        # Возвратов с точек за месяц бывает больше, чем продаж (вернули
+        # консигнацию прошлых месяцев) — ККМ отрицательным не бывает.
+        diffs = [(k, max(U[ym].get(k, 0.0), 0.0), max(N[ym].get(k, 0.0), 0.0))
+                 for k in set(U[ym]) | set(N[ym])]
+        diffs = [x for x in diffs if abs(x[1] - x[2]) >= 1]
+        if not diffs:
+            continue
+        diffs.sort(key=lambda x: -abs(x[1] - x[2]))
+        rows = [f"{name(k)} — должно быть {_qty(u)} (сейчас {_qty(n)})"
+                for k, u, n in diffs]
+        label = f"{_MONTHS[ym[1] - 1]} {ym[0]}"
+        out.append({
+            "key": f"{org}|kkm|{ym[0]}-{ym[1]:02d}",
+            "organization": org, "kind": "kkm", "side": "upr",
+            "doc_date": kkm_deadline(*ym),
+            # До 8 товаров — все; больше — первые 6, остальное в портале.
+            "doc_number": (f"{label}: " + "; ".join(
+                rows if len(rows) <= 8 else rows[:6])
+                + (f"; и ещё {len(rows) - 6} поз. — в портале"
+                   if len(rows) > 8 else "")),
+            "party": (f"розница {_qty(sum(max(v, 0) for v in U[ym].values()))} шт на "
+                      f"{_qty(round(money[ym][0]))} сом, в налоговой "
+                      f"{_qty(sum(max(v, 0) for v in N[ym].values()))} шт на "
+                      f"{_qty(round(money[ym][1]))} сом"),
+            "qty": round(sum(max(u - n, 0) for _, u, n in diffs)),
+            "amount": round(money[ym][0], 2),
         })
     return out
 
@@ -1791,7 +1969,9 @@ def scan_contour_events(db: Session) -> dict:
         with db.begin_nested():
             cutoff = today - timedelta(days=cfg.grace_days or 0)
             for o in sorted(by_customer & doc_orgs):
-                customer_rows += customer_diffs(db, o, since, cutoff)
+                cls = _sale_classes(db, o)
+                customer_rows += customer_diffs(db, o, since, cutoff, cls)
+                customer_rows += kkm_diffs(db, o, since, today, cls)
     except Exception as err:  # noqa: BLE001 — документный журнал важнее
         print(f"[contours] сверка по покупателям не прошла: {err}", flush=True)
         customer_rows = None
@@ -1826,12 +2006,12 @@ def scan_contour_events(db: Session) -> dict:
             # У остатка цифры меняются, а задача та же: товар не сошёлся.
             e.doc_number, e.qty = r["doc_number"], r["qty"]
             e.is_task = r["is_task"]
-            if r["kind"] == "customer":
-                e.doc_date = r["doc_date"]
+            if r["kind"] in ("customer", "kkm"):
+                e.doc_date, e.party = r["doc_date"], r["party"]
 
     for key, e in existing.items():
         if (extra is None and e.kind in ("stock", "payment")) or (
-                customer_rows is None and e.kind == "customer"):
+                customer_rows is None and e.kind in ("customer", "kkm")):
             # Сверка остатков упала — её события не трогаем, иначе все они
             # «закрылись бы сами» и в Telegram ушли бы ложные галочки.
             continue
