@@ -1295,6 +1295,27 @@ def tax_by_comment(
     }
 
 
+def _assign_event_keys(o: str, kind: str, side: str, rows: list[dict]) -> None:
+    """Ключ события журнала для каждого непарного документа.
+
+    Один и тот же ключ нужен в двух местах: журнал заводит по нему событие,
+    а сверка по нему узнаёт, что документ признан нормой. Номер бывает
+    пустым (у возвратов его нет вовсе), поэтому в ключ идут ещё дата и
+    суммы; два одинаковых документа разводятся порядковым номером — первый
+    без суффикса, чтобы уже заведённые события не потерялись. Порядок
+    фиксирован, иначе нумерация менялась бы от пересчёта к пересчёту."""
+    repeats: dict[str, int] = defaultdict(int)
+    for r in sorted(rows, key=lambda x: (
+            x["date"], str(x["number"] or ""), str(x["party"] or ""),
+            x["qty"], x["amount"])):
+        base = "|".join([
+            o, kind, side, r["date"], str(r["number"] or ""),
+            str(r["party"] or ""), f'{r["qty"]:.3f}', f'{r["amount"]:.2f}',
+        ])
+        repeats[base] += 1
+        r["key"] = base if repeats[base] == 1 else f"{base}#{repeats[base]}"
+
+
 @router.get("/unposted")
 def tax_unposted(
     db: Session = Depends(get_db),
@@ -1330,8 +1351,13 @@ def tax_unposted(
     # поэтому каждая считается отдельно и показывается своим блоком.
     firms = ([models.normalize_org(org)] if (org or "").lower() in models.ORGS
              else list(models.ORGS))
+    # Признанное нормой («это норма» в журнале) не просрочено: расхождение
+    # разобрано и объяснено, тревожиться о нём больше незачем.
+    acked = {k for (k,) in db.query(models.ContourEvent.key)
+             .filter(models.ContourEvent.acked_at.isnot(None)).all()}
 
-    def block(key: str, label: str, upr: list[dict], tax: list[dict]) -> dict:
+    def block(key: str, label: str, upr: list[dict], tax: list[dict],
+              o: str) -> dict:
         upr_last = max((u["date"] for u in upr), default=None)
         tax_last = max((t["date"] for t in tax), default=None)
         pairs, paired = _pair_docs(upr, tax)
@@ -1356,6 +1382,10 @@ def tax_unposted(
             } for r in sorted(rows, key=lambda x: x["date"], reverse=True)]
 
         rows_u, rows_t = out(only_u, tax_last), out(only_t, upr_last)
+        _assign_event_keys(o, key, "upr", rows_u)
+        _assign_event_keys(o, key, "tax", rows_t)
+        for r in rows_u + rows_t:
+            r["acked"] = r["key"] in acked
         # Налоговая ведёт не всё: у Хайджина на 1 539 отгрузок управленки
         # приходится 184 налоговых документа — ЭСФ на юрлиц и сводные.
         # Записывать полторы тысячи документов в пропущенные бессмысленно:
@@ -1368,11 +1398,13 @@ def tax_unposted(
         # даст «покрытие 67%» и молча спрячет настоящий пропуск.
         partial_u = cover_u < FULL and len(upr) >= ENOUGH
         partial_t = cover_t < FULL and len(tax) >= ENOUGH
-        gaps_u = [] if partial_u else [r for r in rows_u if not r["tail"]]
-        gaps_t = [] if partial_t else [r for r in rows_t if not r["tail"]]
+        gaps_u = [] if partial_u else [r for r in rows_u
+                                       if not r["tail"] and not r["acked"]]
+        gaps_t = [] if partial_t else [r for r in rows_t
+                                       if not r["tail"] and not r["acked"]]
         for rows, partial in ((rows_u, partial_u), (rows_t, partial_t)):
             for r in rows:
-                r["gap"] = not r["tail"] and not partial
+                r["gap"] = not r["tail"] and not partial and not r["acked"]
         return {
             "key": key,
             "label": label,
@@ -1405,7 +1437,7 @@ def tax_unposted(
               "writeoff": "Списания", "purchase": "Поступления товаров"}
 
     def firm_types(o: str) -> list[dict]:
-        return [block(k, label, _upr_docs(db, o, k), _tax_doc_rows(db, o, k))
+        return [block(k, label, _upr_docs(db, o, k), _tax_doc_rows(db, o, k), o)
                 for k, label in LABELS.items()]
 
     out_firms = []
@@ -1477,27 +1509,8 @@ def scan_contour_events(db: Session) -> dict:
             for side, rows, partial in (
                     ("upr", t["only_upr"], t["partial_upr"]),
                     ("tax", t["only_tax"], t["partial_tax"])):
-                # Порядок фиксируем: по нему нумеруются одинаковые документы,
-                # и при следующем пересчёте нумерация должна получиться той
-                # же, иначе события заводились бы заново каждый раз.
-                rows = sorted(rows, key=lambda x: (
-                    x["date"], str(x["number"] or ""), str(x["party"] or ""),
-                    x["qty"], x["amount"]))
-                repeats: dict[str, int] = defaultdict(int)
                 for r in rows:
-                    # Ключ документа: номер бывает пустым (у возвратов его
-                    # нет вовсе), поэтому в ключ идут ещё дата и суммы. Но и
-                    # этого мало: два возврата одному клиенту в один день на
-                    # одну сумму — обычное дело, и такие документы разводятся
-                    # порядковым номером. Первый остаётся без суффикса, чтобы
-                    # уже заведённые события не потерялись.
-                    base = "|".join([
-                        o, t["key"], side, r["date"], str(r["number"] or ""),
-                        str(r["party"] or ""), f'{r["qty"]:.3f}',
-                        f'{r["amount"]:.2f}',
-                    ])
-                    repeats[base] += 1
-                    key = base if repeats[base] == 1 else f"{base}#{repeats[base]}"
+                    key = r["key"]  # см. _assign_event_keys
                     seen.add(key)
                     # Ключ — по прежнему полю party, чтобы уже заведённые
                     # события не пересоздавались; показываем состав.
@@ -1630,6 +1643,53 @@ def contour_events(
                        .filter(models.ContourEvent.resolved_at.is_(None),
                                models.ContourEvent.acked_at.is_(None)).count()),
     }
+
+
+class AckBulk(BaseModel):
+    ids: list[int]
+    note: str | None = None
+
+
+@router.post("/contour-events/ack")
+def contour_events_ack_bulk(
+    payload: AckBulk,
+    db: Session = Depends(get_db),
+    current: models.User = Depends(can_edit),
+):
+    """«Это норма» сразу для нескольких событий — с общей причиной.
+
+    Разбор расхождений обычно кончается выводом про целую группу документов
+    («по ONE всё сходится по остатку, кроме Немана»), и отмечать её по одной
+    строке — десятки нажатий."""
+    from datetime import datetime
+
+    now = datetime.utcnow()
+    note = (payload.note or "").strip()[:300] or None
+    done = 0
+    for e in (db.query(models.ContourEvent)
+              .filter(models.ContourEvent.id.in_(payload.ids)).all()):
+        if e.acked_at is None:
+            e.acked_at, e.acked_by = now, current.id
+            if note:
+                e.note = note
+            done += 1
+    db.commit()
+    return {"acked": done}
+
+
+@router.post("/contour-events/{event_id}/unack")
+def contour_event_unack(
+    event_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_edit),
+):
+    """Снять «это норму» — если отметили по ошибке."""
+    e = db.query(models.ContourEvent).get(event_id)
+    if e is None:
+        raise HTTPException(status_code=404, detail="Событие не найдено")
+    e.acked_at = e.acked_by = None
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.post("/contour-events/{event_id}/ack")
