@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import html
 import json
+import re
 import secrets
 import urllib.error
 import urllib.request
@@ -162,18 +163,51 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
     return cfg.upr_user_id
 
 
+# Вид документа в винительном падеже — задача говорит, что сделать:
+# «Внести в налоговую реализацию №134».
+KIND_ACC = {"sale": "реализацию", "return": "возврат от покупателя",
+            "writeoff": "списание", "purchase": "поступление",
+            "payment": "оплату"}
+
+
 def task_text(e: models.ContourEvent) -> str:
-    """Одна строка задачи — без фирмы, её добавляет вызывающий."""
+    """Одна строка задачи — что сделать, без фирмы (её добавляет вызывающий).
+
+    Не «остаток упр 43, нал 193», а действие: внести документ, найти
+    лишнее. Управленка сверена с фактом, поэтому лишнее или недостающее в
+    налоговой ищется в налоговой."""
     if e.kind == "stock":
         q = float(e.qty or 0)
-        return (f"остаток «{_e(e.party)}»: {_e(e.doc_number)} "
-                f"({'+' if q > 0 else '−'}{_money(abs(q))})")
-    where = "налоговой" if e.side == "upr" else "управленке"
-    num = f" №{_e(e.doc_number)}" if e.doc_number else ""
-    party = f" · {_e(e.party)}" if e.party else ""
-    return (f"{KIND.get(e.kind, e.kind).lower()}{num} от "
-            f"{e.doc_date.strftime('%d.%m')}{party} · {_money(e.amount)} — "
-            f"нет в {where}")
+        # Дробное количество — не штуки (бензин в литрах): единицу не пишем.
+        n = _money(abs(q)) + (" шт." if abs(q - round(q)) < 0.001 else "")
+        if q > 0:
+            act = (f"Найти, почему в налоговой лишние {n} «{_e(e.party)}»: "
+                   f"не проведён расход — продажа или списание")
+        else:
+            act = (f"Найти, почему в налоговой не хватает {n} "
+                   f"«{_e(e.party)}»: не проведён приход — поступление или "
+                   f"возврат")
+        return f"{act} ({_e(e.doc_number)})"
+    # «0000-000134» в управленке и «134» в налоговой — один номер.
+    number = re.sub(r"^[0\-]+(?=\d)", "", e.doc_number or "")
+    num = f" №{_e(number)}" if number else ""
+    what = (f"{KIND_ACC.get(e.kind, e.kind)}{num} от "
+            f"{e.doc_date.strftime('%d.%m.%y')}")
+    # У списаний суммы нет, зато есть состав — его и показываем.
+    tail = []
+    if e.party:
+        tail.append(_e(e.party))
+    if float(e.amount or 0):
+        tail.append(_money(e.amount))
+    elif (float(e.qty or 0) and e.kind != "payment"
+          and not re.search(r"\d", e.party or "")):
+        # У списания состав уже с количеством — второй раз не пишем.
+        tail.append(f"{_money(e.qty)} шт.")
+    tail = f" · {' · '.join(tail)}" if tail else ""
+    if e.side == "upr":
+        return f"Внести в налоговую {what}{tail}"
+    return (f"Внести в управленку {what}{tail} "
+            f"(или убрать из налоговой, если там ошибка)")
 
 
 def _who(user: models.User | None) -> str:
