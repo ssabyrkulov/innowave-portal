@@ -1510,6 +1510,13 @@ def scan_contour_events(db: Session) -> dict:
         e.tg_message_id = e.tg_closed = None
         e.claimed_at = e.claimed_by = None
 
+    # Документы периода контроля, которых нет во второй базе: сверка
+    # остатков вычтет их товары, чтобы «лишние 150 шт» не стали второй
+    # задачей рядом с «внести реализацию №134».
+    pending: list[dict] = []
+    NOM = {"sale": "реализация", "return": "возврат", "writeoff": "списание",
+           "purchase": "поступление"}
+
     for firm in data["firms"]:
         o = firm["org"]
         for t in firm["types"]:
@@ -1519,6 +1526,13 @@ def scan_contour_events(db: Session) -> dict:
                 for r in rows:
                     key = r["key"]  # см. _assign_event_keys
                     seen.add(key)
+                    d = date.fromisoformat(r["date"])
+                    if d >= since and not partial and not r.get("acked"):
+                        number = re.sub(r"^[0\-]+(?=\d)", "", r["number"] or "")
+                        pending.append({
+                            "org": o, "kind": t["key"], "side": side,
+                            "number": r["number"], "date": d,
+                            "label": f"{NOM.get(t['key'], t['key'])} №{number}"})
                     # Ключ — по прежнему полю party, чтобы уже заведённые
                     # события не пересоздавались; показываем состав.
                     shown = r.get("items") or r["party"]
@@ -1548,7 +1562,7 @@ def scan_contour_events(db: Session) -> dict:
         # Точка сохранения: упавший запрос сверки не должен откатить уже
         # собранные события документов.
         with db.begin_nested():
-            extra = reconcile.extra_events(db, cfg, today)
+            extra = reconcile.extra_events(db, cfg, today, pending)
     except Exception as err:  # noqa: BLE001 — документный журнал важнее
         print(f"[contours] остатки и оплаты не сверены: {err}", flush=True)
         extra = None

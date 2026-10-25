@@ -161,17 +161,80 @@ def payment_diffs(db: Session, org: str, since: date) -> dict:
     return {"only_upr": only_upr, "only_nal": [nal[i] for i in free]}
 
 
+# Как документ, которого нет во второй базе, сдвигает остаток «нал − упр».
+# Продажа, внесённая только в управленку, — в налоговой товар ещё на складе,
+# там больше; поступление только в управленке — в налоговой меньше. Документ
+# только в налоговой — наоборот.
+_OUTFLOW = ("sale", "writeoff")
+_INFLOW = ("purchase", "return")
+
+
+def _doc_lines(db: Session, org: str, kind: str, side: str, number: str,
+               d: date) -> list[tuple[str, float]]:
+    """Товары и штуки одного документа — из строк выгрузки его базы."""
+    if side == "upr":
+        model, name = {
+            "sale": (models.Sale, models.Sale.product),
+            "writeoff": (models.WriteOff, models.WriteOff.product),
+            "purchase": (models.Purchase, models.Purchase.product),
+        }.get(kind, (None, None))
+        if model is None:
+            # Возвраты управленки приходят документом, без товарных строк.
+            return []
+        q = db.query(name, model.qty).filter(
+            model.organization == org, model.doc_number == number,
+            model.date == d)
+    else:
+        T = models.TaxOperation
+        q = db.query(T.product, T.qty).filter(
+            T.organization == org, T.kind == kind, T.doc_number == number,
+            T.date == d,
+            # Доп. расходы повторяют товары поступления — не второй приход.
+            or_(T.source.is_(None), ~T.source.ilike("%доп расход%")))
+    return [(p, float(qty)) for p, qty in q.all() if p and qty]
+
+
+def pending_by_item(db: Session, org: str, pending: list[dict],
+                    aliases: dict[str, str]) -> dict[str, dict]:
+    """На сколько штук по каждому товару остаток налоговой обязан отличаться
+    от управленки из-за документов, ещё не внесённых во вторую базу.
+
+    Невнесённая реализация №134 на 150 шт — и в налоговой ровно на 150 шт
+    больше: это не вторая задача, а та же самая."""
+    out: dict[str, dict] = {}
+    for p in pending:
+        if p["org"] != org or not p.get("number"):
+            continue
+        kind, side = p["kind"], p["side"]
+        if kind not in _OUTFLOW + _INFLOW:
+            continue
+        sign = (1 if kind in _OUTFLOW else -1) * (1 if side == "upr" else -1)
+        for product, qty in _doc_lines(db, org, kind, side, p["number"], p["date"]):
+            key = _norm(product)
+            key = aliases.get(key, key)
+            a = out.setdefault(key, {"qty": 0.0, "docs": []})
+            a["qty"] += sign * qty
+            label = p["label"]
+            if label not in a["docs"]:
+                a["docs"].append(label)
+    return out
+
+
 def _doc_number(doc: str) -> str | None:
     m = re.search(r"(\d+)\s+от", doc or "")
     return (m.group(1).lstrip("0") or "0") if m else None
 
 
 def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
-                 today: date) -> list[dict]:
+                 today: date, pending: list[dict] | None = None) -> list[dict]:
     """Расхождения остатков и оплат — в виде событий журнала контуров.
 
     Считаются только для фирм, где загружен налоговый журнал: без него
-    налоговой стороны нет вовсе, и «всё расходится» было бы враньём."""
+    налоговой стороны нет вовсе, и «всё расходится» было бы враньём.
+
+    pending — документы без пары во второй базе, по которым уже есть задача
+    («внести реализацию №134»). Разница остатка, которую они объясняют,
+    отдельной задачей не становится: внесут документ — сойдётся и остаток."""
     if cfg is None:
         return []
     aliases = parse_aliases(cfg.item_aliases)
@@ -185,13 +248,22 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
         if not has_nal_ledger(db, org):
             continue
         if org in stock_orgs:
+            waiting = pending_by_item(db, org, pending or [], aliases)
             for d in stock_diffs(db, org, aliases):
+                w = waiting.get(d["key"])
+                rest = round(d["diff"] - (w["qty"] if w else 0.0), 3)
+                if abs(rest) < 0.001:
+                    continue
+                note = f"упр {_fmt(d['upr'])} · нал {_fmt(d['nal'])}"
+                if w and abs(w["qty"]) >= 0.001:
+                    note += (f"; ещё {_fmt(abs(w['qty']))} — это "
+                             f"{', '.join(w['docs'])}, задача уже есть")
                 out.append({
                     "key": f"{org}|stock|{d['key']}",
                     "organization": org, "kind": "stock", "side": "tax",
                     "doc_date": today,
-                    "doc_number": f"упр {_fmt(d['upr'])} · нал {_fmt(d['nal'])}",
-                    "party": d["item"], "qty": d["diff"], "amount": 0,
+                    "doc_number": note,
+                    "party": d["item"], "qty": rest, "amount": 0,
                     "is_task": True,
                 })
         if org in pay_orgs:
