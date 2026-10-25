@@ -15,7 +15,6 @@ const CHECKS = [
 ]
 const STATE = {
   open: ['☐', ''],
-  check: ['⏳', 'muted'],
   done: ['✅', 'tb-done'],
   acked: ['🚫', 'tb-done'],
 }
@@ -83,7 +82,7 @@ export default function TaskBotPanel() {
 
   if (!cfg) return error ? <div className="error">{error}</div> : null
 
-  const openTasks = tasks?.rows.filter((t) => t.state === 'open' || t.state === 'check') || []
+  const openTasks = tasks?.rows.filter((t) => t.state === 'open') || []
   const userSelect = (key) => (
     <select value={form[key] || ''} disabled={!isAdmin}
       onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) || null })}>
@@ -151,7 +150,8 @@ export default function TaskBotPanel() {
           <a href={cfg.my_link} target="_blank" rel="noreferrer">
             {cfg.me_linked ? 'Привязать заново' : 'Привязать мой Telegram'}
           </a>{' '}
-          — нужно один раз каждому, кто нажимает кнопки в группе.
+          — один раз каждому: тогда бот отмечает человека в его задачах, и
+          Telegram присылает ему уведомление.
         </p>
       )}
 
@@ -238,12 +238,11 @@ export default function TaskBotPanel() {
                     <td className="muted">{SHORT[t.organization] || t.organization}</td>
                     <td>
                       {t.state === 'done' || t.state === 'acked' ? <s>{t.text}</s> : t.text}
-                      {t.state === 'check' && <span className="muted"> · {t.claimed_by}, проверяю</span>}
                       {t.state === 'acked' && <span className="muted"> — {t.note}</span>}
                     </td>
                     <td className="muted">{t.responsible || 'не назначен'}</td>
                     <td className={t.state === 'open' && t.age_days >= tasks.escalate_days ? 'sc-diff' : 'muted'}>
-                      {t.state === 'open' || t.state === 'check' ? `${t.age_days} дн.` : ''}
+                      {t.state === 'open' ? `${t.age_days} дн.` : ''}
                     </td>
                   </tr>
                 )
