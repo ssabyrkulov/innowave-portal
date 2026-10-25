@@ -141,11 +141,34 @@ def payment_diffs(db: Session, org: str, since: date) -> dict:
     Пара — та же сумма (до сома) и дата в пределах трёх дней. Контрагенты
     в базах разные (в налоговой розница идёт на «ККМ», в управленке — на
     точку), поэтому плательщика для пары не сравниваем."""
-    upr = sorted(_receipts(db, org, "upr", since), key=lambda x: x["date"])
+    upr = _receipts(db, org, "upr", since)
     nal = _receipts(db, org, "nal", since)
-    free = list(range(len(nal)))
+    return pair_payments(upr, nal)
+
+
+def pair_payments(upr: list[dict], nal: list[dict]) -> dict:
+    """Пары оплат: сначала — та же дата и сумма, потом оставшимся — ±3 дня.
+
+    Розничные точки платят одними и теми же суммами (874, 1 749, 3 499 —
+    цены упаковок), по десятку в день. Если сразу искать ближайшую в окне
+    ±3 дня, один непарный платёж «съедает» чужую пару соседнего дня, тот —
+    следующего, и «без пары» в итоге оказываются Комбини и Уют 22.10, хотя
+    на самом деле в налоговой не хватает двух оплат 12.10, слитых в одну
+    «ККМ 2 624» от 09.10."""
+    free = set(range(len(nal)))
+    rest = []
+    by_day: dict = defaultdict(list)
+    for i, n in enumerate(nal):
+        by_day[(n["date"], round(n["amount"]))].append(i)
+    for u in sorted(upr, key=lambda x: x["date"]):
+        same = [i for i in by_day.get((u["date"], round(u["amount"])), [])
+                if i in free and abs(nal[i]["amount"] - u["amount"]) < AMOUNT_TOLERANCE]
+        if same:
+            free.remove(same[0])
+        else:
+            rest.append(u)
     only_upr = []
-    for u in upr:
+    for u in rest:
         best = None
         for i in free:
             n = nal[i]
@@ -158,7 +181,7 @@ def payment_diffs(db: Session, org: str, since: date) -> dict:
             only_upr.append(u)
         else:
             free.remove(best[1])
-    return {"only_upr": only_upr, "only_nal": [nal[i] for i in free]}
+    return {"only_upr": only_upr, "only_nal": [nal[i] for i in sorted(free)]}
 
 
 # Как документ, которого нет во второй базе, сдвигает остаток «нал − упр».
