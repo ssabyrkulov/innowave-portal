@@ -181,7 +181,49 @@ def pair_payments(upr: list[dict], nal: list[dict]) -> dict:
             only_upr.append(u)
         else:
             free.remove(best[1])
+    only_upr = _batches(only_upr, nal, free)
     return {"only_upr": only_upr, "only_nal": [nal[i] for i in sorted(free)]}
+
+
+# Пачка ККМ: сколько оплат управленки может лечь в одну строку налоговой.
+BATCH_MAX = 4
+
+
+def _batches(only_upr: list[dict], nal: list[dict], free: set) -> list[dict]:
+    """Розничные оплаты налоговая вправе проводить пачкой через ККМ: две
+    оплаты точек 12.10 — Family Home 1 749 и Альбина 874 — в налоговой
+    одной строкой «ККМ 2 624». Если сумма нескольких непарных оплат
+    управленки в пределах трёх дней равна непарной строке налоговой (до
+    сома на оплату), это пачка, а не два пропуска и одна лишняя."""
+    from itertools import combinations
+
+    from ..routers.tax import _is_legal
+
+    # Только розница: оплата юрлица — отдельной строкой, и случайно
+    # совпавшая сумма чужих мелких оплат не должна её прятать.
+    left = list(only_upr)
+    for i in sorted(free, key=lambda i: nal[i]["date"]):
+        n = nal[i]
+        if _is_legal(n.get("party")):
+            continue
+        near = [u for u in left if abs((u["date"] - n["date"]).days) <= PAYMENT_DAYS
+                and u["amount"] < n["amount"] + AMOUNT_TOLERANCE
+                and not _is_legal(u.get("party"))]
+        if len(near) < 2 or len(near) > 12:
+            continue
+        hit = None
+        for k in range(2, min(BATCH_MAX, len(near)) + 1):
+            for combo in combinations(near, k):
+                if abs(sum(u["amount"] for u in combo) - n["amount"]) < AMOUNT_TOLERANCE * k:
+                    hit = combo
+                    break
+            if hit:
+                break
+        if hit:
+            free.discard(i)
+            for u in hit:
+                left.remove(u)
+    return left
 
 
 # Как документ, которого нет во второй базе, сдвигает остаток «нал − упр».

@@ -210,6 +210,14 @@ def task_text(e: models.ContourEvent) -> str:
                    f"«{_e(e.party)}»: не проведён приход — поступление или "
                    f"возврат")
         return f"{act} ({_e(e.doc_number)})"
+    if e.kind == "payment" and e.side == "upr":
+        from ..routers.tax import _is_legal
+        if not _is_legal(e.party):
+            # Розничная точка: в налоговой её оплаты идут через ККМ, можно
+            # пачкой — отдельная «оплата покупателя» не нужна.
+            return (f"Провести в налоговой через ККМ оплату розницы "
+                    f"{_money(e.amount)} от {e.doc_date:%d.%m.%y} · "
+                    f"{_e(e.party)}")
     # «0000-000134» в управленке и «134» в налоговой — один номер.
     number = re.sub(r"^[0\-]+(?=\d)", "", e.doc_number or "")
     num = f" №{_e(number)}" if number else ""
