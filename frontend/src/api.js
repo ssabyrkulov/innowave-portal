@@ -57,9 +57,14 @@ async function request(path, { method = 'GET', body, form, formData } = {}) {
   const data = await res.json().catch(() => null)
   if (!res.ok) {
     const detail = data?.detail
+    // Без пояснения отвечает не приложение, а хостинг: 502/503/504 — сервис
+    // перезапускается или не успел ответить. Код показываем, чтобы было
+    // понятно, что именно случилось.
     const message = Array.isArray(detail)
       ? detail.map((d) => d.msg).join(', ')
-      : detail || 'Ошибка запроса'
+      : detail || (res.status >= 502
+        ? `Сервер не ответил (${res.status}): он перезапускается или занят. Попробуйте через минуту.`
+        : `Ошибка запроса (${res.status})`)
     throw new Error(message)
   }
   return data

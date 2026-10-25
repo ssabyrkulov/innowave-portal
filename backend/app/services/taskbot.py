@@ -24,6 +24,7 @@ import html
 import json
 import re
 import secrets
+import threading
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -40,6 +41,12 @@ DIGEST_HOUR = 18
 # Остальные — только в закреплённом списке, чтобы первый запуск или большая
 # выгрузка не завалили группу сотней сообщений.
 ALERTS_PER_SYNC = 8
+
+# Пересчёт журнала и рассылка — один за раз на процесс. Кнопка «Сверить
+# сейчас» сразу после деплоя попадала на фоновый пересчёт, который стартует
+# при запуске: два тяжёлых прохода разом на 512 МБ инстанса, и Render
+# отдавал 502 — на странице «Ошибка запроса». Второй теперь не запускается.
+scan_lock = threading.Lock()
 LIST_LINES = 30
 
 FIRM = {"hygiene": "Hygiene", "innowave": "Innowave", "bluecarbon": "BC"}
