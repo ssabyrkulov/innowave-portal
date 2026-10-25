@@ -303,12 +303,12 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
         lines += ["", title(uid)]
         shown = 0
         for e in rows:
-            text = f"{FIRM.get(e.organization, e.organization)}: {task_text(e)}"
+            text = f"<b>{FIRM.get(e.organization, e.organization)}</b>: {task_text(e)}"
             if is_open(e):
                 age = age_days(e, today)
                 late = f" ⚠️{age} дн." if age >= (cfg.escalate_days or 2) else ""
                 n_open += 1
-                line = f"☐ {text}{late}"
+                line = f"🔴 {text}{late}"
             elif e.acked_at:
                 n_done += 1
                 line = f"✅ {text} — норма: {_e(e.note or 'не нужно')}"
@@ -410,7 +410,7 @@ def sync(db: Session) -> dict:
                 head = f"✅ <b>Норма</b> · {_e(e.note or '')}"
             api("editMessageText", chat_id=cfg.chat_id,
                 message_id=e.tg_message_id,
-                text=(f"{head}\n{FIRM.get(e.organization, e.organization)}: "
+                text=(f"{head}\n<b>{FIRM.get(e.organization, e.organization)}</b>: "
                       f"{task_text(e)}"),
                 parse_mode="HTML", disable_web_page_preview=True,
                 reply_markup=NO_BUTTONS)
@@ -457,7 +457,7 @@ def digest(db: Session, cfg: models.TaskBotSettings) -> None:
     if late:
         lines += ["", f"⚠️ <b>Не закрыто дольше {cfg.escalate_days} дн.:</b>"]
         for e in sorted(late, key=lambda x: x.first_seen or datetime.min)[:15]:
-            lines.append(f"• {FIRM.get(e.organization, e.organization)}: "
+            lines.append(f"• <b>{FIRM.get(e.organization, e.organization)}</b>: "
                          f"{task_text(e)} · {age_days(e, today)} дн.")
         owner = users.get(cfg.owner_user_id)
         if owner:
