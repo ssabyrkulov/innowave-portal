@@ -169,22 +169,29 @@ _OUTFLOW = ("sale", "writeoff")
 _INFLOW = ("purchase", "return")
 
 
-def _doc_lines(db: Session, org: str, kind: str, side: str, number: str,
-               d: date) -> list[tuple[str, float]]:
+def _doc_lines(db: Session, org: str, kind: str, side: str, number: str | None,
+               d: date, party: str | None) -> list[tuple[str, float]]:
     """Товары и штуки одного документа — из строк выгрузки его базы."""
-    if side == "upr":
+    if side == "upr" and kind == "return":
+        # Строки возвратов управленки лежат без номера документа — только
+        # дата и покупатель; по ним и находим.
+        R = models.ReturnLine
+        q = db.query(R.product, R.qty).filter(
+            R.organization == org, R.date == d, R.client == party)
+    elif side == "upr":
         model, name = {
             "sale": (models.Sale, models.Sale.product),
             "writeoff": (models.WriteOff, models.WriteOff.product),
             "purchase": (models.Purchase, models.Purchase.product),
         }.get(kind, (None, None))
-        if model is None:
-            # Возвраты управленки приходят документом, без товарных строк.
+        if model is None or not number:
             return []
         q = db.query(name, model.qty).filter(
             model.organization == org, model.doc_number == number,
             model.date == d)
     else:
+        if not number:
+            return []
         T = models.TaxOperation
         q = db.query(T.product, T.qty).filter(
             T.organization == org, T.kind == kind, T.doc_number == number,
@@ -203,13 +210,14 @@ def pending_by_item(db: Session, org: str, pending: list[dict],
     больше: это не вторая задача, а та же самая."""
     out: dict[str, dict] = {}
     for p in pending:
-        if p["org"] != org or not p.get("number"):
+        if p["org"] != org:
             continue
         kind, side = p["kind"], p["side"]
         if kind not in _OUTFLOW + _INFLOW:
             continue
         sign = (1 if kind in _OUTFLOW else -1) * (1 if side == "upr" else -1)
-        for product, qty in _doc_lines(db, org, kind, side, p["number"], p["date"]):
+        for product, qty in _doc_lines(db, org, kind, side, p.get("number"),
+                                   p["date"], p.get("party")):
             key = _norm(product)
             key = aliases.get(key, key)
             a = out.setdefault(key, {"qty": 0.0, "docs": []})

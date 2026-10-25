@@ -1529,10 +1529,14 @@ def scan_contour_events(db: Session) -> dict:
                     d = date.fromisoformat(r["date"])
                     if d >= since and not partial and not r.get("acked"):
                         number = re.sub(r"^[0\-]+(?=\d)", "", r["number"] or "")
+                        # У возвратов управленки номера нет — называем датой.
+                        ref = (f"№{number}" if number
+                               else f"от {d.strftime('%d.%m.%y')}")
                         pending.append({
                             "org": o, "kind": t["key"], "side": side,
                             "number": r["number"], "date": d,
-                            "label": f"{NOM.get(t['key'], t['key'])} №{number}"})
+                            "party": r["party"],
+                            "label": f"{NOM.get(t['key'], t['key'])} {ref}"})
                     # Ключ — по прежнему полю party, чтобы уже заведённые
                     # события не пересоздавались; показываем состав.
                     shown = r.get("items") or r["party"]
