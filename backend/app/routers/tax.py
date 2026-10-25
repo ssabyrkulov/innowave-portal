@@ -678,9 +678,16 @@ def _tax_doc_rows(db: Session, org: str, kind: str) -> list[dict]:
             models.TaxOperation.date, models.TaxOperation.doc_number,
             models.TaxOperation.counterparty, models.TaxOperation.amount,
             models.TaxOperation.qty, models.TaxOperation.comment,
-            models.TaxOperation.doc_guid,
+            models.TaxOperation.doc_guid, models.TaxOperation.source,
     ).filter(models.TaxOperation.organization == org,
              models.TaxOperation.kind == kind).all():
+        # «Поступление доп расходов» — не поступление, а таможня, разнесённая
+        # на товары уже проведённого поступления: те же строки и те же штуки.
+        # В подборе пары по количеству он отбирал у поступления его документ
+        # управленки — FUJIAN №27 от 14.11.2025 висел «без пары», потому что
+        # №22 управленки достался доп. расходам Таможни Север того же дня.
+        if "доп расход" in (t.source or "").lower():
+            continue
         key = t.doc_guid or f"{t.doc_number}|{t.date}|{t.counterparty}"
         e = acc.setdefault(key, {
             "date": t.date, "number": t.doc_number, "party": t.counterparty,
