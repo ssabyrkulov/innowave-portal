@@ -380,17 +380,21 @@ def sync(db: Session) -> dict:
              .filter(models.ContourEvent.is_task.is_(True)).all())
 
     sent = closed = 0
-    fresh = [e for e in tasks if is_open(e) and e.tg_message_id is None]
+    # Отозванная задача, которая снова стала задачей, — тоже новая.
+    fresh = [e for e in tasks if is_open(e)
+             and (e.tg_message_id is None or e.tg_closed)]
     fresh.sort(key=lambda e: e.first_seen or datetime.min)
     for e in fresh[:ALERTS_PER_SYNC]:
         msg = api("sendMessage", chat_id=cfg.chat_id,
                   text=alert_text(cfg, e, users), parse_mode="HTML",
                   disable_web_page_preview=True)
         e.tg_message_id = msg["message_id"] if msg else 0
+        e.tg_closed = False
         sent += 1 if msg else 0
     rest = fresh[ALERTS_PER_SYNC:]
     for e in rest:
         e.tg_message_id = 0  # только в списке
+        e.tg_closed = False
     if rest:
         api("sendMessage", chat_id=cfg.chat_id, disable_notification=True,
             text=f"…и ещё {len(rest)} новых расхождений — они в закреплённом "
@@ -417,9 +421,21 @@ def sync(db: Session) -> dict:
         e.tg_closed = True
         closed += 1
 
+    # Расхождение перестало быть задачей (правило уточнили: «Ангар» на рынке
+    # — розница через ККМ, а не опт юрлицу) — его сообщение из группы
+    # убираем молча: оно не сделано, а отозвано.
+    withdrawn = (db.query(models.ContourEvent)
+                 .filter(models.ContourEvent.is_task.is_(False),
+                         models.ContourEvent.tg_message_id > 0,
+                         models.ContourEvent.tg_closed.isnot(True)).all())
+    for e in withdrawn:
+        api("deleteMessage", chat_id=cfg.chat_id, message_id=e.tg_message_id)
+        e.tg_closed = True
+
     refresh_list(db, cfg)
     db.commit()
-    return {"sent": sent, "closed": closed, "ready": True}
+    return {"sent": sent, "closed": closed, "withdrawn": len(withdrawn),
+            "ready": True}
 
 
 def periodic(db: Session) -> None:
