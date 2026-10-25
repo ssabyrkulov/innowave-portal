@@ -360,6 +360,65 @@ def dedupe_renamed_money() -> None:
         db.close()
 
 
+def ack_innowave_one_history() -> None:
+    """Признаёт нормой разобранную историю расхождений ONE у Инновейва.
+
+    Разбор 25.10.2026: по обычным ONE (NB–XL) остатки управленки и налоговой
+    сходятся, кроме реализации Неман-Фарм №134 от 24.10.2026. Документы при
+    этом разные, но это разные проводки одного и того же, а не пропуски:
+    Байго перевыставлен в налоговой (возврат и новая продажа 05.09.2025),
+    возвраты Байго со списанием (216 шт.) есть только в управленке, продажу
+    Глобусу от 30.12.2025 налоговая перенесла на январь, у Глово лишние 3 NB
+    проданы и возвращены в управленке. Решение владельца — не показывать это
+    как пропуски.
+
+    Отмечаются реализации, возвраты и списания Инновейва по 23.10.2026,
+    кроме списаний mini: №4 от 16.10.2025 и оба апрельских от 20.04.2026 —
+    там налоговая действительно не списала 80 штук. Поступления не
+    трогаются: их не разбирали. Каждую отметку можно снять в журнале
+    («вернуть»)."""
+    from datetime import date, datetime
+
+    from . import models
+    from .database import SessionLocal
+
+    NAME = "ack_innowave_one_history_v1"
+    NOTE = "ONE сходится по остатку, разбор 25.10 (отмечено автоматически)"
+    MINI_DATES = (date(2025, 10, 16), date(2026, 4, 20))
+    db = SessionLocal()
+    try:
+        if db.query(models.AppMigration).filter_by(name=NAME).first():
+            return
+        E = models.ContourEvent
+        rows = (db.query(E)
+                .filter(E.organization == "innowave",
+                        E.kind.in_(("sale", "return", "writeoff")),
+                        E.doc_date <= date(2026, 10, 23),
+                        E.resolved_at.is_(None), E.acked_at.is_(None))
+                .all())
+        now, done = datetime.utcnow(), 0
+        for e in rows:
+            if e.kind == "writeoff" and (e.doc_date in MINI_DATES
+                                         or "mini" in (e.party or "").lower()):
+                continue
+            e.acked_at, e.note = now, NOTE
+            done += 1
+        if not done:
+            # Журнал ещё не заведён (свежая база) — отметить нечего, правка
+            # подождёт следующего старта, а не пометит себя выполненной.
+            db.rollback()
+            return
+        db.add(models.AppMigration(name=NAME, note=f"отмечено нормой: {done}"))
+        db.commit()
+        print(f"[startup] История ONE Инновейва признана нормой: {done}",
+              flush=True)
+    except Exception as err:  # noqa: BLE001 — портал обязан подняться и без этого
+        db.rollback()
+        print(f"[startup] Отметка истории ONE не прошла: {err}", flush=True)
+    finally:
+        db.close()
+
+
 # Готовность БД: пока False — API отвечает понятной ошибкой, а не падает.
 db_state: dict = {"ready": False, "error": None}
 
@@ -376,6 +435,7 @@ def _deferred_migrations() -> None:
     try:
         unify_clients_by_guid()
         dedupe_renamed_money()
+        ack_innowave_one_history()
         print(f"[startup] отложенные правки данных заняли "
               f"{time.time() - t0:.1f} c", flush=True)
     except Exception as err:  # noqa: BLE001 — портал важнее правки
