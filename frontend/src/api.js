@@ -167,6 +167,9 @@ export const api = {
   contourEvents: (state = 'open') => request(`/tax/contour-events?state=${state}`),
   contourEventsScan: () => request('/tax/contour-events/scan', { method: 'POST' }),
   contourEventAck: (id) => request(`/tax/contour-events/${id}/ack`, { method: 'POST' }),
+  contourEventsAck: (ids, note) =>
+    request('/tax/contour-events/ack', { method: 'POST', body: { ids, note } }),
+  contourEventUnack: (id) => request(`/tax/contour-events/${id}/unack`, { method: 'POST' }),
   // Задачи бухгалтерии в Telegram
   taskbotSettings: () => request('/taskbot/settings'),
   taskbotSave: (body) => request('/taskbot/settings', { method: 'PUT', body }),

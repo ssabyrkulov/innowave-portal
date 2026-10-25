@@ -3226,3 +3226,4 @@ th.num .th-sort { justify-content: flex-end; }
 .tb-done { opacity: 0.6; }
 .tb-enabled { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; font-weight: normal; }
 .tb-enabled input { width: auto; margin: 0; }
+.ce-note { flex: 1; min-width: 240px; }

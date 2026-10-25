@@ -37,8 +37,12 @@ function Journal() {
   // было ни одной выгрузки, он пуст — и это выглядит как поломка. Поэтому
   // первый раз считаем сами, а дальше есть кнопка.
   const [scanned, setScanned] = useState(false)
+  // Отметка «это норма» сразу для нескольких строк — с общей причиной.
+  const [picked, setPicked] = useState(new Set())
+  const [note, setNote] = useState('')
 
   function load(st = state) {
+    setPicked(new Set())
     return api.contourEvents(st).then(setData).catch(() => setData(null))
   }
   useEffect(() => { load(state) }, [state])
@@ -68,6 +72,31 @@ function Journal() {
       load()
     } catch (e) { alert('Ошибка: ' + e.message) }
   }
+
+  async function ackPicked() {
+    try {
+      await api.contourEventsAck([...picked], note)
+      setNote('')
+      load()
+    } catch (e) { alert('Ошибка: ' + e.message) }
+  }
+
+  async function unack(id) {
+    try {
+      await api.contourEventUnack(id)
+      load()
+    } catch (e) { alert('Ошибка: ' + e.message) }
+  }
+
+  function toggle(id) {
+    const next = new Set(picked)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setPicked(next)
+  }
+
+  const openRows = data ? data.rows.filter((e) => !e.resolved_at && !e.acked_at) : []
+  const allPicked = openRows.length > 0 && openRows.every((e) => picked.has(e.id))
 
   return (
     <>
@@ -101,10 +130,27 @@ function Journal() {
               : 'Записей нет.'}
           </p>
         ) : (
+        <>
+        {picked.size > 0 && (
+          <div className="rc-period">
+            <span>Выбрано: {picked.size}</span>
+            <input className="ce-note" value={note} placeholder="Почему это норма (например: «ONE сходится по остатку, разбор 25.10»)"
+              onChange={(ev) => setNote(ev.target.value)} />
+            <button className="btn btn-sm" onClick={ackPicked}>Это норма для выбранных</button>
+            <button className="btn btn-sm btn-ghost" onClick={() => setPicked(new Set())}>Снять выбор</button>
+          </div>
+        )}
         <div className="table-wrap compact">
           <table>
             <thead>
               <tr>
+                <th>
+                  {openRows.length > 0 && (
+                    <input type="checkbox" checked={allPicked} title="Выбрать все открытые"
+                      onChange={() => setPicked(allPicked ? new Set()
+                        : new Set(openRows.map((e) => e.id)))} />
+                  )}
+                </th>
                 <th>Замечено</th><th>Фирма</th><th>Документ</th>
                 <th>Контрагент</th><th className="num">Кол-во</th>
                 <th className="num">Сумма</th><th>Состояние</th><th></th>
@@ -113,6 +159,12 @@ function Journal() {
             <tbody>
               {data.rows.map((e) => (
                 <tr key={e.id}>
+                  <td>
+                    {!e.resolved_at && !e.acked_at && (
+                      <input type="checkbox" checked={picked.has(e.id)}
+                        onChange={() => toggle(e.id)} />
+                    )}
+                  </td>
                   <td>{fdate(e.first_seen.slice(0, 10))}</td>
                   <td className="muted">{FIRMS[e.organization] || e.organization}</td>
                   {e.kind === 'stock' ? (
@@ -136,7 +188,8 @@ function Journal() {
                   <td>
                     {e.resolved_at
                       ? <span className="sc-ok">закрылось {fdate(e.resolved_at.slice(0, 10))}</span>
-                      : e.acked_at ? <span className="muted">норма</span>
+                      : e.acked_at ? <span className="muted" title={e.note || ''}>
+                          норма{e.note ? ` — ${e.note}` : ''}</span>
                         : e.gap ? <span className="sc-diff"
                             title="Во второй базе уже есть документы более поздние, чем этот, — значит его пропустили, а не просто не успели">
                             просрочено
@@ -148,12 +201,17 @@ function Journal() {
                       <button className="btn btn-ghost btn-sm"
                         onClick={() => ack(e.id)}>это норма</button>
                     )}
+                    {e.acked_at && (
+                      <button className="btn btn-ghost btn-sm"
+                        onClick={() => unack(e.id)}>вернуть</button>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        </>
       )}
     </>
   )
@@ -280,7 +338,9 @@ export default function ContoursPage() {
                                             {t.by_amount ? formatMoney(r.amount, '') : '—'}
                                           </td>
                                           <td>
-                                            {r.tail
+                                            {r.acked
+                                              ? <span className="muted">норма</span>
+                                              : r.tail
                                               ? <span className="muted">хвост</span>
                                               : r.gap
                                                 ? <span className="sc-diff"
