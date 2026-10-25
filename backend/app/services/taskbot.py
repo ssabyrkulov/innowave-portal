@@ -4,13 +4,11 @@
 контуров, см. tax.scan_contour_events). Всё, что не сходится и должно
 сходиться, — задача. Бот держит их в группе бухгалтерии:
 
-- новая задача приходит отдельным сообщением с кнопками «Внесла» и
-  «Не нужно» и упоминанием ответственного;
-- закреплённый список задач на день бот переписывает при каждом изменении:
-  выполненные зачёркиваются и получают галочку;
-- галочку ставит не кнопка, а следующая выгрузка: «Внесла» переводит задачу
-  в «проверяю», и если за два часа расхождение не ушло — задача снова
-  открыта;
+- новая задача приходит отдельным сообщением с упоминанием ответственного
+  и той же строкой ложится в закреплённый список дня;
+- галочку ставит следующая выгрузка: расхождение ушло — строка в списке
+  зачёркивается, сообщение о задаче переписывается на «закрыто». Кнопок
+  нет: отмечать руками нечего, выгрузка знает лучше;
 - в 18:00 — сводка, и задачи старше срока эскалации уходят руководителю.
 
 Бот отдельный — «Задачи бухгалтерии», токен в переменной окружения
@@ -41,8 +39,6 @@ DIGEST_HOUR = 18
 # Остальные — только в закреплённом списке, чтобы первый запуск или большая
 # выгрузка не завалили группу сотней сообщений.
 ALERTS_PER_SYNC = 8
-# Сколько ждать исправления после «Внесла»: выгрузки идут раз в полчаса.
-CLAIM_HOURS = 2
 LIST_LINES = 30
 
 FIRM = {"hygiene": "Hygiene", "innowave": "Innowave", "bluecarbon": "BC"}
@@ -202,15 +198,9 @@ def _portal_link(cfg: models.TaskBotSettings) -> str | None:
     return f"{base}/contours" if base else None
 
 
-def _keyboard(cfg, e, with_actions: bool = True) -> dict:
-    row = []
-    if with_actions:
-        row += [{"text": "✅ Внесла", "callback_data": f"c:{e.id}"},
-                {"text": "🚫 Не нужно", "callback_data": f"s:{e.id}"}]
-    link = _portal_link(cfg)
-    if link:
-        row.append({"text": "🔗 Портал", "url": link})
-    return {"inline_keyboard": [row] if row else []}
+# Пустая клавиатура: при правке старых сообщений снимает с них кнопки
+# «Внесла» и «Не нужно», которые были в первой версии бота.
+NO_BUTTONS = {"inline_keyboard": []}
 
 
 def alert_text(cfg, e, users: dict[int, models.User]) -> str:
@@ -262,12 +252,11 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
         return f"<b>{role} — {_e(u.full_name) if u else 'не назначен'}</b>"
 
     def order(e):
-        # Сначала открытые (старые выше), потом «проверяю», потом закрытые.
-        state = 0 if is_open(e) and not e.claimed_at else 1 if is_open(e) else 2
-        return (state, e.first_seen or datetime.min)
+        # Сначала открытые (старые выше), потом закрытые.
+        return (0 if is_open(e) else 1, e.first_seen or datetime.min)
 
     lines = [f"📌 <b>Задачи бухгалтерии · {today.strftime('%d.%m')}</b>"]
-    n_open = n_check = n_done = 0
+    n_open = n_done = 0
     for uid in sorted(sections, key=lambda u: (u != cfg.nal_user_id, u or 0)):
         rows = sorted(sections[uid], key=order)
         lines += ["", title(uid)]
@@ -277,12 +266,8 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
             if is_open(e):
                 age = age_days(e, today)
                 late = f" ⚠️{age} дн." if age >= (cfg.escalate_days or 2) else ""
-                if e.claimed_at:
-                    n_check += 1
-                    line = f"⏳ {text} · {_e(e.claimed_by)}, проверяю"
-                else:
-                    n_open += 1
-                    line = f"☐ {text}{late}"
+                n_open += 1
+                line = f"☐ {text}{late}"
             elif e.acked_at:
                 n_done += 1
                 line = f"🚫 <s>{text}</s> — {_e(e.note or 'не нужно')}"
@@ -300,7 +285,10 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
     elif not tasks:
         lines += ["", "✅ Всё сходится: управленка и налоговая совпадают."]
     lines += ["", f"<i>Обновлено {local_now():%H:%M} · открыто {n_open} · "
-                  f"проверяю {n_check} · закрыто сегодня {n_done}</i>"]
+                  f"закрыто сегодня {n_done}</i>"]
+    link = _portal_link(cfg)
+    if link:
+        lines.append(f'<a href="{_e(link)}">Подробнее в портале</a>')
     text = "\n".join(lines)
     return text[:4000]
 
@@ -356,8 +344,7 @@ def sync(db: Session) -> dict:
     for e in fresh[:ALERTS_PER_SYNC]:
         msg = api("sendMessage", chat_id=cfg.chat_id,
                   text=alert_text(cfg, e, users), parse_mode="HTML",
-                  disable_web_page_preview=True,
-                  reply_markup=_keyboard(cfg, e))
+                  disable_web_page_preview=True)
         e.tg_message_id = msg["message_id"] if msg else 0
         sent += 1 if msg else 0
     rest = fresh[ALERTS_PER_SYNC:]
@@ -381,38 +368,13 @@ def sync(db: Session) -> dict:
             text=(f"{head}\n<s>{FIRM.get(e.organization, e.organization)}: "
                   f"{task_text(e)}</s>\n{tail}").strip(),
             parse_mode="HTML", disable_web_page_preview=True,
-            reply_markup=_keyboard(cfg, e, with_actions=False))
+            reply_markup=NO_BUTTONS)
         e.tg_closed = True
         closed += 1
 
-    _unclaim_stale(cfg, tasks, users)
     refresh_list(db, cfg)
     db.commit()
     return {"sent": sent, "closed": closed, "ready": True}
-
-
-def _unclaim_stale(cfg, tasks, users) -> None:
-    """«Внесла», а в выгрузках за два часа исправления нет — снова открыто."""
-    limit = datetime.utcnow() - timedelta(hours=CLAIM_HOURS)
-    for e in tasks:
-        if not (is_open(e) and e.claimed_at and e.claimed_at < limit):
-            continue
-        if not (cfg.last_scan_at and cfg.last_scan_at > e.claimed_at):
-            continue
-        who = e.claimed_by
-        e.claimed_at = None
-        e.claimed_by = None
-        if e.tg_message_id:
-            # Кнопки возвращаются: задача снова ждёт исправления.
-            api("editMessageText", chat_id=cfg.chat_id,
-                message_id=e.tg_message_id, parse_mode="HTML",
-                disable_web_page_preview=True, text=alert_text(cfg, e, users),
-                reply_markup=_keyboard(cfg, e))
-            api("sendMessage", chat_id=cfg.chat_id,
-                reply_to_message_id=e.tg_message_id,
-                text=(f"⚠️ {_e(who)} отметила «Внесла», но за "
-                      f"{CLAIM_HOURS} ч. в выгрузках исправления нет — задача "
-                      f"снова открыта."))
 
 
 def periodic(db: Session) -> None:
@@ -518,90 +480,23 @@ def _on_message(db: Session, cfg, msg: dict) -> None:
         user.telegram_id = str(sender.get("id"))
         user.telegram_name = sender.get("username") or sender.get("first_name")
         _reply(chat["id"], f"✅ Telegram привязан к пользователю портала "
-                           f"<b>{_e(user.full_name)}</b>. Теперь кнопки в "
-                           f"группе знают, кто нажал.")
+                           f"<b>{_e(user.full_name)}</b>. Теперь бот будет "
+                           f"отмечать вас в задачах, за которые вы отвечаете.")
         return
 
     if cmd in ("/list", "/tasks", "/задачи") and str(chat.get("id")) == cfg.chat_id:
         refresh_list(db, cfg, force_new=True)
         return
 
-    reply_to = (msg.get("reply_to_message") or {}).get("message_id")
-    if reply_to and str(chat.get("id")) == cfg.chat_id and text:
-        e = (db.query(models.ContourEvent)
-             .filter(models.ContourEvent.tg_prompt_id == reply_to).first())
-        if e is not None:
-            e.note = text[:300]
-            if e.tg_message_id:
-                api("editMessageText", chat_id=cfg.chat_id,
-                    message_id=e.tg_message_id, parse_mode="HTML",
-                    text=(f"🚫 <b>Не нужно</b> · {_e(e.claimed_by or '')}\n"
-                          f"<s>{FIRM.get(e.organization, e.organization)}: "
-                          f"{task_text(e)}</s>\nПричина: {_e(e.note)}"),
-                    reply_markup=_keyboard(cfg, e, with_actions=False))
-            _reply(chat["id"], "Причину записала.",
-                   reply_to_message_id=msg.get("message_id"))
-            refresh_list(db, cfg)
-
 
 def _on_button(db: Session, cfg, cq: dict) -> None:
-    data = cq.get("data") or ""
-    sender = cq.get("from") or {}
+    """Кнопки «Внесла» и «Не нужно» были в первой версии бота. Их убрали:
+    галочку ставит выгрузка. На старых сообщениях кнопки ещё видны — нажатие
+    объясняет это и снимает их."""
     msg = cq.get("message") or {}
-    chat_id = (msg.get("chat") or {}).get("id")
-    if str(chat_id) != str(cfg.chat_id) or ":" not in data:
-        api("answerCallbackQuery", callback_query_id=cq["id"])
-        return
-    action, _, raw = data.partition(":")
-    e = db.get(models.ContourEvent, int(raw)) if raw.isdigit() else None
-    if e is None or not is_open(e):
-        api("answerCallbackQuery", callback_query_id=cq["id"],
-            text="Задача уже закрыта.")
-        return
-    user = (db.query(models.User)
-            .filter(models.User.telegram_id == str(sender.get("id"))).first())
-    name = user.full_name if user else (sender.get("first_name") or "кто-то")
-
-    if action == "c":
-        e.claimed_at = datetime.utcnow()
-        e.claimed_by = name
-        api("answerCallbackQuery", callback_query_id=cq["id"],
-            text="Отмечено. Галочка появится, когда исправление придёт "
-                 "в выгрузке.")
-        api("editMessageText", chat_id=chat_id, message_id=msg.get("message_id"),
-            parse_mode="HTML", disable_web_page_preview=True,
-            text=(f"⏳ <b>{_e(name)}: внесла — проверяю</b>\n"
-                  f"{FIRM.get(e.organization, e.organization)}: {task_text(e)}"),
-            reply_markup=_keyboard(cfg, e, with_actions=False))
-    elif action == "s":
-        # «Не нужно» убирает задачу совсем, поэтому — только у бухгалтеров и
-        # руководителя с привязанным Telegram: имя должно быть известно.
-        if user is None or user.role not in (models.Role.admin,
-                                              models.Role.accountant):
-            api("answerCallbackQuery", callback_query_id=cq["id"],
-                show_alert=True,
-                text="Сначала привяжите Telegram в портале: «Контуры 1С» → "
-                     "Telegram → «Привязать мой Telegram».")
-            return
-        e.acked_at = datetime.utcnow()
-        e.acked_by = user.id
-        e.claimed_by = name
-        e.note = "не нужно"
-        e.tg_closed = True
-        api("answerCallbackQuery", callback_query_id=cq["id"])
-        api("editMessageText", chat_id=chat_id, message_id=msg.get("message_id"),
-            parse_mode="HTML",
-            text=(f"🚫 <b>Не нужно</b> · {_e(name)}\n"
-                  f"<s>{FIRM.get(e.organization, e.organization)}: "
-                  f"{task_text(e)}</s>"),
-            reply_markup=_keyboard(cfg, e, with_actions=False))
-        prompt = _reply(chat_id, f"{_e(name)}, почему не нужно? Ответьте на "
-                                 f"это сообщение одной строкой.",
-                        reply_markup={"force_reply": True, "selective": True},
-                        reply_to_message_id=msg.get("message_id"))
-        if prompt:
-            e.tg_prompt_id = prompt["message_id"]
-    else:
-        api("answerCallbackQuery", callback_query_id=cq["id"])
-        return
-    refresh_list(db, cfg)
+    api("answerCallbackQuery", callback_query_id=cq["id"],
+        text="Отмечать не нужно: галочка появится сама, когда исправление "
+             "придёт в выгрузке 1С.")
+    if msg.get("message_id"):
+        api("editMessageReplyMarkup", chat_id=(msg.get("chat") or {}).get("id"),
+            message_id=msg["message_id"], reply_markup=NO_BUTTONS)

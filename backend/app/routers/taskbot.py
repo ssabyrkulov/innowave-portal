@@ -149,8 +149,7 @@ def tasks(db: Session = Depends(get_db),
     users = {u.id: u.full_name for u in db.query(models.User).all()}
     out = []
     for e in taskbot.tasks_for_list(db, today):
-        state = ("open" if taskbot.is_open(e) and not e.claimed_at
-                 else "check" if taskbot.is_open(e)
+        state = ("open" if taskbot.is_open(e)
                  else "acked" if e.acked_at else "done")
         out.append({
             "id": e.id, "state": state, "organization": e.organization,
@@ -162,7 +161,7 @@ def tasks(db: Session = Depends(get_db),
             "closed_at": (e.resolved_at or e.acked_at).isoformat()
             if (e.resolved_at or e.acked_at) else None,
         })
-    order = {"open": 0, "check": 1, "done": 2, "acked": 3}
+    order = {"open": 0, "done": 1, "acked": 2}
     out.sort(key=lambda t: (order[t["state"]], -t["age_days"]))
     return {"rows": out, "escalate_days": cfg.escalate_days}
 
