@@ -272,7 +272,7 @@ export default function ContoursPage() {
                                         <tr key={i}>
                                           <td>{fdate(r.date)}</td>
                                           <td>{r.number || '—'}</td>
-                                          <td>{r.party || '—'}</td>
+                                          <td>{r.items || r.party || '—'}</td>
                                           <td className="num">
                                             {r.qty ? r.qty.toLocaleString('ru-RU') : '—'}
                                           </td>

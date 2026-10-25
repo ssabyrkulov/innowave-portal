@@ -572,13 +572,28 @@ DOCS_CAP = 500
 PAIR_WINDOW = 150
 
 
+def _items_label(items: dict[str, float]) -> str:
+    """«ONE размер M 80 · ONE размер L 96 · STARKID №3/M 180» — что именно в
+    документе. Слово «подгузники» опускаем: в списке оно у всех."""
+    parts = []
+    for name, qty in items.items():
+        short = re.sub(r"^(детские\s+)?подгузники\s+", "", name or "—",
+                       flags=re.IGNORECASE)
+        parts.append(f"{short} {qty:g}")
+    return " · ".join(parts)
+
+
 def _doc_rows(rows, number_of, party_of, amount_of, qty_of,
-              total_of=None) -> list[dict]:
+              total_of=None, item_of=None) -> list[dict]:
     """Строки выгрузки сворачиваются в документы.
 
     Итог документа (СуммаДокумента) повторяется в каждой строке, поэтому он
     не складывается, а запоминается один раз: иначе документ из двух строк
     выглядел бы вдвое дороже, чем он есть.
+
+    item_of — товар строки: у документов без контрагента (списания) вместо
+    него показываем состав. Раньше там стоял первый товар документа рядом с
+    общим количеством — «ONE M 356», хотя M в документе 80.
     """
     acc: dict = {}
     for r in rows:
@@ -588,6 +603,10 @@ def _doc_rows(rows, number_of, party_of, amount_of, qty_of,
             "amount": 0.0, "qty": 0.0, "total": None})
         e["amount"] += amount_of(r)
         e["qty"] += qty_of(r)
+        if item_of is not None:
+            items = e.setdefault("items", {})
+            name = item_of(r) or "—"
+            items[name] = items.get(name, 0.0) + qty_of(r)
         if total_of is not None:
             t = total_of(r)
             if t is not None:
@@ -597,6 +616,8 @@ def _doc_rows(rows, number_of, party_of, amount_of, qty_of,
         if e["total"] is not None:
             e["amount"] = e["total"]
         e.pop("total")
+        if "items" in e:
+            e["items"] = _items_label(e["items"])
         out.append(e)
     return out
 
@@ -633,10 +654,11 @@ def _upr_docs(db: Session, org: str, kind: str) -> list[dict]:
         rows = db.query(
             models.WriteOff.id, models.WriteOff.date,
             models.WriteOff.doc_number, models.WriteOff.subconto,
-            models.WriteOff.qty,
+            models.WriteOff.product, models.WriteOff.qty,
         ).filter(models.WriteOff.organization == org).all()
         return _doc_rows(rows, lambda r: r.doc_number, lambda r: r.subconto,
-                         lambda r: 0.0, lambda r: float(r.qty or 0))
+                         lambda r: 0.0, lambda r: float(r.qty or 0),
+                         item_of=lambda r: r.product or r.subconto)
     if kind == "purchase":
         rows = db.query(
             models.Purchase.id, models.Purchase.date,
@@ -1321,6 +1343,8 @@ def tax_unposted(
                 "date": r["date"].isoformat(),
                 "number": r["number"],
                 "party": r["party"],
+                # Состав документа — для списаний вместо контрагента.
+                "items": r.get("items"),
                 "amount": round(r["amount"], 2),
                 "qty": round(r["qty"], 3),
                 # Свежее последнего документа второй базы — документ просто
@@ -1475,12 +1499,15 @@ def scan_contour_events(db: Session) -> dict:
                     repeats[base] += 1
                     key = base if repeats[base] == 1 else f"{base}#{repeats[base]}"
                     seen.add(key)
+                    # Ключ — по прежнему полю party, чтобы уже заведённые
+                    # события не пересоздавались; показываем состав.
+                    shown = r.get("items") or r["party"]
                     e = existing.get(key)
                     if e is None:
                         db.add(models.ContourEvent(
                             key=key, organization=o, kind=t["key"], side=side,
                             doc_date=date.fromisoformat(r["date"]),
-                            doc_number=r["number"], party=r["party"],
+                            doc_number=r["number"], party=shown,
                             qty=r["qty"], amount=r["amount"],
                             gap=bool(r.get("gap")),
                             is_task=is_task(o, r, partial),
@@ -1490,6 +1517,7 @@ def scan_contour_events(db: Session) -> dict:
                         e.last_seen = now
                         # Документ снова без пары — событие снова открыто.
                         reopen(e)
+                        e.party = shown
                         e.gap = bool(r.get("gap"))
                         e.is_task = is_task(o, r, partial)
 
