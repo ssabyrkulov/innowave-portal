@@ -664,10 +664,19 @@ def _upr_docs(db: Session, org: str, kind: str) -> list[dict]:
             models.Purchase.id, models.Purchase.date,
             models.Purchase.doc_number, models.Purchase.supplier,
             models.Purchase.amount_kgs, models.Purchase.qty,
+            models.Purchase.doc_total,
         ).filter(models.Purchase.organization == org).all()
-        return _doc_rows(rows, lambda r: r.doc_number, lambda r: r.supplier,
+        docs = _doc_rows(rows, lambda r: r.doc_number, lambda r: r.supplier,
                          lambda r: float(r.amount_kgs or 0),
                          lambda r: float(r.qty or 0))
+        # Итог в валюте документа: импорт управленка пересчитывает в сомы, а
+        # налоговая держит в долларах — 1 165 006 сом против 13 321,97 USD.
+        # Итог в валюте у обеих баз один, по нему пара и находится.
+        totals = {(r.doc_number, r.date): float(r.doc_total)
+                  for r in rows if r.doc_total is not None}
+        for e in docs:
+            e["doc_amount"] = totals.get((e["number"], e["date"]))
+        return docs
     return []
 
 
@@ -696,6 +705,9 @@ def _tax_doc_rows(db: Session, org: str, kind: str) -> list[dict]:
         e["qty"] += float(t.qty or 0)
         if t.comment:
             e["comment"] = t.comment
+    for e in acc.values():
+        # Налоговая хранит суммы в валюте документа.
+        e["doc_amount"] = e["amount"]
     return list(acc.values())
 
 
@@ -734,11 +746,11 @@ def _pair_docs(upr: list[dict], tax: list[dict]) -> tuple[dict, int]:
     def greedy(field: str, tol: float) -> None:
         index: dict = defaultdict(list)
         for i, u in enumerate(upr):
-            if i not in used_u and u[field]:
+            if i not in used_u and u.get(field):
                 index[round(u[field], 3)].append(i)
         cands = []
         for j, t in enumerate(tax):
-            if j in pairs or not t[field]:
+            if j in pairs or not t.get(field):
                 continue
             for i in index.get(round(t[field], 3), []):
                 dist = abs((upr[i]["date"] - t["date"]).days)
@@ -757,6 +769,10 @@ def _pair_docs(upr: list[dict], tax: list[dict]) -> tuple[dict, int]:
             pairs[j] = upr[i]
 
     greedy("qty", 0.001)
+    # Поступление, где штуки разошлись (пробники в управленке штуками, в
+    # налоговой упаковками), — тот же документ, если итог в валюте до цента
+    # один: FUJIAN №14 и №17 от 12.10.2025, оба 13 321,97 USD.
+    greedy("doc_amount", 0.01)
     greedy("amount", 1.0)
     return pairs, len(pairs)
 
