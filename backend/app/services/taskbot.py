@@ -52,7 +52,7 @@ LIST_LINES = 30
 FIRM = {"hygiene": "Hygiene", "innowave": "Innowave", "bluecarbon": "BC"}
 KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": "Списание",
         "purchase": "Поступление", "payment": "Оплата", "stock": "Остаток",
-        "customer": "Покупатель", "kkm": "ККМ"}
+        "customer": "Покупатель", "kkm": "ККМ", "kkmpay": "Оплаты розницы"}
 
 
 def local_now() -> datetime:
@@ -190,6 +190,17 @@ def task_text(e: models.ContourEvent) -> str:
         period, _, items = (e.doc_number or "").partition(": ")
         return (f"Провести ККМ за {_e(period)} по товарам и штукам: "
                 f"{_e(items)} ({_e(e.party)})")
+    if e.kind == "kkmpay":
+        # Розница за месяц одной строкой: party — сколько и на какую сумму.
+        amount = _money(abs(float(e.amount or 0)))
+        if e.side == "upr":
+            return (f"Провести через ККМ оплаты розницы за "
+                    f"{_e(e.doc_number)}: в налоговой не хватает {amount} сом "
+                    f"({_e(e.party)})")
+        return (f"Проверить оплаты розницы за {_e(e.doc_number)}: в "
+                f"налоговой на {amount} сом больше, чем в управленке — "
+                f"внести оплаты точек в управленку или исправить налоговую "
+                f"({_e(e.party)})")
     if e.kind == "customer":
         n = _money(abs(float(e.qty or 0)))
         if e.side == "upr":
@@ -210,14 +221,6 @@ def task_text(e: models.ContourEvent) -> str:
                    f"«{_e(e.party)}»: не проведён приход — поступление или "
                    f"возврат")
         return f"{act} ({_e(e.doc_number)})"
-    if e.kind == "payment" and e.side == "upr":
-        from ..routers.tax import _is_legal
-        if not _is_legal(e.party):
-            # Розничная точка: в налоговой её оплаты идут через ККМ, можно
-            # пачкой — отдельная «оплата покупателя» не нужна.
-            return (f"Провести в налоговой через ККМ оплату розницы "
-                    f"{_money(e.amount)} от {e.doc_date:%d.%m.%y} · "
-                    f"{_e(e.party)}")
     # «0000-000134» в управленке и «134» в налоговой — один номер.
     number = re.sub(r"^[0\-]+(?=\d)", "", e.doc_number or "")
     num = f" №{_e(number)}" if number else ""

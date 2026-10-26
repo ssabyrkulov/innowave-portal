@@ -22,7 +22,7 @@ const pairs = (n) => {
 const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
-  payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ',
+  payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
@@ -167,13 +167,13 @@ function Journal() {
                   </td>
                   <td>{fdate(e.first_seen.slice(0, 10))}</td>
                   <td className="muted">{FIRMS[e.organization] || e.organization}</td>
-                  {['stock', 'customer', 'kkm'].includes(e.kind) ? (
+                  {['stock', 'customer', 'kkm', 'kkmpay'].includes(e.kind) ? (
                     // Остаток и покупатель — не документ: товар или юрлицо,
                     // у которых штуки в налоговой не равны управленке.
                     <td>
                       {KINDS[e.kind]} <span className="muted">· {e.number}</span>
                       <div className="muted skipped-cols">
-                        {e.kind === 'customer' ? 'с' : e.kind === 'kkm' ? 'срок' : 'замечено'} {fdate(e.date)}
+                        {e.kind === 'customer' ? 'с' : ['kkm', 'kkmpay'].includes(e.kind) ? 'срок' : 'замечено'} {fdate(e.date)}
                       </div>
                     </td>
                   ) : (
