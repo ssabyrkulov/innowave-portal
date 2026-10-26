@@ -1511,6 +1511,52 @@ def status(db: Session) -> dict:
     return out
 
 
+def payments_by_org(db: Session, date_from: date, date_to: date,
+                    org: str) -> dict:
+    """Оплаты SalesDoc за период — только выбранной фирмы.
+
+    У оплаты нет склада, и итог getPayment общий на все фирмы: в карточке
+    «Оплаты за период» Innowave с одним 1С стояли 249 оплат точек Хайджина
+    на 4,16 млн. Фирму оплаты берём по складам заказов, которые она гасит, а
+    без такой связи — по фирме клиента (по складам его реализаций). Если ни
+    то, ни другое фирму однозначно не даёт, оплата идёт в «не разнесено» —
+    отдельной цифрой, а не в чужую фирму."""
+    P, O = models.SalesDocPayment, models.SalesDocOrder
+    store_org = {
+        s.store_id.lower(): s.organization
+        for s in db.query(models.SalesDocStore).all()
+        if s.store_id and s.organization
+    }
+    pays = (db.query(P.client_sd_id, P.amount, P.order_ids)
+            .filter(P.txn == salesdoc.PAYMENT_TXN,
+                    P.date >= date_from, P.date <= date_to).all())
+    oids = {i for _, _, ids in pays for i in (ids or "").split(",") if i}
+    order_org = {}
+    if oids:
+        for sid, store in db.query(O.sd_id, O.store_sd_id).filter(
+                O.sd_id.in_(oids)).all():
+            o = store_org.get(str(store or "").lower())
+            if o:
+                order_org[sid] = o
+    client_orgs = {k: v["orgs"] for k, v in client_store_orgs(db).items()}
+    out = {"total": 0.0, "count": 0,
+           "unassigned_total": 0.0, "unassigned_count": 0}
+    for cli, amount, ids in pays:
+        orgs = {order_org[i] for i in (ids or "").split(",") if i in order_org}
+        if not orgs:
+            orgs = client_orgs.get(str(cli or "").lower(), set())
+        amt = float(amount or 0)
+        if len(orgs) != 1:
+            out["unassigned_total"] += amt
+            out["unassigned_count"] += 1
+        elif org in orgs:
+            out["total"] += amt
+            out["count"] += 1
+    out["total"] = round(out["total"], 2)
+    out["unassigned_total"] = round(out["unassigned_total"], 2)
+    return out
+
+
 def client_detail(db: Session, sd_id: str | None, code_1c: str | None,
                   date_from: date, date_to: date, store_ids=None) -> dict:
     """Детализация клиента из зеркала — обычный SQL, без обращения к SalesDoc.
