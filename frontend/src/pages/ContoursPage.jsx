@@ -342,6 +342,11 @@ export default function ContoursPage() {
                                           <td>
                                             {r.acked
                                               ? <span className="muted">норма</span>
+                                              : r.aligned
+                                              ? <span className="muted"
+                                                  title="После этого списания остатки товаров в двух базах равны — во вторую базу его вносить не нужно">
+                                                  выровняло остаток
+                                                </span>
                                               : r.tail
                                               ? <span className="muted">хвост</span>
                                               : r.gap
