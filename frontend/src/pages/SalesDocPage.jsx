@@ -452,7 +452,14 @@ export default function SalesDocPage() {
             note={`${period.sales.sd_count} заказов в SD · ${period.sales.our_docs ?? '—'} док. в 1С`
               + (period.sales.discounts ? ` · скидки 1С: ${money(period.sales.discounts)}` : '')} />
           <CompareCard title="Оплаты за период" our={period.payments.our}
-            sd={period.payments.sd} diff={period.payments.diff} note={`${period.payments.sd_count} оплат в SD`} />
+            sd={period.payments.sd} diff={period.payments.diff}
+            note={`${period.payments.sd_count} оплат в SD`
+              + (period.payments.sd_scope === 'all_firms'
+                ? ' · итог SalesDoc по всем фирмам: зеркало ещё не готово, по фирмам не разделить'
+                : '')
+              + (period.payments.sd_unassigned_count
+                ? ` · ещё ${period.payments.sd_unassigned_count} на ${money(period.payments.sd_unassigned)} — фирму не определить (нет заказов у точки или заказы обеих фирм)`
+                : '')} />
         </div>
       )}
 

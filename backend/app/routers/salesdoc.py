@@ -1039,6 +1039,19 @@ def reconcile_period(
     )
     our_pay_total = round(sum(float(r.amount_kgs) for r in q.all()), 2)
 
+    # getPayment отдаёт оплаты всех фирм разом. Для одной фирмы делим по
+    # зеркалу; если зеркало не готово — честно помечаем, что итог общий.
+    pay_scope = "all"
+    unassigned = {"unassigned_total": 0.0, "unassigned_count": 0}
+    firm = (org or "").strip().lower()
+    if firm in models.ORGS and salesdoc_mirror.status(db)["ready"]:
+        by_org = salesdoc_mirror.payments_by_org(db, date_from, date_to, firm)
+        sd_payments = {"total": by_org["total"], "count": by_org["count"]}
+        unassigned = by_org
+        pay_scope = "org"
+    elif firm in models.ORGS:
+        pay_scope = "all_firms"
+
     return {
         "date_from": df,
         "date_to": dt,
@@ -1057,6 +1070,9 @@ def reconcile_period(
             "sd": sd_payments["total"],
             "diff": round(our_pay_total - sd_payments["total"], 2),
             "sd_count": sd_payments["count"],
+            "sd_scope": pay_scope,
+            "sd_unassigned": unassigned["unassigned_total"],
+            "sd_unassigned_count": unassigned["unassigned_count"],
         },
     }
 
