@@ -1688,6 +1688,27 @@ def tax_by_comment(
     }
 
 
+def _mark_aligned(db: Session, o: str, side: str, rows: list[dict]) -> None:
+    """Списание, после которого остаток сошёлся со второй базой, — не пропуск.
+
+    Пробников в налоговой нет, в управленке висело 23 шт — их списали в
+    управленке, и остатки баз сравнялись. Внести такое списание во вторую
+    базу значит снова развести остатки, поэтому задачей оно не становится.
+    Признак — по каждому товару документа остаток в базах сейчас равен."""
+    from ..services import reconcile, taskbot
+
+    if not rows or not reconcile.has_nal_ledger(db, o):
+        return
+    aliases = reconcile.parse_aliases(taskbot.get_settings(db).item_aliases)
+    off = {d["key"] for d in reconcile.stock_diffs(db, o, aliases)}
+    for r in rows:
+        lines = reconcile._doc_lines(db, o, "writeoff", side, r["number"],
+                                     date.fromisoformat(r["date"]), r["party"])
+        keys = {aliases.get(k, k)
+                for k in (reconcile._norm(p) for p, _ in lines)}
+        r["aligned"] = bool(keys) and not keys & off
+
+
 def _assign_event_keys(o: str, kind: str, side: str, rows: list[dict]) -> None:
     """Ключ события журнала для каждого непарного документа.
 
@@ -1787,6 +1808,9 @@ def tax_unposted(
         _assign_event_keys(o, key, "tax", rows_t)
         for r in rows_u + rows_t:
             r["acked"] = r["key"] in acked
+        if key == "writeoff":
+            _mark_aligned(db, o, "upr", rows_u)
+            _mark_aligned(db, o, "tax", rows_t)
         # Налоговая ведёт не всё: у Хайджина на 1 539 отгрузок управленки
         # приходится 184 налоговых документа — ЭСФ на юрлиц и сводные.
         # Записывать полторы тысячи документов в пропущенные бессмысленно:
@@ -1807,7 +1831,8 @@ def tax_unposted(
         for rows, partial in ((rows_u, partial_u), (rows_t, partial_t)):
             for r in rows:
                 r["gap"] = (not r["tail"] and not r["acked"]
-                            and not r["summary"] and not partial)
+                            and not r["summary"] and not r.get("aligned")
+                            and not partial)
         gaps_u = [r for r in rows_u if r["gap"]]
         gaps_t = [r for r in rows_t if r["gap"]]
         return {
@@ -1896,7 +1921,8 @@ def scan_contour_events(db: Session) -> dict:
         Свежий документ тоже не задача: у бухгалтера есть grace_days, чтобы
         внести его во вторую базу."""
         d = date.fromisoformat(r["date"])
-        if o not in doc_orgs or d < since or partial or r.get("summary"):
+        if (o not in doc_orgs or d < since or partial or r.get("summary")
+                or r.get("aligned")):
             return False
         return bool(r.get("gap")) or (today - d).days >= (cfg.grace_days or 0)
 
@@ -1926,7 +1952,8 @@ def scan_contour_events(db: Session) -> dict:
                     key = r["key"]  # см. _assign_event_keys
                     seen.add(key)
                     d = date.fromisoformat(r["date"])
-                    if d >= since and not partial and not r.get("acked"):
+                    if (d >= since and not partial and not r.get("acked")
+                            and not r.get("aligned")):
                         number = re.sub(r"^[0\-]+(?=\d)", "", r["number"] or "")
                         # У возвратов управленки номера нет — называем датой.
                         ref = (f"№{number}" if number
