@@ -341,7 +341,9 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                 })
         if org in pay_orgs:
             res = payment_diffs(db, org, since)
-            for side, rows in (("upr", res["only_upr"]), ("tax", res["only_nal"])):
+            legal, retail = _split_retail(res)
+            out += _retail_months(org, retail, today)
+            for side, rows in (("upr", legal["upr"]), ("tax", legal["tax"])):
                 repeats: dict[str, int] = defaultdict(int)
                 for r in sorted(rows, key=lambda x: (x["date"], x["doc"])):
                     base = "|".join([org, "payment", side, r["date"].isoformat(),
@@ -357,6 +359,60 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                         "amount": round(r["amount"], 2),
                         "is_task": age >= (cfg.grace_days or 0),
                     })
+    return out
+
+
+def _split_retail(res: dict) -> tuple[dict, dict]:
+    """Непарные оплаты — на юрлиц и розницу.
+
+    Оплаты юрлиц сверяются день в день, каждая. Розница (точки, рынок; в
+    налоговой — «ККМ») идёт в налоговую через ККМ пачкой в конце месяца:
+    задача по каждой точке на 874 сом — шум, а не контроль."""
+    from ..routers.tax import _is_legal
+
+    legal = {"upr": [], "tax": []}
+    retail = {"upr": [], "tax": []}
+    for side, rows in (("upr", res["only_upr"]), ("tax", res["only_nal"])):
+        for r in rows:
+            (legal if _is_legal(r["party"]) else retail)[side].append(r)
+    return legal, retail
+
+
+def _retail_months(org: str, retail: dict, today: date) -> list[dict]:
+    """Непарная розница — одной строкой за месяц: сколько оплат точек в
+    управленке не нашли пары в налоговой и наоборот, на какую сумму.
+
+    Пачки ККМ кладут в налоговую одной суммой за несколько точек и дней,
+    поэтому сравниваем итог месяца, а не оплаты поштучно: сошлись суммы —
+    всё проведено, как бы ни разбили. Срок — тот же, что у ККМ за месяц
+    (10-й рабочий день следующего месяца); до него это не задача."""
+    from ..routers.tax import _MONTHS, kkm_deadline
+
+    months: dict = defaultdict(lambda: {"upr": [], "tax": []})
+    for side in ("upr", "tax"):
+        for r in retail[side]:
+            months[(r["date"].year, r["date"].month)][side].append(r)
+    out = []
+    for (y, m), g in sorted(months.items()):
+        su = sum(r["amount"] for r in g["upr"])
+        sn = sum(r["amount"] for r in g["tax"])
+        n = len(g["upr"]) + len(g["tax"])
+        if abs(su - sn) < AMOUNT_TOLERANCE * n:
+            continue
+        deadline = kkm_deadline(y, m)
+        out.append({
+            "key": f"{org}|kkmpay|{y}-{m:02d}",
+            "organization": org, "kind": "kkmpay",
+            "side": "upr" if su > sn else "tax",
+            "doc_date": deadline,
+            "doc_number": f"{_MONTHS[m - 1]} {y}",
+            "party": (f"без пары: в управленке {len(g['upr'])} опл. на "
+                      f"{_fmt(round(su))} сом, в налоговой {len(g['tax'])} "
+                      f"на {_fmt(round(sn))} сом"),
+            "qty": len(g["upr"]) - len(g["tax"]),
+            "amount": round(su - sn, 2),
+            "is_task": today > deadline,
+        })
     return out
 
 
