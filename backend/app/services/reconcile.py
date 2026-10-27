@@ -172,7 +172,36 @@ def qr_missing(db: Session, org: str) -> list[dict]:
         return []
     first = min(q["date"] for q in qr)
     upr = _receipts(db, org, "upr", first - timedelta(days=QR_DAYS))
-    return pair_payments(qr, upr, QR_DAYS)["only_upr"]
+    res = pair_payments(qr, upr, QR_DAYS)
+    return _split_qr(res["only_upr"], res["only_nal"])
+
+
+def _split_qr(missing: list[dict], free: list[dict]) -> list[dict]:
+    """Один QR, разнесённый в управленке на несколько точек: QR 25.08 на
+    16 300 — это «Маркет Таза шоп Араванская» 9 300 и «Тазалык дуйносу»
+    7 000. Если сумма двух-четырёх непарных оплат управленки в пределах
+    окна равна непарному QR (до сома на оплату), QR внесён."""
+    from itertools import combinations
+
+    left = list(free)
+    out = []
+    for q in sorted(missing, key=lambda x: x["date"]):
+        near = [u for u in left if abs((u["date"] - q["date"]).days) <= QR_DAYS
+                and u["amount"] < q["amount"] + AMOUNT_TOLERANCE]
+        hit = None
+        if 2 <= len(near) <= 12:
+            for k in range(2, min(BATCH_MAX, len(near)) + 1):
+                hit = next((c for c in combinations(near, k)
+                            if abs(sum(u["amount"] for u in c) - q["amount"])
+                            < AMOUNT_TOLERANCE * k), None)
+                if hit:
+                    break
+        if hit:
+            for u in hit:
+                left.remove(u)
+        else:
+            out.append(q)
+    return out
 
 
 def _other_inflows(db: Session, org: str, since: date) -> list[dict]:
