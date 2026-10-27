@@ -37,10 +37,12 @@ from ..config import settings
 # Бишкек: UTC+6 круглый год. День задач и время сводки — местные.
 TZ_SHIFT = timedelta(hours=6)
 DIGEST_HOUR = 18
-# Сколько отдельных сообщений о новых задачах слать за один пересчёт.
-# Остальные — только в закреплённом списке, чтобы первый запуск или большая
-# выгрузка не завалили группу сотней сообщений.
+# Сколько сообщений о новых задачах слать за один пересчёт. Однотипные
+# задачи идут одним сообщением (28 оплат «Булак Маркет» — одно), а что не
+# влезло — придёт следующим пересчётом: ни одна задача не теряется.
 ALERTS_PER_SYNC = 8
+# Telegram режет сообщение на 4096 символах — группу делим на части.
+MESSAGE_LIMIT = 3800
 
 # Пересчёт журнала и рассылка — один за раз на процесс. Кнопка «Сверить
 # сейчас» сразу после деплоя попадала на фоновый пересчёт, который стартует
@@ -292,6 +294,84 @@ def alert_text(cfg, e, users: dict[int, models.User]) -> str:
             f"{task_text(e)}\nОтветственный: {_who(who)}")
 
 
+def group_key(e: models.ContourEvent) -> tuple:
+    """Задачи, которые идут одним сообщением и одной строкой списка: та же
+    фирма, тот же вид, та же сторона; у ошибок оплат в налоговой — ещё и тот
+    же контрагент, на которого их записали."""
+    label = ""
+    if e.kind in ("payparty", "payop"):
+        label = (e.party or "").partition(" → ")[0]
+    return (e.organization, e.kind, e.side, label)
+
+
+def _item_text(e: models.ContourEvent) -> str:
+    """Строка задачи внутри группы — без того, что уже сказано в заголовке."""
+    if e.kind in ("payparty", "payop"):
+        from ..routers.tax import _clean_customer
+        upr = _clean_customer((e.party or "").partition(" → ")[2])
+        return (f"№{_e(e.doc_number)} от {e.doc_date:%d.%m} на "
+                f"{_money(e.amount)} — по управленке «{_e(upr)}»")
+    return task_text(e)
+
+
+def group_head(e: models.ContourEvent, n: int) -> str:
+    """Заголовок группы из n задач вида e."""
+    if e.kind == "payparty":
+        tax = (e.party or "").partition(" → ")[0]
+        from ..routers.tax import _clean_customer
+        return (f"Исправить контрагента в оплатах ({n}): в налоговой они "
+                f"записаны на «{_e(_clean_customer(tax))}», а по управленке это "
+                f"оплаты других покупателей — для розницы должно быть «ККМ»")
+    if e.kind == "payop":
+        tax = (e.party or "").partition(" → ")[0]
+        return (f"Провести как оплату покупателя ({n}): в налоговой эти "
+                f"поступления проведены как {_e(tax)}")
+    if e.kind == "stock":
+        return f"Остатки: найти, почему налоговая не сходится с управленкой ({n})"
+    if e.kind == "customer":
+        return (f"Выписать ЭСФ покупателям-юрлицам ({n})" if e.side == "upr"
+                else f"Проверить покупателей-юрлиц: в налоговой больше ({n})")
+    what = KIND_PL.get(e.kind, KIND.get(e.kind, e.kind))
+    if e.side == "upr":
+        return f"Внести в налоговую: {what} ({n})"
+    return f"Внести в управленку или убрать из налоговой: {what} ({n})"
+
+
+# Вид документа во множественном — заголовок группы задач.
+KIND_PL = {"sale": "реализации", "return": "возвраты от покупателей",
+           "writeoff": "списания", "purchase": "поступления", "payment": "оплаты"}
+
+
+def group_text(cfg, evs: list, users: dict[int, models.User]) -> list[str]:
+    """Сообщение о группе задач; длинная группа — несколько частей.
+    Возвращает тексты частей по порядку, части делят evs подряд."""
+    e0 = evs[0]
+    if len(evs) == 1:
+        return [alert_text(cfg, e0, users)]
+    head = (f"🔴 <b>{FIRM.get(e0.organization, e0.organization)}</b> · "
+            f"{group_head(e0, len(evs))}")
+    foot = f"Ответственный: {_who(users.get(responsible_id(cfg, e0)))}"
+    parts, cur = [], [head]
+    for e in evs:
+        line = f"• {_item_text(e)}"
+        if len("\n".join(cur + [line, foot])) > MESSAGE_LIMIT:
+            parts.append(cur)
+            cur = [head + " (продолжение)"]
+        cur.append(line)
+    parts.append(cur)
+    return ["\n".join(p + [foot]) for p in parts]
+
+
+def _chunks(evs: list, texts: list[str]) -> list[list]:
+    """Какие задачи вошли в какую часть сообщения (по числу строк «•»)."""
+    out, i = [], 0
+    for t in texts:
+        k = max(1, t.count("\n• "))
+        out.append(evs[i:i + k])
+        i += k
+    return out
+
+
 def tasks_for_list(db: Session, today: date) -> list[models.ContourEvent]:
     """Открытые задачи и закрытые сегодня — то, что видно в списке дня."""
     start = datetime.combine(today, datetime.min.time()) - TZ_SHIFT
@@ -344,19 +424,28 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
         rows = sorted(sections[uid], key=order)
         lines += ["", title(uid)]
         shown = 0
+        # Однотипные задачи — одной строкой: «Исправить контрагента в
+        # оплатах (28)…», подробности — в сообщении и в портале.
+        groups: dict = {}
         for e in rows:
-            text = f"<b>{FIRM.get(e.organization, e.organization)}</b>: {task_text(e)}"
-            if is_open(e):
-                age = age_days(e, today)
+            state = "open" if is_open(e) else "ack" if e.acked_at else "done"
+            groups.setdefault((state, group_key(e)), []).append(e)
+        for (state, _), evs in groups.items():
+            e = evs[0]
+            body = task_text(e) if len(evs) == 1 else group_head(e, len(evs))
+            text = f"<b>{FIRM.get(e.organization, e.organization)}</b>: {body}"
+            if state == "open":
+                age = max(age_days(x, today) for x in evs)
                 late = f" ⚠️{age} дн." if age >= (cfg.escalate_days or 2) else ""
-                n_open += 1
+                n_open += len(evs)
                 line = f"🔴 {text}{late}"
-            elif e.acked_at:
-                n_done += 1
+            elif state == "ack":
+                n_done += len(evs)
                 line = f"✅ {text} — норма: {_e(e.note or 'не нужно')}"
             else:
-                n_done += 1
-                line = f"✅ {text} · {_local(e.resolved_at):%H:%M}"
+                n_done += len(evs)
+                last = max(x.resolved_at for x in evs)
+                line = f"✅ {text} · {_local(last):%H:%M}"
             if shown < LIST_LINES:
                 lines.append(line)
             shown += 1
@@ -422,62 +511,80 @@ def sync(db: Session) -> dict:
              .filter(models.ContourEvent.is_task.is_(True)).all())
 
     sent = closed = 0
-    # Отозванная задача, которая снова стала задачей, — тоже новая.
+    # Новая — ещё не отправленная задача. Отозванная, которая снова стала
+    # задачей, — тоже. Нулевой номер ставила прежняя версия задачам «только в
+    # списке» — теперь и они уходят сообщением.
     fresh = [e for e in tasks if is_open(e)
-             and (e.tg_message_id is None or e.tg_closed)]
+             and (not e.tg_message_id or e.tg_closed)]
     fresh.sort(key=lambda e: e.first_seen or datetime.min)
-    for e in fresh[:ALERTS_PER_SYNC]:
-        msg = api("sendMessage", chat_id=cfg.chat_id,
-                  text=alert_text(cfg, e, users), parse_mode="HTML",
-                  disable_web_page_preview=True)
-        e.tg_message_id = msg["message_id"] if msg else 0
-        e.tg_closed = False
-        sent += 1 if msg else 0
-    rest = fresh[ALERTS_PER_SYNC:]
-    for e in rest:
-        e.tg_message_id = 0  # только в списке
-        e.tg_closed = False
-    if rest:
+    groups: dict = {}
+    for e in fresh:
+        groups.setdefault(group_key(e), []).append(e)
+    pending = 0
+    for evs in groups.values():
+        texts = group_text(cfg, evs, users)
+        for part, text in zip(_chunks(evs, texts), texts):
+            if sent >= ALERTS_PER_SYNC:
+                pending += len(part)  # уйдёт следующим пересчётом
+                continue
+            msg = api("sendMessage", chat_id=cfg.chat_id, text=text,
+                      parse_mode="HTML", disable_web_page_preview=True)
+            if not msg:
+                continue
+            sent += 1
+            for e in part:
+                e.tg_message_id = msg["message_id"]
+                e.tg_closed = False
+    if pending:
         api("sendMessage", chat_id=cfg.chat_id, disable_notification=True,
-            text=f"…и ещё {len(rest)} новых расхождений — они в закреплённом "
-                 f"списке задач.")
+            text=f"…и ещё задач: {pending}. Придут следующим пересчётом, "
+                 f"а пока они в закреплённом списке.")
 
-    for e in tasks:
-        if is_open(e) or not e.tg_message_id or e.tg_closed:
+    # Сообщение о группе живёт, пока в ней есть открытая задача: сделанные
+    # из него уходят (сообщение переписывается), последняя — удаляет его.
+    # Отозванная задача (правило уточнили — уже не задача) уходит так же.
+    posted = (db.query(models.ContourEvent)
+              .filter(models.ContourEvent.tg_message_id > 0,
+                      models.ContourEvent.tg_closed.isnot(True)).all())
+    by_msg: dict = {}
+    for e in posted:
+        by_msg.setdefault(e.tg_message_id, []).append(e)
+    withdrawn = 0
+    for mid, evs in by_msg.items():
+        live = [e for e in evs if e.is_task and is_open(e)]
+        gone = [e for e in evs if not (e.is_task and is_open(e))]
+        if not gone:
             continue
-        # Сделанная задача из ленты уходит — галочка остаётся в закреплённом
-        # списке. Удалить можно только сообщение моложе 48 часов (так
-        # устроен Telegram); старое переписываем коротким «Закрыто».
-        if not api("deleteMessage", chat_id=cfg.chat_id,
-                   message_id=e.tg_message_id):
-            if e.resolved_at:
-                head = f"✅ <b>Закрыто</b> · {_local(e.resolved_at):%d.%m %H:%M}"
-            else:
+        if live:
+            text = group_text(cfg, live, users)[0]
+            api("editMessageText", chat_id=cfg.chat_id, message_id=mid,
+                text=text, parse_mode="HTML", disable_web_page_preview=True,
+                reply_markup=NO_BUTTONS)
+        elif not api("deleteMessage", chat_id=cfg.chat_id, message_id=mid):
+            # Удалить можно только сообщение моложе 48 часов (так устроен
+            # Telegram); старое переписываем коротким «Закрыто».
+            e = gone[0]
+            if e.acked_at:
                 head = f"✅ <b>Норма</b> · {_e(e.note or '')}"
-            api("editMessageText", chat_id=cfg.chat_id,
-                message_id=e.tg_message_id,
+            else:
+                head = f"✅ <b>Закрыто</b> · {local_now():%d.%m %H:%M}"
+            body = task_text(e) if len(gone) == 1 else group_head(e, len(gone))
+            api("editMessageText", chat_id=cfg.chat_id, message_id=mid,
                 text=(f"{head}\n<b>{FIRM.get(e.organization, e.organization)}</b>: "
-                      f"{task_text(e)}"),
+                      f"{body}"),
                 parse_mode="HTML", disable_web_page_preview=True,
                 reply_markup=NO_BUTTONS)
-        e.tg_closed = True
-        closed += 1
-
-    # Расхождение перестало быть задачей (правило уточнили: «Ангар» на рынке
-    # — розница через ККМ, а не опт юрлицу) — его сообщение из группы
-    # убираем молча: оно не сделано, а отозвано.
-    withdrawn = (db.query(models.ContourEvent)
-                 .filter(models.ContourEvent.is_task.is_(False),
-                         models.ContourEvent.tg_message_id > 0,
-                         models.ContourEvent.tg_closed.isnot(True)).all())
-    for e in withdrawn:
-        api("deleteMessage", chat_id=cfg.chat_id, message_id=e.tg_message_id)
-        e.tg_closed = True
+        for e in gone:
+            e.tg_closed = True
+            if e.is_task:
+                closed += 1
+            else:
+                withdrawn += 1
 
     refresh_list(db, cfg)
     db.commit()
-    return {"sent": sent, "closed": closed, "withdrawn": len(withdrawn),
-            "ready": True}
+    return {"sent": sent, "closed": closed, "withdrawn": withdrawn,
+            "pending": pending, "ready": True}
 
 
 def periodic(db: Session) -> None:
