@@ -148,24 +148,30 @@ def payment_diffs(db: Session, org: str, since: date) -> dict:
     return pair_payments(upr, nal)
 
 
-def qr_missing(db: Session, org: str, since: date) -> list[dict]:
+def qr_missing(db: Session, org: str) -> list[dict]:
     """QR-оплаты из отчёта банка, которых нет в управленке.
 
     Сверка баз видит только то, что внесено хотя бы в одну: три QR вечера
     26.10 на 7 182 сом не внесли ни управленка, ни налоговая — и задачи не
     было. Пара — оплата покупателя в управленке на ту же сумму (до сома) в
     пределах пяти дней: QR вечера пятницы вносят во вторник. Две-три QR
-    одной точки, внесённые одной оплатой, — тоже пара."""
+    одной точки, внесённые одной оплатой, — тоже пара.
+
+    Дата «Контроль с» здесь не действует: отчёт загружают за тот период,
+    который хотят сверить, — загрузили июль, значит, сверяем июль. Сдвигать
+    «Контроль с» ради этого нельзя: вместе с QR всплыла бы вся история
+    документов."""
     Q = models.QrPayment
     qr = [{"txn_id": t, "date": d, "paid_at": at, "amount": float(a or 0),
            "party": c or ""}
           for t, d, at, a, s, c in db.query(
               Q.txn_id, Q.date, Q.paid_at, Q.amount, Q.status, Q.comment)
-          .filter(Q.organization == org, Q.date >= since).all()
+          .filter(Q.organization == org).all()
           if (s or "").lower() == "оплата прошла" and float(a or 0) >= MIN_PAYMENT]
     if not qr:
         return []
-    upr = _receipts(db, org, "upr", since - timedelta(days=QR_DAYS))
+    first = min(q["date"] for q in qr)
+    upr = _receipts(db, org, "upr", first - timedelta(days=QR_DAYS))
     return pair_payments(qr, upr, QR_DAYS)["only_upr"]
 
 
@@ -458,7 +464,7 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                     "party": f"«{how}», счёт {n['account']}, {n['party'] or '—'} → {u['party']}",
                     "qty": 0, "amount": round(n["amount"], 2), "is_task": age_ok(n["date"]),
                 })
-            for q in qr_missing(db, org, since):
+            for q in qr_missing(db, org):
                 out.append({
                     "key": f"{org}|qr|{q['txn_id']}",
                     "organization": org, "kind": "qr", "side": "bank",
