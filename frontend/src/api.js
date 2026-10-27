@@ -314,6 +314,11 @@ export const api = {
     fd.append('org', org || 'hygiene')
     return request('/tax/import', { method: 'POST', formData: fd })
   },
+  qrImport: (file) => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    return request('/tax/qr-import', { method: 'POST', formData: fd })
+  },
   salesdocCashboxes: () => request('/salesdoc/cashboxes'),
   salesdocOrderChanges: () => request('/salesdoc/order-changes'),
   salesdocPaymentTypes: () => request('/salesdoc/payment-types'),

@@ -320,6 +320,24 @@ async def tax_import(
     return import_tax_workbook(db, content, file.filename or "", user.id, org)
 
 
+@router.post("/qr-import")
+async def qr_import(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(can_edit),
+    file: UploadFile = File(...),
+):
+    """QR-отчёт банка (кабинет SHOP_OWNER) — третий источник оплат: QR без
+    пары в управленке на следующий день становится задачей. Фирма — из
+    шапки отчёта."""
+    from ..services import qr_report
+
+    content = await file.read()
+    try:
+        return qr_report.import_report(db, content, file.filename or "", user.id)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
 KIND_LABEL = {
     "sale": "Реализации",
     "return": "Возвраты от покупателей",
@@ -2050,13 +2068,13 @@ def scan_contour_events(db: Session) -> dict:
             # У остатка цифры меняются, а задача та же: товар не сошёлся.
             e.doc_number, e.qty = r["doc_number"], r["qty"]
             e.is_task = r["is_task"]
-            if r["kind"] in ("customer", "kkm", "kkmpay", "payparty", "payop"):
+            if r["kind"] in ("customer", "kkm", "kkmpay", "payparty", "payop", "qr"):
                 e.doc_date, e.party = r["doc_date"], r["party"]
             if r["kind"] == "kkmpay":
                 e.amount = r["amount"]
 
     for key, e in existing.items():
-        if (extra is None and e.kind in ("stock", "payment", "kkmpay", "payparty", "payop")) or (
+        if (extra is None and e.kind in ("stock", "payment", "kkmpay", "payparty", "payop", "qr")) or (
                 customer_rows is None and e.kind in ("customer", "kkm")):
             # Сверка остатков упала — её события не трогаем, иначе все они
             # «закрылись бы сами» и в Telegram ушли бы ложные галочки.

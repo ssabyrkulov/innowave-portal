@@ -495,6 +495,16 @@ async def inbox(
     # Фирма: сначала по имени файла, папка — запасной вариант. Так одна папка
     # Drive обслуживает все базы, и перекладывать файлы не нужно.
     org = models.normalize_org(org_from_name(filename) or org)
+    # QR-отчёт банка, положенный в папку Drive рядом с выгрузками 1С. Фирму
+    # берём из шапки отчёта: в имени её нет.
+    from ..services import qr_report
+    if qr_report.is_qr_name(filename):
+        try:
+            result = qr_report.import_report(db, content, filename,
+                                             _robot_user(db).id, org)
+            return {"type": "qr", "status": "imported", **result}
+        except ValueError:
+            db.rollback()  # имя похоже, а внутри не отчёт — разбираем как обычно
     # Имя файла — первичный сигнал; колонки — запасной для незнакомых имён.
     kind = classify_by_name(filename, org) or sniff_kind(content)
     if kind == "ignore":

@@ -55,7 +55,8 @@ FIRM = {"hygiene": "Hygiene", "innowave": "Innowave", "bluecarbon": "BC"}
 KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": "Списание",
         "purchase": "Поступление", "payment": "Оплата", "stock": "Остаток",
         "customer": "Покупатель", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
-        "payparty": "Контрагент оплаты", "payop": "Вид оплаты"}
+        "payparty": "Контрагент оплаты", "payop": "Вид оплаты",
+        "qr": "QR-оплата"}
 
 
 def local_now() -> datetime:
@@ -219,6 +220,13 @@ def task_text(e: models.ContourEvent) -> str:
         return (f"Провести как оплату покупателя поступление {what}: в "
                 f"налоговой оно проведено как {_e(tax_side)}, а по управленке "
                 f"это оплата покупателя «{_e(who)}» — покупатель {_e(need)}")
+    if e.kind == "qr":
+        # doc_number — время оплаты, party — комментарий плательщика.
+        note = "" if e.party in (None, "", "QR") else f" (комментарий: «{_e(e.party)}»)"
+        return (f"Внести в управленку QR-оплату от {e.doc_date:%d.%m.%y} "
+                f"{_e(e.doc_number)} на {_money(e.amount)} сом{note}: деньги "
+                f"на счёт пришли (отчёт банка), а оплаты в управленке нет — "
+                f"найти точку и провести")
     if e.kind == "customer":
         n = _money(abs(float(e.qty or 0)))
         if e.side == "upr":
@@ -311,6 +319,9 @@ def _item_text(e: models.ContourEvent) -> str:
         upr = _clean_customer((e.party or "").partition(" → ")[2])
         return (f"№{_e(e.doc_number)} от {e.doc_date:%d.%m} на "
                 f"{_money(e.amount)} — по управленке «{_e(upr)}»")
+    if e.kind == "qr":
+        note = "" if e.party in (None, "", "QR") else f" — «{_e(e.party)}»"
+        return f"{e.doc_date:%d.%m} {_e(e.doc_number)} — {_money(e.amount)} сом{note}"
     return task_text(e)
 
 
@@ -328,6 +339,9 @@ def group_head(e: models.ContourEvent, n: int) -> str:
                 f"поступления проведены как {_e(tax)}")
     if e.kind == "stock":
         return f"Остатки: найти, почему налоговая не сходится с управленкой ({n})"
+    if e.kind == "qr":
+        return (f"Внести в управленку QR-оплаты ({n}): деньги на счёт пришли "
+                f"(отчёт банка), а оплат в управленке нет — найти точки и провести")
     if e.kind == "customer":
         return (f"Выписать ЭСФ покупателям-юрлицам ({n})" if e.side == "upr"
                 else f"Проверить покупателей-юрлиц: в налоговой больше ({n})")
