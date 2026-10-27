@@ -22,7 +22,7 @@ const pairs = (n) => {
 const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
-  payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы',
+  payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
@@ -179,8 +179,9 @@ function Journal() {
                   ) : (
                     <td>
                       {KINDS[e.kind] || e.kind} {e.number || '—'}
-                      <span className="muted"> · {e.side === 'upr'
-                        ? 'только в управленке' : 'только в налоговой'}</span>
+                      <span className="muted"> · {['payparty', 'payop'].includes(e.kind)
+                        ? 'ошибка в налоговой' : e.side === 'upr'
+                          ? 'только в управленке' : 'только в налоговой'}</span>
                       <div className="muted skipped-cols">от {fdate(e.date)}</div>
                     </td>
                   )}
