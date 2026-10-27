@@ -13,7 +13,7 @@
 
 import re
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -146,6 +146,72 @@ def payment_diffs(db: Session, org: str, since: date) -> dict:
     return pair_payments(upr, nal)
 
 
+def _other_inflows(db: Session, org: str, since: date) -> list[dict]:
+    """Поступления на кассу и банк налоговой, проведённые НЕ как оплата
+    покупателя: возврат аванса поставщиком, прочий приход, займ. Переводы
+    между своими счетами (касса ↔ банк) не в счёт."""
+    E = models.LedgerEntry
+    q = base_scope(
+        db.query(E.doc_guid, E.doc, E.date, E.credit_account, E.credit_sub,
+                 E.content, E.amount, E.debit_account)
+        .filter(E.organization == org, E.date >= since), "nal")
+    docs: dict[str, dict] = {}
+    for guid, doc, d, acc, party, content, amount, debit in q.all():
+        if not debit or not debit.startswith(MONEY_PREFIXES):
+            continue
+        if not acc or acc in CUSTOMER_ACCOUNTS or acc.startswith(MONEY_PREFIXES):
+            continue
+        key = guid or f"{doc}|{d}"
+        x = docs.get(key)
+        if x is None:
+            x = docs[key] = {"doc": doc or "", "date": d, "account": acc,
+                             "party": (party or "").strip(),
+                             "content": (content or "").strip(), "amount": 0.0}
+        x["amount"] += float(amount or 0)
+    return [x for x in docs.values() if x["amount"] >= MIN_PAYMENT]
+
+
+def _wrong_operation(only_upr: list[dict], other: list[dict]) -> tuple[list, list]:
+    """Оплата покупателя из управленки, которой нет среди оплат покупателей
+    налоговой, но в налоговой в те же дни есть поступление на ту же сумму
+    другим видом операции — значит, её провели не тем видом: Ош рынок
+    25 200 от 05.10 налоговая записала «возвратом аванса» от поставщика."""
+    free = list(range(len(other)))
+    left, wrong = [], []
+    for u in sorted(only_upr, key=lambda x: x["date"]):
+        best = None
+        for i in free:
+            n = other[i]
+            days = abs((n["date"] - u["date"]).days)
+            if abs(n["amount"] - u["amount"]) < AMOUNT_TOLERANCE and days <= PAYMENT_DAYS \
+                    and (best is None or days < best[0]):
+                best = (days, i)
+        if best is None:
+            left.append(u)
+        else:
+            free.remove(best[1])
+            wrong.append((u, other[best[1]]))
+    return left, wrong
+
+
+def _party_mismatch(db: Session, org: str, pairs: list) -> list:
+    """Пары, где сумма и дата сошлись, а покупатель — нет: в налоговой оплата
+    записана на юрлицо (Булак Маркет, ИП Маманов), а в управленке это оплата
+    точки или другого покупателя. Розница в налоговой — «ККМ», не юрлицо.
+    Связки, которые налоговая сама держит по реализациям (Байго → ИП
+    Атабекова), ошибкой не считаются."""
+    from ..routers.tax import _customer_tokens, _is_legal, _party_aliases
+
+    odd = [(u, n) for u, n in pairs
+           if _is_legal(n["party"])
+           and not _customer_tokens(u["party"]) & _customer_tokens(n["party"])]
+    if not odd:
+        return []
+    aliases = _party_aliases(db, org)
+    return [(u, n) for u, n in odd
+            if (_customer_tokens(u["party"]), _customer_tokens(n["party"])) not in aliases]
+
+
 def pair_payments(upr: list[dict], nal: list[dict]) -> dict:
     """Пары оплат: сначала — та же дата и сумма, потом оставшимся — ±3 дня.
 
@@ -157,6 +223,7 @@ def pair_payments(upr: list[dict], nal: list[dict]) -> dict:
     «ККМ 2 624» от 09.10."""
     free = set(range(len(nal)))
     rest = []
+    pairs = []
     by_day: dict = defaultdict(list)
     for i, n in enumerate(nal):
         by_day[(n["date"], round(n["amount"]))].append(i)
@@ -165,6 +232,7 @@ def pair_payments(upr: list[dict], nal: list[dict]) -> dict:
                 if i in free and abs(nal[i]["amount"] - u["amount"]) < AMOUNT_TOLERANCE]
         if same:
             free.remove(same[0])
+            pairs.append((u, nal[same[0]]))
         else:
             rest.append(u)
     only_upr = []
@@ -181,8 +249,10 @@ def pair_payments(upr: list[dict], nal: list[dict]) -> dict:
             only_upr.append(u)
         else:
             free.remove(best[1])
+            pairs.append((u, nal[best[1]]))
     only_upr = _batches(only_upr, nal, free)
-    return {"only_upr": only_upr, "only_nal": [nal[i] for i in sorted(free)]}
+    return {"only_upr": only_upr, "only_nal": [nal[i] for i in sorted(free)],
+            "pairs": pairs}
 
 
 # Пачка ККМ: сколько оплат управленки может лечь в одну строку налоговой.
@@ -341,6 +411,28 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                 })
         if org in pay_orgs:
             res = payment_diffs(db, org, since)
+            age_ok = lambda d: (today - d).days >= (cfg.grace_days or 0)
+            for u, n in _party_mismatch(db, org, res["pairs"]):
+                num = _doc_number(n["doc"])
+                out.append({
+                    "key": f"{org}|payparty|{n['date'].isoformat()}|{num}|{n['amount']:.2f}",
+                    "organization": org, "kind": "payparty", "side": "tax",
+                    "doc_date": n["date"], "doc_number": num,
+                    "party": f"{n['party']} → {u['party']}", "qty": 0,
+                    "amount": round(n["amount"], 2), "is_task": age_ok(n["date"]),
+                })
+            other = _other_inflows(db, org, since - timedelta(days=PAYMENT_DAYS))
+            res["only_upr"], wrong = _wrong_operation(res["only_upr"], other)
+            for u, n in wrong:
+                num = _doc_number(n["doc"])
+                how = n["content"] or "другой операцией"
+                out.append({
+                    "key": f"{org}|payop|{n['date'].isoformat()}|{num}|{n['amount']:.2f}",
+                    "organization": org, "kind": "payop", "side": "tax",
+                    "doc_date": n["date"], "doc_number": num,
+                    "party": f"«{how}», счёт {n['account']}, {n['party'] or '—'} → {u['party']}",
+                    "qty": 0, "amount": round(n["amount"], 2), "is_task": age_ok(n["date"]),
+                })
             legal, retail = _split_retail(res)
             out += _retail_months(org, retail, today)
             for side, rows in (("upr", legal["upr"]), ("tax", legal["tax"])):

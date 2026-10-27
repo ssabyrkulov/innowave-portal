@@ -776,6 +776,23 @@ def _is_legal(name: str | None) -> bool:
     return bool(_LEGAL_PARTY.search(name or "")) and not _RETAIL_SUMMARY.search(name or "")
 
 
+def _party_aliases(db: Session, org: str) -> set:
+    """Пары «покупатель в управленке — юрлицо в налоговой», которые налоговая
+    сама связала: реализация юрлицу ссылается на номер документа управленки.
+    Отгрузку Байго налоговая выписывает на ИП Атабекову и других, магазины
+    «Алдей Алдей» — на Императив ОсОО; их оплаты в налоговой записаны на те
+    же юрлица, и это не ошибка контрагента."""
+    upr = _upr_docs(db, org, "sale")
+    by_number = _numbers_index(upr)
+    out = set()
+    for t in _tax_doc_rows(db, org, "sale"):
+        if not _is_legal(t["party"]):
+            continue
+        for i in _ref_targets(upr, by_number, t):
+            out.add((_customer_tokens(upr[i]["party"]), _customer_tokens(t["party"])))
+    return out
+
+
 def _sale_classes(db: Session, org: str) -> dict:
     """Кому продано: юрлицу (ключ покупателя) или в розницу (None).
 
@@ -2033,13 +2050,13 @@ def scan_contour_events(db: Session) -> dict:
             # У остатка цифры меняются, а задача та же: товар не сошёлся.
             e.doc_number, e.qty = r["doc_number"], r["qty"]
             e.is_task = r["is_task"]
-            if r["kind"] in ("customer", "kkm", "kkmpay"):
+            if r["kind"] in ("customer", "kkm", "kkmpay", "payparty", "payop"):
                 e.doc_date, e.party = r["doc_date"], r["party"]
             if r["kind"] == "kkmpay":
                 e.amount = r["amount"]
 
     for key, e in existing.items():
-        if (extra is None and e.kind in ("stock", "payment", "kkmpay")) or (
+        if (extra is None and e.kind in ("stock", "payment", "kkmpay", "payparty", "payop")) or (
                 customer_rows is None and e.kind in ("customer", "kkm")):
             # Сверка остатков упала — её события не трогаем, иначе все они
             # «закрылись бы сами» и в Telegram ушли бы ложные галочки.

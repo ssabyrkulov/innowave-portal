@@ -52,7 +52,8 @@ LIST_LINES = 30
 FIRM = {"hygiene": "Hygiene", "innowave": "Innowave", "bluecarbon": "BC"}
 KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": "Списание",
         "purchase": "Поступление", "payment": "Оплата", "stock": "Остаток",
-        "customer": "Покупатель", "kkm": "ККМ", "kkmpay": "Оплаты розницы"}
+        "customer": "Покупатель", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
+        "payparty": "Контрагент оплаты", "payop": "Вид оплаты"}
 
 
 def local_now() -> datetime:
@@ -166,7 +167,7 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
     """Кто исправляет. Управленка — эталон (сверена с фактом): остаток,
     разошедшийся с ней, и документ, которого нет в налоговой, — задача
     налоговой. Документ или оплата, которых нет в управленке, — управленки."""
-    if e.kind == "stock" or e.side == "upr":
+    if e.kind in ("stock", "payparty", "payop") or e.side == "upr":
         return cfg.nal_user_id
     return cfg.upr_user_id
 
@@ -201,6 +202,21 @@ def task_text(e: models.ContourEvent) -> str:
                 f"налоговой на {amount} сом больше, чем в управленке — "
                 f"внести оплаты точек в управленку или исправить налоговую "
                 f"({_e(e.party)})")
+    if e.kind in ("payparty", "payop"):
+        # party: «что в налоговой → покупатель по управленке».
+        from ..routers.tax import _clean_customer, _is_legal
+        tax_side, _, upr_party = (e.party or "").partition(" → ")
+        who = _clean_customer(upr_party)
+        need = f"«{who}»" if _is_legal(upr_party) else "«ККМ» (розница)"
+        what = (f"№{_e(e.doc_number)} от {e.doc_date:%d.%m.%y} на "
+                f"{_money(e.amount)}")
+        if e.kind == "payparty":
+            return (f"Исправить контрагента в оплате {what}: в налоговой "
+                    f"«{_e(_clean_customer(tax_side))}», а по управленке это "
+                    f"оплата «{_e(who)}» — должно быть {_e(need)}")
+        return (f"Провести как оплату покупателя поступление {what}: в "
+                f"налоговой оно проведено как {_e(tax_side)}, а по управленке "
+                f"это оплата покупателя «{_e(who)}» — покупатель {_e(need)}")
     if e.kind == "customer":
         n = _money(abs(float(e.qty or 0)))
         if e.side == "upr":
