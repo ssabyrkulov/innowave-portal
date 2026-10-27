@@ -36,6 +36,8 @@ MIN_PAYMENT = 50.0
 AMOUNT_TOLERANCE = 1.0
 # Оплату в две базы сажают в разные дни: выписку разносят пакетом.
 PAYMENT_DAYS = 3
+# QR вечера пятницы управленка вносит во вторник — это четыре дня.
+QR_DAYS = 5
 
 
 def has_nal_ledger(db: Session, org: str) -> bool:
@@ -152,7 +154,7 @@ def qr_missing(db: Session, org: str, since: date) -> list[dict]:
     Сверка баз видит только то, что внесено хотя бы в одну: три QR вечера
     26.10 на 7 182 сом не внесли ни управленка, ни налоговая — и задачи не
     было. Пара — оплата покупателя в управленке на ту же сумму (до сома) в
-    пределах трёх дней: точку за пятницу вносят в понедельник. Две-три QR
+    пределах пяти дней: QR вечера пятницы вносят во вторник. Две-три QR
     одной точки, внесённые одной оплатой, — тоже пара."""
     Q = models.QrPayment
     qr = [{"txn_id": t, "date": d, "paid_at": at, "amount": float(a or 0),
@@ -163,8 +165,8 @@ def qr_missing(db: Session, org: str, since: date) -> list[dict]:
           if (s or "").lower() == "оплата прошла" and float(a or 0) >= MIN_PAYMENT]
     if not qr:
         return []
-    upr = _receipts(db, org, "upr", since - timedelta(days=PAYMENT_DAYS))
-    return pair_payments(qr, upr)["only_upr"]
+    upr = _receipts(db, org, "upr", since - timedelta(days=QR_DAYS))
+    return pair_payments(qr, upr, QR_DAYS)["only_upr"]
 
 
 def _other_inflows(db: Session, org: str, since: date) -> list[dict]:
@@ -233,7 +235,8 @@ def _party_mismatch(db: Session, org: str, pairs: list) -> list:
             if (_customer_tokens(u["party"]), _customer_tokens(n["party"])) not in aliases]
 
 
-def pair_payments(upr: list[dict], nal: list[dict]) -> dict:
+def pair_payments(upr: list[dict], nal: list[dict],
+                  days_max: int = PAYMENT_DAYS) -> dict:
     """Пары оплат: сначала — та же дата и сумма, потом оставшимся — ±3 дня.
 
     Розничные точки платят одними и теми же суммами (874, 1 749, 3 499 —
@@ -264,14 +267,14 @@ def pair_payments(upr: list[dict], nal: list[dict]) -> dict:
             if abs(n["amount"] - u["amount"]) >= AMOUNT_TOLERANCE:
                 continue
             days = abs((n["date"] - u["date"]).days)
-            if days <= PAYMENT_DAYS and (best is None or days < best[0]):
+            if days <= days_max and (best is None or days < best[0]):
                 best = (days, i)
         if best is None:
             only_upr.append(u)
         else:
             free.remove(best[1])
             pairs.append((u, nal[best[1]]))
-    only_upr = _batches(only_upr, nal, free)
+    only_upr = _batches(only_upr, nal, free, days_max)
     return {"only_upr": only_upr, "only_nal": [nal[i] for i in sorted(free)],
             "pairs": pairs}
 
@@ -280,7 +283,8 @@ def pair_payments(upr: list[dict], nal: list[dict]) -> dict:
 BATCH_MAX = 4
 
 
-def _batches(only_upr: list[dict], nal: list[dict], free: set) -> list[dict]:
+def _batches(only_upr: list[dict], nal: list[dict], free: set,
+             days_max: int = PAYMENT_DAYS) -> list[dict]:
     """Розничные оплаты налоговая вправе проводить пачкой через ККМ: две
     оплаты точек 12.10 — Family Home 1 749 и Альбина 874 — в налоговой
     одной строкой «ККМ 2 624». Если сумма нескольких непарных оплат
@@ -297,7 +301,7 @@ def _batches(only_upr: list[dict], nal: list[dict], free: set) -> list[dict]:
         n = nal[i]
         if _is_legal(n.get("party")):
             continue
-        near = [u for u in left if abs((u["date"] - n["date"]).days) <= PAYMENT_DAYS
+        near = [u for u in left if abs((u["date"] - n["date"]).days) <= days_max
                 and u["amount"] < n["amount"] + AMOUNT_TOLERANCE
                 and not _is_legal(u.get("party"))]
         if len(near) < 2 or len(near) > 12:
