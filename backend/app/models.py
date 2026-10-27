@@ -1538,3 +1538,28 @@ class TaskBotSettings(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
+
+
+class QrPayment(Base):
+    """QR-оплата из отчёта банка (кабинет SHOP_OWNER, «Оплата прошла»).
+
+    Две базы 1С сверяются между собой, и оплату, которой нет ни в одной, не
+    видит никто: три QR вечера 26.10 на 7 182 сом не внесли ни управленка, ни
+    налоговая, и сверка баз молчала. Отчёт банка — то, что пришло на счёт на
+    самом деле, третий источник. Отчёты выгружают за период, периоды
+    пересекаются — строка одна на транзакцию банка.
+    """
+
+    __tablename__ = "qr_payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    txn_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    paid_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    status: Mapped[str | None] = mapped_column(String, nullable=True)
+    method: Mapped[str | None] = mapped_column(String, nullable=True)
+    point: Mapped[str | None] = mapped_column(String, nullable=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -146,6 +146,27 @@ def payment_diffs(db: Session, org: str, since: date) -> dict:
     return pair_payments(upr, nal)
 
 
+def qr_missing(db: Session, org: str, since: date) -> list[dict]:
+    """QR-оплаты из отчёта банка, которых нет в управленке.
+
+    Сверка баз видит только то, что внесено хотя бы в одну: три QR вечера
+    26.10 на 7 182 сом не внесли ни управленка, ни налоговая — и задачи не
+    было. Пара — оплата покупателя в управленке на ту же сумму (до сома) в
+    пределах трёх дней: точку за пятницу вносят в понедельник. Две-три QR
+    одной точки, внесённые одной оплатой, — тоже пара."""
+    Q = models.QrPayment
+    qr = [{"txn_id": t, "date": d, "paid_at": at, "amount": float(a or 0),
+           "party": c or ""}
+          for t, d, at, a, s, c in db.query(
+              Q.txn_id, Q.date, Q.paid_at, Q.amount, Q.status, Q.comment)
+          .filter(Q.organization == org, Q.date >= since).all()
+          if (s or "").lower() == "оплата прошла" and float(a or 0) >= MIN_PAYMENT]
+    if not qr:
+        return []
+    upr = _receipts(db, org, "upr", since - timedelta(days=PAYMENT_DAYS))
+    return pair_payments(qr, upr)["only_upr"]
+
+
 def _other_inflows(db: Session, org: str, since: date) -> list[dict]:
     """Поступления на кассу и банк налоговой, проведённые НЕ как оплата
     покупателя: возврат аванса поставщиком, прочий приход, займ. Переводы
@@ -432,6 +453,14 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                     "doc_date": n["date"], "doc_number": num,
                     "party": f"«{how}», счёт {n['account']}, {n['party'] or '—'} → {u['party']}",
                     "qty": 0, "amount": round(n["amount"], 2), "is_task": age_ok(n["date"]),
+                })
+            for q in qr_missing(db, org, since):
+                out.append({
+                    "key": f"{org}|qr|{q['txn_id']}",
+                    "organization": org, "kind": "qr", "side": "bank",
+                    "doc_date": q["date"], "doc_number": f"{q['paid_at']:%H:%M}",
+                    "party": q["party"] or "QR", "qty": 0,
+                    "amount": round(q["amount"], 2), "is_task": age_ok(q["date"]),
                 })
             legal, retail = _split_retail(res)
             out += _retail_months(org, retail, today)

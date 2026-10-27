@@ -23,6 +23,7 @@ const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
   payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
+  qr: 'QR-оплата',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
@@ -57,6 +58,28 @@ function Journal() {
   async function rescan() {
     setBusy(true)
     try {
+      await api.contourEventsScan()
+      await load()
+    } catch (e) {
+      alert('Ошибка: ' + e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // QR-отчёт банка — третий источник: оплата, которой нет ни в одной
+  // базе, видна только по нему.
+  const [qrNote, setQrNote] = useState('')
+  async function uploadQr(ev) {
+    const file = ev.target.files?.[0]
+    ev.target.value = ''
+    if (!file) return
+    setBusy(true)
+    try {
+      const r = await api.qrImport(file)
+      const period = [r.date_from, r.date_to].filter(Boolean).map(fdate).join(' – ')
+      setQrNote(`QR-отчёт ${FIRMS[r.organization] || r.organization}${period ? `, ${period}` : ''}: `
+        + `${r.paid} оплат на ${formatMoney(r.paid_amount, '')} сом, новых ${r.added}`)
       await api.contourEventsScan()
       await load()
     } catch (e) {
@@ -116,12 +139,18 @@ function Journal() {
         <button className="btn btn-sm" disabled={busy} onClick={rescan}>
           {busy ? 'Считаю…' : 'Пересчитать'}
         </button>
+        <label className="btn btn-sm btn-ghost"
+          title="Отчёт из кабинета банка (SHOP_OWNER): QR-оплаты, которых на следующий день нет в управленке, станут задачей">
+          ⬆️ QR-отчёт банка
+          <input type="file" accept=".xlsx" hidden disabled={busy} onChange={uploadQr} />
+        </label>
         {data && (
           <span className="muted">
             открытых: {data.open_total} · из них просрочено: {data.open_gaps}
           </span>
         )}
       </div>
+      {qrNote && <p className="muted">{qrNote}</p>}
       {!data ? <div className="muted">Загрузка…</div>
         : data.rows.length === 0 ? (
           <p className="muted">
@@ -180,7 +209,8 @@ function Journal() {
                     <td>
                       {KINDS[e.kind] || e.kind} {e.number || '—'}
                       <span className="muted"> · {['payparty', 'payop'].includes(e.kind)
-                        ? 'ошибка в налоговой' : e.side === 'upr'
+                        ? 'ошибка в налоговой' : e.kind === 'qr'
+                          ? 'есть в банке, нет в управленке' : e.side === 'upr'
                           ? 'только в управленке' : 'только в налоговой'}</span>
                       <div className="muted skipped-cols">от {fdate(e.date)}</div>
                     </td>
