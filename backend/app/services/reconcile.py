@@ -148,6 +148,56 @@ def payment_diffs(db: Session, org: str, since: date) -> dict:
     return pair_payments(upr, nal)
 
 
+# Расчёты с персоналом по оплате труда.
+SALARY_ACCOUNT = "3520"
+# Аванс 5-го числа закрывает начисление в конце месяца, а зарплату за месяц
+# платят в начале следующего. Выплата без начисления — задача, только если
+# начисления нет и через 35 дней.
+SALARY_GRACE_DAYS = 35
+
+
+def salary_gaps(db: Session, org: str, base: str, today: date) -> list[dict]:
+    """Сотрудники, которым выплачено больше, чем начислено.
+
+    Начисленное выплачивается, а обратное не проверял никто: месяцы,
+    начисленные символической суммой, неначисленный месяц, оплата услуг
+    «прочим расходом» на счёте зарплаты, доля зарплаты, которую фирма
+    платит, но не начисляет. Считаем по сотруднику: всё начисленное против
+    выплаченного (и удержанного) раньше чем 35 дней назад."""
+    E = models.LedgerEntry
+    q = base_scope(db.query(
+        E.date, E.debit_account, E.debit_sub, E.credit_account, E.credit_sub,
+        E.amount).filter(E.organization == org, or_(
+            E.debit_account == SALARY_ACCOUNT,
+            E.credit_account == SALARY_ACCOUNT)), base)
+    cutoff = today - timedelta(days=SALARY_GRACE_DAYS)
+    accrued: dict = defaultdict(float)
+    paid: dict = defaultdict(list)
+    for d, da, ds, ka, ks, amount in q.all():
+        a = float(amount or 0)
+        if da == ka:
+            continue
+        if ka == SALARY_ACCOUNT:
+            accrued[(ks or "").strip()] += a
+        if da == SALARY_ACCOUNT and d <= cutoff:
+            paid[(ds or "").strip()].append((d, a))
+    out = []
+    for who, rows in paid.items():
+        excess = sum(a for _, a in rows) - accrued.get(who, 0.0)
+        if excess < 1 or not who:
+            continue
+        # С какой выплаты начался перебор: идём от последних к первым, пока
+        # не наберём лишнее.
+        left, since = excess, None
+        for d, a in sorted(rows, reverse=True):
+            since = d
+            left -= a
+            if left <= 0:
+                break
+        out.append({"employee": who, "amount": round(excess, 2), "since": since})
+    return out
+
+
 def qr_missing(db: Session, org: str) -> list[dict]:
     """QR-оплаты из отчёта банка, которых нет в управленке.
 
@@ -493,6 +543,15 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                     "party": f"«{how}», счёт {n['account']}, {n['party'] or '—'} → {u['party']}",
                     "qty": 0, "amount": round(n["amount"], 2), "is_task": age_ok(n["date"]),
                 })
+            for base, side in (("upr", "upr"), ("nal", "tax")):
+                for g in salary_gaps(db, org, base, today):
+                    out.append({
+                        "key": f"{org}|salary|{side}|{g['employee']}",
+                        "organization": org, "kind": "salary", "side": side,
+                        "doc_date": g["since"], "doc_number": f"с {g['since']:%d.%m.%y}",
+                        "party": g["employee"], "qty": 0,
+                        "amount": g["amount"], "is_task": True,
+                    })
             for q in qr_missing(db, org):
                 out.append({
                     "key": f"{org}|qr|{q['txn_id']}",

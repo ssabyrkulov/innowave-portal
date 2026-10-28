@@ -56,7 +56,7 @@ KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": 
         "purchase": "Поступление", "payment": "Оплата", "stock": "Остаток",
         "customer": "Покупатель", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
         "payparty": "Контрагент оплаты", "payop": "Вид оплаты",
-        "qr": "QR-оплата"}
+        "qr": "QR-оплата", "salary": "Зарплата"}
 
 
 def local_now() -> datetime:
@@ -170,6 +170,9 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
     """Кто исправляет. Управленка — эталон (сверена с фактом): остаток,
     разошедшийся с ней, и документ, которого нет в налоговой, — задача
     налоговой. Документ или оплата, которых нет в управленке, — управленки."""
+    if e.kind == "salary":
+        # Выплата без начисления — ошибка той базы, где она найдена.
+        return cfg.upr_user_id if e.side == "upr" else cfg.nal_user_id
     if e.kind in ("stock", "payparty", "payop") or e.side == "upr":
         return cfg.nal_user_id
     return cfg.upr_user_id
@@ -227,6 +230,12 @@ def task_text(e: models.ContourEvent) -> str:
                 f"{_e(e.doc_number)} на {_money(e.amount)} сом{note}: деньги "
                 f"на счёт пришли (отчёт банка), а оплаты в управленке нет — "
                 f"найти точку и провести")
+    if e.kind == "salary":
+        where = "управленке" if e.side == "upr" else "налоговой"
+        return (f"Зарплата в {where}: «{_e(e.party)}» выплачено на "
+                f"{_money(e.amount)} сом больше, чем начислено (выплаты "
+                f"{_e(e.doc_number)}) — доначислить за месяцы выплат, а если "
+                f"это не зарплата (услуги, возврат), перенести со счёта 3520")
     if e.kind == "customer":
         n = _money(abs(float(e.qty or 0)))
         if e.side == "upr":
@@ -319,6 +328,8 @@ def _item_text(e: models.ContourEvent) -> str:
         upr = _clean_customer((e.party or "").partition(" → ")[2])
         return (f"№{_e(e.doc_number)} от {e.doc_date:%d.%m} на "
                 f"{_money(e.amount)} — по управленке «{_e(upr)}»")
+    if e.kind == "salary":
+        return f"{_e(e.party)} — {_money(e.amount)} сом ({_e(e.doc_number)})"
     if e.kind == "qr":
         note = "" if e.party in (None, "", "QR") else f" — «{_e(e.party)}»"
         return f"{e.doc_date:%d.%m} {_e(e.doc_number)} — {_money(e.amount)} сом{note}"
@@ -339,6 +350,11 @@ def group_head(e: models.ContourEvent, n: int) -> str:
                 f"поступления проведены как {_e(tax)}")
     if e.kind == "stock":
         return f"Остатки: найти, почему налоговая не сходится с управленкой ({n})"
+    if e.kind == "salary":
+        where = "управленке" if e.side == "upr" else "налоговой"
+        return (f"Зарплата в {where}: выплачено больше, чем начислено ({n}) — "
+                f"доначислить за месяцы выплат, а если это не зарплата, "
+                f"перенести со счёта 3520")
     if e.kind == "qr":
         return (f"Внести в управленку QR-оплаты ({n}): деньги на счёт пришли "
                 f"(отчёт банка), а оплат в управленке нет — найти точки и провести")

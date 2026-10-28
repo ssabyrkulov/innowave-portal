@@ -2068,13 +2068,13 @@ def scan_contour_events(db: Session) -> dict:
             # У остатка цифры меняются, а задача та же: товар не сошёлся.
             e.doc_number, e.qty = r["doc_number"], r["qty"]
             e.is_task = r["is_task"]
-            if r["kind"] in ("customer", "kkm", "kkmpay", "payparty", "payop", "qr"):
+            if r["kind"] in ("customer", "kkm", "kkmpay", "payparty", "payop", "qr", "salary"):
                 e.doc_date, e.party = r["doc_date"], r["party"]
-            if r["kind"] == "kkmpay":
+            if r["kind"] in ("kkmpay", "salary"):
                 e.amount = r["amount"]
 
     for key, e in existing.items():
-        if (extra is None and e.kind in ("stock", "payment", "kkmpay", "payparty", "payop", "qr")) or (
+        if (extra is None and e.kind in ("stock", "payment", "kkmpay", "payparty", "payop", "qr", "salary")) or (
                 customer_rows is None and e.kind in ("customer", "kkm")):
             # Сверка остатков упала — её события не трогаем, иначе все они
             # «закрылись бы сами» и в Telegram ушли бы ложные галочки.
