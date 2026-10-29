@@ -56,7 +56,7 @@ KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": 
         "purchase": "Поступление", "payment": "Оплата", "stock": "Остаток",
         "customer": "Покупатель", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
         "payparty": "Контрагент оплаты", "payop": "Вид оплаты",
-        "qr": "QR-оплата", "salary": "Зарплата"}
+        "qr": "QR-оплата", "salary": "Зарплата", "accountable": "Подотчёт"}
 
 
 def local_now() -> datetime:
@@ -170,9 +170,9 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
     """Кто исправляет. Управленка — эталон (сверена с фактом): остаток,
     разошедшийся с ней, и документ, которого нет в налоговой, — задача
     налоговой. Документ или оплата, которых нет в управленке, — управленки."""
-    if e.kind == "salary":
-        # Зарплату ведёт свой ответственный; не назначен — тот, кто ведёт
-        # базу, где нашлась выплата без начисления.
+    if e.kind in ("salary", "accountable"):
+        # Зарплату и подотчёт ведёт свой ответственный; не назначен — тот,
+        # кто ведёт базу, где нашлась ошибка.
         return cfg.salary_user_id or (
             cfg.upr_user_id if e.side == "upr" else cfg.nal_user_id)
     if e.kind in ("stock", "payparty", "payop") or e.side == "upr":
@@ -238,6 +238,11 @@ def task_text(e: models.ContourEvent) -> str:
                 f"{_money(e.amount)} сом больше, чем начислено (выплаты "
                 f"{_e(e.doc_number)}) — доначислить за месяцы выплат, а если "
                 f"это не зарплата (услуги, возврат), перенести со счёта 3520")
+    if e.kind == "accountable":
+        where = "управленке" if e.side == "upr" else "налоговой"
+        return (f"Подотчёт в {where}: «{_e(e.party)}» не отчитался за "
+                f"{_money(e.amount)} сом (выдано {_e(e.doc_number)}, дольше "
+                f"30 дней) — получить авансовый отчёт или вернуть деньги")
     if e.kind == "customer":
         n = _money(abs(float(e.qty or 0)))
         if e.side == "upr":
@@ -330,7 +335,7 @@ def _item_text(e: models.ContourEvent) -> str:
         upr = _clean_customer((e.party or "").partition(" → ")[2])
         return (f"№{_e(e.doc_number)} от {e.doc_date:%d.%m} на "
                 f"{_money(e.amount)} — по управленке «{_e(upr)}»")
-    if e.kind == "salary":
+    if e.kind in ("salary", "accountable"):
         return f"{_e(e.party)} — {_money(e.amount)} сом ({_e(e.doc_number)})"
     if e.kind == "qr":
         note = "" if e.party in (None, "", "QR") else f" — «{_e(e.party)}»"
@@ -357,6 +362,10 @@ def group_head(e: models.ContourEvent, n: int) -> str:
         return (f"Зарплата в {where}: выплачено больше, чем начислено ({n}) — "
                 f"доначислить за месяцы выплат, а если это не зарплата, "
                 f"перенести со счёта 3520")
+    if e.kind == "accountable":
+        where = "управленке" if e.side == "upr" else "налоговой"
+        return (f"Подотчёт в {where}: нет авансового отчёта дольше 30 дней "
+                f"({n}) — получить отчёт или вернуть деньги")
     if e.kind == "qr":
         return (f"Внести в управленку QR-оплаты ({n}): деньги на счёт пришли "
                 f"(отчёт банка), а оплат в управленке нет — найти точки и провести")
@@ -443,7 +452,8 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
     def title(uid):
         role = ("Налоговая" if uid == cfg.nal_user_id
                 else "Управленка" if uid == cfg.upr_user_id
-                else "Зарплата" if uid == cfg.salary_user_id else "Задачи")
+                else "Зарплата и подотчёт" if uid == cfg.salary_user_id
+                else "Задачи")
         u = users.get(uid)
         return f"<b>{role} — {_e(u.full_name) if u else 'не назначен'}</b>"
 

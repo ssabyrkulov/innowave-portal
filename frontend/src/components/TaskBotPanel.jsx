@@ -161,8 +161,8 @@ export default function TaskBotPanel() {
           <div className="tb-grid">
             <label>Ответственный за налоговую {userSelect('nal_user_id')}</label>
             <label>Ответственный за управленку {userSelect('upr_user_id')}</label>
-            <label title="Выплаты зарплаты без начисления. Не выбран — ответственный той базы, где найдено">
-              Ответственный за зарплату {userSelect('salary_user_id')}</label>
+            <label title="Выплаты зарплаты без начисления и подотчёт без отчёта. Не выбран — ответственный той базы, где найдено">
+              Ответственный за зарплату и подотчёт {userSelect('salary_user_id')}</label>
             <label>Эскалация руководителю {userSelect('owner_user_id')}</label>
             <label>Контроль с даты
               <input type="date" value={form.control_from || ''}

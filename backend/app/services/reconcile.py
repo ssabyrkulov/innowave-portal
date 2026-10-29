@@ -156,6 +156,51 @@ SALARY_ACCOUNT = "3520"
 SALARY_GRACE_DAYS = 35
 
 
+# Расчёты с подотчётными лицами.
+ACCOUNTABLE_ACCOUNT = "1520"
+# Срок авансового отчёта — 30 дней с выдачи.
+ACCOUNTABLE_DAYS = 30
+
+
+def accountable_overdue(db: Session, org: str, base: str, today: date) -> list[dict]:
+    """Подотчёт, по которому нет отчёта дольше 30 дней.
+
+    Выданное под отчёт (Дт 1520) закрывается авансовым отчётом или
+    возвратом (Кт 1520). Закрытие идёт в счёт самых ранних выдач; что из
+    выданного раньше чем 30 дней назад так и не закрыто — просрочено."""
+    E = models.LedgerEntry
+    q = base_scope(db.query(
+        E.date, E.debit_account, E.debit_sub, E.credit_account, E.credit_sub,
+        E.amount).filter(E.organization == org, or_(
+            E.debit_account == ACCOUNTABLE_ACCOUNT,
+            E.credit_account == ACCOUNTABLE_ACCOUNT)), base)
+    issued: dict = defaultdict(list)
+    closed: dict = defaultdict(float)
+    for d, da, ds, ka, ks, amount in q.all():
+        a = float(amount or 0)
+        if da == ka:
+            continue
+        if da == ACCOUNTABLE_ACCOUNT:
+            issued[(ds or "").strip()].append((d, a))
+        if ka == ACCOUNTABLE_ACCOUNT:
+            closed[(ks or "").strip()] += a
+    cutoff = today - timedelta(days=ACCOUNTABLE_DAYS)
+    out = []
+    for who, rows in issued.items():
+        left = closed.get(who, 0.0)
+        overdue, since = 0.0, None
+        for d, a in sorted(rows):
+            covered = min(a, left)
+            left -= covered
+            rest = a - covered
+            if rest > 0.005 and d <= cutoff:
+                overdue += rest
+                since = since or d
+        if overdue >= 1 and who:
+            out.append({"person": who, "amount": round(overdue, 2), "since": since})
+    return out
+
+
 def salary_gaps(db: Session, org: str, base: str, today: date) -> list[dict]:
     """Сотрудники, которым выплачено больше, чем начислено.
 
@@ -550,6 +595,14 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                         "organization": org, "kind": "salary", "side": side,
                         "doc_date": g["since"], "doc_number": f"с {g['since']:%d.%m.%y}",
                         "party": g["employee"], "qty": 0,
+                        "amount": g["amount"], "is_task": True,
+                    })
+                for g in accountable_overdue(db, org, base, today):
+                    out.append({
+                        "key": f"{org}|accountable|{side}|{g['person']}",
+                        "organization": org, "kind": "accountable", "side": side,
+                        "doc_date": g["since"], "doc_number": f"с {g['since']:%d.%m.%y}",
+                        "party": g["person"], "qty": 0,
                         "amount": g["amount"], "is_task": True,
                     })
             for q in qr_missing(db, org):
