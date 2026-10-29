@@ -44,7 +44,13 @@
       // повтор защищён отметкой в сессии, чтобы не уйти в бесконечный круг.
       setTimeout(function () {
         var root = document.getElementById('root')
-        if (root && root.childElementCount > 0) return
+        // Отрисовалось — снимаем отметку. Иначе вкладка, однажды вылеченная,
+        // после следующей выкладки оставалась белой: лечение шло раз за
+        // сессию, а вкладку портала днями не закрывают.
+        if (root && root.childElementCount > 0) {
+          sessionStorage.removeItem('iw_recovered')
+          return
+        }
         if (sessionStorage.getItem('iw_recovered')) return
         sessionStorage.setItem('iw_recovered', '1')
         var done = function () { location.reload() }
