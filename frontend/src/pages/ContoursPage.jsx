@@ -23,7 +23,7 @@ const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
   payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
-  qr: 'QR-оплата', salary: 'Зарплата',
+  qr: 'QR-оплата', salary: 'Зарплата', accountable: 'Подотчёт',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
@@ -196,13 +196,13 @@ function Journal() {
                   </td>
                   <td>{fdate(e.first_seen.slice(0, 10))}</td>
                   <td className="muted">{FIRMS[e.organization] || e.organization}</td>
-                  {['stock', 'customer', 'kkm', 'kkmpay', 'salary'].includes(e.kind) ? (
+                  {['stock', 'customer', 'kkm', 'kkmpay', 'salary', 'accountable'].includes(e.kind) ? (
                     // Остаток и покупатель — не документ: товар или юрлицо,
                     // у которых штуки в налоговой не равны управленке.
                     <td>
-                      {KINDS[e.kind]}{e.kind === 'salary' ? (e.side === 'upr' ? ' (управленка)' : ' (налоговая)') : ''} <span className="muted">· {e.number}</span>
+                      {KINDS[e.kind]}{['salary', 'accountable'].includes(e.kind) ? (e.side === 'upr' ? ' (управленка)' : ' (налоговая)') : ''} <span className="muted">· {e.number}</span>
                       <div className="muted skipped-cols">
-                        {['customer', 'salary'].includes(e.kind) ? 'с' : ['kkm', 'kkmpay'].includes(e.kind) ? 'срок' : 'замечено'} {fdate(e.date)}
+                        {['customer', 'salary', 'accountable'].includes(e.kind) ? 'с' : ['kkm', 'kkmpay'].includes(e.kind) ? 'срок' : 'замечено'} {fdate(e.date)}
                       </div>
                     </td>
                   ) : (
