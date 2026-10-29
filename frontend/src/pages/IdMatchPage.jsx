@@ -99,6 +99,12 @@ export default function IdMatchPage() {
       {data && !data.has_sd && (
         <div className="note-readonly sd-warn">
           Сторона SalesDoc здесь не подключена — сверка не проводилась.
+          {data.measure === 'qty' && data.has_1c && (
+            <> Списания и поступления SD портал берёт из журнала склада, а
+            SalesDoc отдаёт его только ночью (21:00–07:00): портал заберёт его
+            сам в эти часы, и метки «только в 1С» / «только в SalesDoc»
+            появятся утром.</>
+          )}
         </div>
       )}
       {data && data.has_1c === false && (
