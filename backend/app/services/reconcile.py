@@ -266,9 +266,30 @@ def qr_missing(db: Session, org: str) -> list[dict]:
     if not qr:
         return []
     first = min(q["date"] for q in qr)
-    upr = _receipts(db, org, "upr", first - timedelta(days=QR_DAYS))
+    since = first - timedelta(days=QR_DAYS)
+    upr = _receipts(db, org, "upr", since) + _cash_deposits(db, org, since)
     res = pair_payments(qr, upr, QR_DAYS)
     return _split_qr(res["only_upr"], res["only_nal"])
+
+
+def _cash_deposits(db: Session, org: str, since: date) -> list[dict]:
+    """Наличные из кассы, сданные на расчётный счёт (Дт банк, Кт касса).
+
+    Кассир сдаёт выручку на счёт через тот же QR, и в отчёте банка это
+    обычная QR-оплата: 29.07 в 18:08 — 1 071 сом, а это наличные точки,
+    принятые ПКО ещё 23.07 и сданные в банк РКО в 18:29. Оплаты покупателя
+    в управленке на эту сумму нет — и не должно быть."""
+    E = models.LedgerEntry
+    docs: dict[str, dict] = {}
+    for guid, doc, d, amount in base_scope(
+            db.query(E.doc_guid, E.doc, E.date, E.amount).filter(
+                E.organization == org, E.date >= since,
+                E.debit_account.like("12%"), E.credit_account.like("11%")),
+            "upr").all():
+        x = docs.setdefault(guid or f"{doc}|{d}", {
+            "doc": doc or "", "date": d, "party": "касса → банк", "amount": 0.0})
+        x["amount"] += float(amount or 0)
+    return [x for x in docs.values() if x["amount"] >= MIN_PAYMENT]
 
 
 def _split_qr(missing: list[dict], free: list[dict]) -> list[dict]:
