@@ -267,8 +267,36 @@ def qr_missing(db: Session, org: str) -> list[dict]:
         return []
     first = min(q["date"] for q in qr)
     upr = _receipts(db, org, "upr", first - timedelta(days=QR_DAYS))
-    res = pair_payments(qr, upr, QR_DAYS)
-    return _split_qr(res["only_upr"], res["only_nal"])
+    missing, free = _pair_qr(qr, upr)
+    missing = _batches(missing, upr, free, QR_DAYS)
+    return _split_qr(missing, [upr[i] for i in sorted(free)])
+
+
+def _pair_qr(qr: list[dict], upr: list[dict]) -> tuple[list[dict], set]:
+    """QR по порядку времени — к самой ранней свободной оплате той же суммы,
+    внесённой в день QR или позже, но не позже чем через QR_DAYS.
+
+    Сверка баз ищет пару сначала в тот же день — там это верно. А QR
+    банк зачисляет с задержкой: QR вечера пятницы 31.07 пришли в выписку
+    04.08, и каждая следующая оплата той же суммы съезжает на день-два. Пара
+    «в тот же день» цепляла QR 04.08 к оплате 04.08, и QR 31.07 оставался
+    без пары, хотя оплат в управленке ровно столько же, сколько QR."""
+    by_amount: dict = defaultdict(list)
+    for i, u in enumerate(upr):
+        by_amount[round(u["amount"])].append(i)
+    free = set(range(len(upr)))
+    missing = []
+    for q in sorted(qr, key=lambda x: (x["date"], x["paid_at"])):
+        a = round(q["amount"])
+        cand = [i for k in (a - 1, a, a + 1) for i in by_amount.get(k, ())
+                if i in free
+                and abs(upr[i]["amount"] - q["amount"]) < AMOUNT_TOLERANCE
+                and 0 <= (upr[i]["date"] - q["date"]).days <= QR_DAYS]
+        if cand:
+            free.discard(min(cand, key=lambda i: (upr[i]["date"], i)))
+        else:
+            missing.append(q)
+    return missing, free
 
 
 def _split_qr(missing: list[dict], free: list[dict]) -> list[dict]:
