@@ -1525,6 +1525,9 @@ class TaskBotSettings(Base):
     # Кто отвечает: за управленку, за налоговую, и кому эскалация.
     upr_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     nal_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # Зарплату ведёт свой человек: выплаты без начисления — ему, а не
+    # ответственному за базу. Пусто — ответственный той базы, где найдено.
+    salary_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     escalate_days: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     # Сколько дней документ может догонять вторую базу, прежде чем стать

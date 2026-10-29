@@ -171,8 +171,10 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
     разошедшийся с ней, и документ, которого нет в налоговой, — задача
     налоговой. Документ или оплата, которых нет в управленке, — управленки."""
     if e.kind == "salary":
-        # Выплата без начисления — ошибка той базы, где она найдена.
-        return cfg.upr_user_id if e.side == "upr" else cfg.nal_user_id
+        # Зарплату ведёт свой ответственный; не назначен — тот, кто ведёт
+        # базу, где нашлась выплата без начисления.
+        return cfg.salary_user_id or (
+            cfg.upr_user_id if e.side == "upr" else cfg.nal_user_id)
     if e.kind in ("stock", "payparty", "payop") or e.side == "upr":
         return cfg.nal_user_id
     return cfg.upr_user_id
@@ -440,7 +442,8 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
 
     def title(uid):
         role = ("Налоговая" if uid == cfg.nal_user_id
-                else "Управленка" if uid == cfg.upr_user_id else "Задачи")
+                else "Управленка" if uid == cfg.upr_user_id
+                else "Зарплата" if uid == cfg.salary_user_id else "Задачи")
         u = users.get(uid)
         return f"<b>{role} — {_e(u.full_name) if u else 'не назначен'}</b>"
 
