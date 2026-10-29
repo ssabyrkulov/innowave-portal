@@ -96,6 +96,24 @@ DOC_KINDS = ("orders", "payments")
 # она просит явно (force_heavy).
 HEAVY_EVERY = {"visits": 6 * 3600, "store_log": 6 * 3600}
 
+# Журнал склада SalesDoc отдаёт только ночью, с 20:00 до 07:00 (документация
+# API). Днём getStoreLog отвечает пустотой — и прогон раз в 6 часов, попавший
+# на день, считался выполненным: следующая попытка через 6 часов, снова днём.
+# Списаний и поступлений SD в портале не было, и «Сверка по ID» показывала
+# «сторона SD не подключена». Чей это пояс — Ташкента или Бишкека, —
+# документация не говорит, поэтому берём пересечение: 21:00–07:00 по
+# Бишкеку, 15:00–01:00 UTC. Пустой ночной ответ повторяем через час.
+STORE_LOG_UTC_HOURS = (15, 1)
+STORE_LOG_RETRY = 3600
+_store_log_empty_at = 0.0
+
+
+def store_log_open(now: datetime | None = None) -> bool:
+    """Отдаёт ли SalesDoc сейчас журнал склада."""
+    start, end = STORE_LOG_UTC_HOURS
+    hour = (now or datetime.utcnow()).hour
+    return hour >= start or hour < end
+
 # Как часто перевыгружать вид целиком, когда SalesDoc не отдаёт счётчик
 # записей. Тогда сверить количество не с чем, и единственная защита от
 # «документ появился, а мы о нём не знаем» — периодическая полная выгрузка.
@@ -1341,6 +1359,7 @@ def _sync_once(full: bool = False, kinds=None,
                force_heavy: bool = False) -> dict:
     """Один проход синхронизации. Вызывается только с уже взятым замком и
     отпускает его сам. kinds — ограничить набор видов (None — все)."""
+    global _store_log_empty_at
     started = time.time()
     result: dict = {"full": full}
     try:
@@ -1377,6 +1396,14 @@ def _sync_once(full: bool = False, kinds=None,
                     if waited < heavy:
                         result[kind] = {
                             "skipped": f"тяжёлый вид, обновляется раз в {heavy // 3600} ч"}
+                        continue
+                if kind == "store_log":
+                    if not store_log_open():
+                        result[kind] = {"skipped": "журнал склада SalesDoc отдаётся "
+                                                   "только ночью, 21:00–07:00"}
+                        continue
+                    if time.time() - _store_log_empty_at < STORE_LOG_RETRY:
+                        result[kind] = {"skipped": "журнал пришёл пустым — повтор через час"}
                         continue
                 # Своя частота у каждого вида (см. KIND_EVERY): справочники не
                 # трогаем каждую минуту — это и была главная причина тормозов.
@@ -1436,7 +1463,10 @@ def _sync_once(full: bool = False, kinds=None,
                     # ниже не увидит только что добавленные строки.
                     db.flush()
                     now = datetime.utcnow()
-                    if since is None:
+                    if kind == "store_log" and not n:
+                        # Пустой журнал — не выгрузка: не ждать 6 часов.
+                        _store_log_empty_at = time.time()
+                    elif since is None:
                         st.last_full_at = now
                     st.last_delta_at = now
                     st.rows = db.query(model).count()
