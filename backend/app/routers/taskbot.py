@@ -39,6 +39,7 @@ def _status(db: Session, cfg: models.TaskBotSettings, me: models.User) -> dict:
         "doc_orgs": sorted(reconcile.split_orgs(cfg.doc_orgs)),
         "upr_user_id": cfg.upr_user_id,
         "nal_user_id": cfg.nal_user_id,
+        "salary_user_id": cfg.salary_user_id,
         "owner_user_id": cfg.owner_user_id,
         "escalate_days": cfg.escalate_days,
         "grace_days": cfg.grace_days,
@@ -69,6 +70,7 @@ class SettingsIn(BaseModel):
     doc_orgs: list[str] | None = None
     upr_user_id: int | None = None
     nal_user_id: int | None = None
+    salary_user_id: int | None = None
     owner_user_id: int | None = None
     escalate_days: int | None = None
     grace_days: int | None = None

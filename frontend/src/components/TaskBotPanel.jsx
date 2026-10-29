@@ -65,6 +65,7 @@ export default function TaskBotPanel() {
       stock_orgs: form.stock_orgs,
       upr_user_id: form.upr_user_id || null,
       nal_user_id: form.nal_user_id || null,
+      salary_user_id: form.salary_user_id || null,
       owner_user_id: form.owner_user_id || null,
       escalate_days: Number(form.escalate_days),
       grace_days: Number(form.grace_days),
@@ -160,6 +161,8 @@ export default function TaskBotPanel() {
           <div className="tb-grid">
             <label>Ответственный за налоговую {userSelect('nal_user_id')}</label>
             <label>Ответственный за управленку {userSelect('upr_user_id')}</label>
+            <label title="Выплаты зарплаты без начисления. Не выбран — ответственный той базы, где найдено">
+              Ответственный за зарплату {userSelect('salary_user_id')}</label>
             <label>Эскалация руководителю {userSelect('owner_user_id')}</label>
             <label>Контроль с даты
               <input type="date" value={form.control_from || ''}
