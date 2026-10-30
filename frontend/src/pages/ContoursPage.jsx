@@ -23,7 +23,7 @@ const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
   payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
-  qr: 'QR-оплата', salary: 'Зарплата', accountable: 'Подотчёт',
+  qr: 'QR-оплата', salary: 'Зарплата', accountable: 'Подотчёт', osh: 'Склад Ош',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
@@ -210,7 +210,8 @@ function Journal() {
                       {KINDS[e.kind] || e.kind} {e.number || '—'}
                       <span className="muted"> · {['payparty', 'payop'].includes(e.kind)
                         ? 'ошибка в налоговой' : e.kind === 'qr'
-                          ? 'есть в банке, нет в управленке' : e.side === 'upr'
+                          ? 'есть в банке, нет в управленке' : e.kind === 'osh'
+                          ? `нет перемещения Ош → Бишкек под продажу Инновейва (${e.party || ''})` : e.side === 'upr'
                           ? 'только в управленке' : 'только в налоговой'}</span>
                       <div className="muted skipped-cols">от {fdate(e.date)}</div>
                     </td>
