@@ -439,6 +439,8 @@ def pair_payments(upr: list[dict], nal: list[dict],
 
 # Пачка ККМ: сколько оплат управленки может лечь в одну строку налоговой.
 BATCH_MAX = 4
+# Оплата сети одним платежом: на сколько её точек управленка может разнести.
+CHAIN_MAX = 8
 
 
 def _batches(only_upr: list[dict], nal: list[dict], free: set,
@@ -450,22 +452,30 @@ def _batches(only_upr: list[dict], nal: list[dict], free: set,
     сома на оплату), это пачка, а не два пропуска и одна лишняя."""
     from itertools import combinations
 
-    from ..routers.tax import _is_legal
+    from ..routers.tax import _customer_tokens, _is_legal
 
-    # Только розница: оплата юрлица — отдельной строкой, и случайно
-    # совпавшая сумма чужих мелких оплат не должна её прятать.
     left = list(only_upr)
     for i in sorted(free, key=lambda i: nal[i]["date"]):
         n = nal[i]
         if _is_legal(n.get("party")):
-            continue
-        near = [u for u in left if abs((u["date"] - n["date"]).days) <= days_max
-                and u["amount"] < n["amount"] + AMOUNT_TOLERANCE
-                and not _is_legal(u.get("party"))]
+            # Оплата юрлица в пачку собирается только из оплат его же точек:
+            # «Умай Групп ОсОО - Глобус» 85 108 в управленке разнесён на
+            # «Глобус 11», «Глобус 12», «Глобус 14», «Глобус 26». Случайно
+            # совпавшая сумма чужих мелких оплат юрлицо прятать не должна.
+            chain = _customer_tokens(n.get("party"))
+            near = [u for u in left if abs((u["date"] - n["date"]).days) <= days_max
+                    and u["amount"] < n["amount"] + AMOUNT_TOLERANCE
+                    and _customer_tokens(u.get("party")) & chain]
+            most = CHAIN_MAX
+        else:
+            near = [u for u in left if abs((u["date"] - n["date"]).days) <= days_max
+                    and u["amount"] < n["amount"] + AMOUNT_TOLERANCE
+                    and not _is_legal(u.get("party"))]
+            most = BATCH_MAX
         if len(near) < 2 or len(near) > 12:
             continue
         hit = None
-        for k in range(2, min(BATCH_MAX, len(near)) + 1):
+        for k in range(2, min(most, len(near)) + 1):
             for combo in combinations(near, k):
                 if abs(sum(u["amount"] for u in combo) - n["amount"]) < AMOUNT_TOLERANCE * k:
                     hit = combo
