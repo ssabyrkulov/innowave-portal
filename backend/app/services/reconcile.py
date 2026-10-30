@@ -299,6 +299,72 @@ def _pair_qr(qr: list[dict], upr: list[dict]) -> tuple[list[dict], set]:
     return missing, free
 
 
+# Склад Хайджин в Оше. «Глобус 14 Ош Нурзаман» покупает у Инновейва, а товар
+# везут со склада Хайджин в Оше. Инновейв продаёт со своего склада в Бишкеке,
+# поэтому под каждую такую продажу Хайджин перемещает те же штуки со склада
+# Ош на основной склад — иначе в Оше по 1С лежит товар, которого там уже нет.
+OSH_CUSTOMERS = ("нурзаман",)
+OSH_SELLER, OSH_KEEPER = "innowave", "hygiene"
+OSH_DAYS = 3
+
+
+def osh_transfers_missing(db: Session, since: date) -> list[dict]:
+    """Продажи Инновейва ошским магазинам без перемещения Хайджин Ош → Бишкек.
+
+    Пара — перемещение со склада Ош того же товара не дальше OSH_DAYS дней
+    от продажи, раньше или позже: штуки гасятся сначала ближайшим по дате.
+    Перемещение №8 от 01.09.2026 закрыло задним числом продажи за год одним
+    документом — поэтому сверяем с «Контроль с», а не за всё время.
+    Возвраты не учитываются: их возят обратно, а не в Ош."""
+    E = models.LedgerEntry
+
+    def lines(org, *filters):
+        q = db.query(E.date, E.doc, E.doc_guid, E.debit_account, E.debit_sub,
+                     E.debit_sub2, E.credit_account, E.credit_sub, E.credit_sub2,
+                     E.debit_qty, E.credit_qty, E.amount).filter(E.organization == org, *filters)
+        return base_scope(q, "upr").all()
+
+    sales: dict[str, dict] = {}
+    for (d, doc, guid, da, ds, d2, ca, cs, c2, dq, cq, amount) in lines(
+            OSH_SELLER, E.date >= since, E.doc.like("Реализация%")):
+        x = sales.setdefault(guid or doc, {"doc": doc or "", "date": d, "party": "",
+                                           "items": defaultdict(float), "amount": 0.0})
+        if da == "1410":
+            x["party"] = (ds or "").strip()
+            x["amount"] += float(amount or 0)
+        if ca == "1610" and cs:
+            x["items"][cs.strip()] += float(cq or 0)
+    sales = {k: x for k, x in sales.items()
+             if any(c in x["party"].lower() for c in OSH_CUSTOMERS)}
+    if not sales:
+        return []
+    pool: dict[str, list] = defaultdict(list)
+    for (d, doc, guid, da, ds, d2, ca, cs, c2, dq, cq, amount) in lines(
+            OSH_KEEPER, E.date >= since - timedelta(days=OSH_DAYS),
+            E.doc.like("Перемещение%"), E.debit_account == "1610"):
+        if "ош" in (c2 or "").lower().split() and "ош" not in (d2 or "").lower().split():
+            pool[_norm(ds)].append([d, float(dq or 0)])
+    out = []
+    for x in sorted(sales.values(), key=lambda x: (x["date"], x["doc"])):
+        left = {}
+        for item, qty in x["items"].items():
+            need = qty
+            for t in sorted(pool.get(_norm(item), []),
+                            key=lambda t: (abs((t[0] - x["date"]).days), t[0])):
+                if need <= 0.001:
+                    break
+                if abs((t[0] - x["date"]).days) > OSH_DAYS or t[1] <= 0:
+                    continue
+                take = min(need, t[1])
+                t[1] -= take
+                need -= take
+            if need > 0.001:
+                left[item] = need
+        if left:
+            out.append({**x, "items": left})
+    return out
+
+
 def _split_qr(missing: list[dict], free: list[dict]) -> list[dict]:
     """Один QR, разнесённый в управленке на несколько точек: QR 25.08 на
     16 300 — это «Маркет Таза шоп Араванская» 9 300 и «Тазалык дуйносу»
@@ -651,6 +717,18 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                     "party": q["party"] or "QR", "qty": 0,
                     "amount": round(q["amount"], 2), "is_task": age_ok(q["date"]),
                 })
+            if org == OSH_KEEPER:
+                for x in osh_transfers_missing(db, since):
+                    items = ", ".join(f"{_short_item(k)} ×{_fmt(v)}" for k, v in x["items"].items())
+                    num = _doc_number(x["doc"])
+                    out.append({
+                        "key": f"{org}|osh|{x['date'].isoformat()}|{num}",
+                        "organization": org, "kind": "osh", "side": "upr",
+                        "doc_date": x["date"], "doc_number": num,
+                        "party": f"{x['party']}: {items}",
+                        "qty": round(sum(x["items"].values()), 3),
+                        "amount": round(x["amount"], 2), "is_task": age_ok(x["date"]),
+                    })
             legal, retail = _split_retail(res)
             out += _retail_months(org, retail, today)
             for side, rows in (("upr", legal["upr"]), ("tax", legal["tax"])):
@@ -728,6 +806,12 @@ def _retail_months(org: str, retail: dict, today: date) -> list[dict]:
 
 def split_orgs(value: str | None) -> set[str]:
     return {o.strip() for o in (value or "").split(",") if o.strip() in models.ORGS}
+
+
+def _short_item(name: str) -> str:
+    """«Подгузники ONE размер XL» → «ONE XL»: в задаче важны модель и размер."""
+    return re.sub(r"^(детские\s+)?подгузники\s+|размер\s+", "", (name or "").strip(),
+                  flags=re.IGNORECASE).strip()
 
 
 def _fmt(x: float) -> str:
