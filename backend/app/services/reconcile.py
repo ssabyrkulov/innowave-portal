@@ -158,16 +158,16 @@ SALARY_GRACE_DAYS = 35
 
 # Расчёты с подотчётными лицами.
 ACCOUNTABLE_ACCOUNT = "1520"
-# Срок авансового отчёта — 30 дней с выдачи.
-ACCOUNTABLE_DAYS = 30
+# Срок авансового отчёта — 7 дней с выдачи (учётная политика, п. 11).
+ACCOUNTABLE_DAYS = 7
 
 
 def accountable_overdue(db: Session, org: str, base: str, today: date) -> list[dict]:
-    """Подотчёт, по которому нет отчёта дольше 30 дней.
+    """Подотчёт, по которому нет отчёта дольше ACCOUNTABLE_DAYS дней.
 
     Выданное под отчёт (Дт 1520) закрывается авансовым отчётом или
     возвратом (Кт 1520). Закрытие идёт в счёт самых ранних выдач; что из
-    выданного раньше чем 30 дней назад так и не закрыто — просрочено."""
+    выданного раньше срока так и не закрыто — просрочено."""
     E = models.LedgerEntry
     q = base_scope(db.query(
         E.date, E.debit_account, E.debit_sub, E.credit_account, E.credit_sub,
