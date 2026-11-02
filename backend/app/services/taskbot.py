@@ -84,6 +84,9 @@ def get_settings(db: Session) -> models.TaskBotSettings:
             stock_orgs="innowave",
             payment_orgs="innowave,hygiene",
             doc_orgs="innowave,hygiene",
+            # Зарплата и подотчёт — во всех фирмах: это срок внутри базы,
+            # налоговая для него не нужна.
+            staff_orgs=",".join(models.ORGS),
             escalate_days=2,
             grace_days=1,
             item_aliases=("Шампунь для волос с кондиционером = "

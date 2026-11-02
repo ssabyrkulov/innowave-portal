@@ -37,6 +37,7 @@ def _status(db: Session, cfg: models.TaskBotSettings, me: models.User) -> dict:
         "stock_orgs": sorted(reconcile.split_orgs(cfg.stock_orgs)),
         "payment_orgs": sorted(reconcile.split_orgs(cfg.payment_orgs)),
         "doc_orgs": sorted(reconcile.split_orgs(cfg.doc_orgs)),
+        "staff_orgs": sorted(reconcile.staff_orgs(cfg)),
         "upr_user_id": cfg.upr_user_id,
         "nal_user_id": cfg.nal_user_id,
         "salary_user_id": cfg.salary_user_id,
@@ -69,6 +70,7 @@ class SettingsIn(BaseModel):
     stock_orgs: list[str] | None = None
     payment_orgs: list[str] | None = None
     doc_orgs: list[str] | None = None
+    staff_orgs: list[str] | None = None
     upr_user_id: int | None = None
     nal_user_id: int | None = None
     salary_user_id: int | None = None
@@ -84,7 +86,7 @@ def save_settings(payload: SettingsIn, db: Session = Depends(get_db),
                   me: models.User = Depends(admin_only)):
     cfg = taskbot.get_settings(db)
     data = payload.model_dump(exclude_unset=True)
-    for key in ("stock_orgs", "payment_orgs", "doc_orgs"):
+    for key in ("stock_orgs", "payment_orgs", "doc_orgs", "staff_orgs"):
         if key in data:
             data[key] = ",".join(o for o in data[key] or [] if o in models.ORGS)
     for key in ("escalate_days", "grace_days"):

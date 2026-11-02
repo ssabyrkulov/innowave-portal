@@ -1522,6 +1522,11 @@ class TaskBotSettings(Base):
     stock_orgs: Mapped[str | None] = mapped_column(String, nullable=True)
     payment_orgs: Mapped[str | None] = mapped_column(String, nullable=True)
     doc_orgs: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Зарплата и подотчёт — не сверка двух баз, а срок внутри каждой: деньги
+    # выданы, отчёта нет; выплачено без начисления. Поэтому своя галочка,
+    # не завязанная на «Оплаты» и на налоговый журнал. Пусто (NULL) — все
+    # фирмы: так проверка включается и на уже развёрнутой базе.
+    staff_orgs: Mapped[str | None] = mapped_column(String, nullable=True)
     # Кто отвечает: за управленку, за налоговую, и кому эскалация.
     upr_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     nal_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
