@@ -252,10 +252,12 @@ def task_text(e: models.ContourEvent) -> str:
                 f"{_e(e.doc_number)}) — доначислить за месяцы выплат, а если "
                 f"это не зарплата (услуги, возврат), перенести со счёта 3520")
     if e.kind == "accountable":
+        from .reconcile import ACCOUNTABLE_DAYS
         where = "управленке" if e.side == "upr" else "налоговой"
         return (f"Подотчёт в {where}: «{_e(e.party)}» не отчитался за "
                 f"{_money(e.amount)} сом (выдано {_e(e.doc_number)}, дольше "
-                f"30 дней) — получить авансовый отчёт или вернуть деньги")
+                f"{ACCOUNTABLE_DAYS} дней) — получить авансовый отчёт или "
+                f"вернуть деньги, иначе удержать из ближайшей зарплаты")
     if e.kind == "customer":
         n = _money(abs(float(e.qty or 0)))
         if e.side == "upr":
@@ -379,9 +381,11 @@ def group_head(e: models.ContourEvent, n: int) -> str:
                 f"доначислить за месяцы выплат, а если это не зарплата, "
                 f"перенести со счёта 3520")
     if e.kind == "accountable":
+        from .reconcile import ACCOUNTABLE_DAYS
         where = "управленке" if e.side == "upr" else "налоговой"
-        return (f"Подотчёт в {where}: нет авансового отчёта дольше 30 дней "
-                f"({n}) — получить отчёт или вернуть деньги")
+        return (f"Подотчёт в {where}: нет авансового отчёта дольше "
+                f"{ACCOUNTABLE_DAYS} дней ({n}) — получить отчёт или вернуть "
+                f"деньги, иначе удержать из ближайшей зарплаты")
     if e.kind == "osh":
         return (f"Склад Ош: провести в управленке Хайджин перемещения со склада "
                 f"Ош на основной склад под продажи Инновейва ({n}) — товар везут "
