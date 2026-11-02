@@ -12,7 +12,10 @@ const CHECKS = [
   ['doc_orgs', 'Документы', 'реализации, возвраты, списания, поступления без пары во второй базе'],
   ['payment_orgs', 'Оплаты', 'оплата покупателя есть в одной базе и нет в другой'],
   ['stock_orgs', 'Остатки', 'штуки по товару в налоговой ≠ управленке'],
+  ['staff_orgs', 'Зарплата и подотчёт', 'подотчёт без авансового отчёта дольше 7 дней, выплата без начисления — в каждой базе отдельно'],
 ]
+// Эти проверки сравнивают две базы — без налогового журнала им не с чем.
+const NEEDS_NAL = new Set(['stock_orgs', 'payment_orgs'])
 const STATE = {
   open: ['🔴', ''],
   done: ['✅', 'tb-done'],
@@ -62,7 +65,7 @@ export default function TaskBotPanel() {
       enabled: form.enabled,
       control_from: form.control_from || null,
       doc_orgs: form.doc_orgs, payment_orgs: form.payment_orgs,
-      stock_orgs: form.stock_orgs,
+      stock_orgs: form.stock_orgs, staff_orgs: form.staff_orgs,
       upr_user_id: form.upr_user_id || null,
       nal_user_id: form.nal_user_id || null,
       salary_user_id: form.salary_user_id || null,
@@ -193,7 +196,7 @@ export default function TaskBotPanel() {
                     <td key={o}>
                       <input type="checkbox" checked={form[key].includes(o)}
                         onChange={() => toggleOrg(key, o)} />
-                      {key !== 'doc_orgs' && !cfg.nal_ledger[o] && (
+                      {NEEDS_NAL.has(key) && !cfg.nal_ledger[o] && (
                         <span className="muted" title="Налоговый журнал проводок этой фирмы ещё не загружен">
                           {' '}нет журнала
                         </span>

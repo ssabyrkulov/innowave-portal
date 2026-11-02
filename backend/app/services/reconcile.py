@@ -46,6 +46,14 @@ def has_nal_ledger(db: Session, org: str) -> bool:
                     models.LedgerEntry.base == "nal").first()) is not None
 
 
+def has_upr_ledger(db: Session, org: str) -> bool:
+    """Управленка без метки base — строки, загруженные до налогового журнала."""
+    return (db.query(models.LedgerEntry.id)
+            .filter(models.LedgerEntry.organization == org,
+                    or_(models.LedgerEntry.base == "upr",
+                        models.LedgerEntry.base.is_(None))).first()) is not None
+
+
 def _norm(name: str) -> str:
     s = (name or "").strip().lower().replace("ё", "е")
     s = re.sub(r"\s+", " ", s)
@@ -631,8 +639,10 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                  today: date, pending: list[dict] | None = None) -> list[dict]:
     """Расхождения остатков и оплат — в виде событий журнала контуров.
 
-    Считаются только для фирм, где загружен налоговый журнал: без него
-    налоговой стороны нет вовсе, и «всё расходится» было бы враньём.
+    Остатки и оплаты считаются только для фирм, где загружен налоговый
+    журнал: без него налоговой стороны нет вовсе, и «всё расходится» было бы
+    враньём. Зарплата и подотчёт — своя галочка и своя логика (срок внутри
+    каждой базы, см. _staff_events), налоговая им не нужна.
 
     pending — документы без пары во второй базе, по которым уже есть задача
     («внести реализацию №134»). Разница остатка, которую они объясняют,
@@ -645,6 +655,8 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
     pay_orgs = split_orgs(cfg.payment_orgs)
     out: list[dict] = []
     for org in models.ORGS:
+        if org in staff_orgs(cfg):
+            out += _staff_events(db, org, today)
         if org not in stock_orgs and org not in pay_orgs:
             continue
         if not has_nal_ledger(db, org):
@@ -692,23 +704,6 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                     "party": f"«{how}», счёт {n['account']}, {n['party'] or '—'} → {u['party']}",
                     "qty": 0, "amount": round(n["amount"], 2), "is_task": age_ok(n["date"]),
                 })
-            for base, side in (("upr", "upr"), ("nal", "tax")):
-                for g in salary_gaps(db, org, base, today):
-                    out.append({
-                        "key": f"{org}|salary|{side}|{g['employee']}",
-                        "organization": org, "kind": "salary", "side": side,
-                        "doc_date": g["since"], "doc_number": f"с {g['since']:%d.%m.%y}",
-                        "party": g["employee"], "qty": 0,
-                        "amount": g["amount"], "is_task": True,
-                    })
-                for g in accountable_overdue(db, org, base, today):
-                    out.append({
-                        "key": f"{org}|accountable|{side}|{g['person']}",
-                        "organization": org, "kind": "accountable", "side": side,
-                        "doc_date": g["since"], "doc_number": f"с {g['since']:%d.%m.%y}",
-                        "party": g["person"], "qty": 0,
-                        "amount": g["amount"], "is_task": True,
-                    })
             for q in qr_missing(db, org):
                 out.append({
                     "key": f"{org}|qr|{q['txn_id']}",
@@ -747,6 +742,45 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                         "amount": round(r["amount"], 2),
                         "is_task": age >= (cfg.grace_days or 0),
                     })
+    return out
+
+
+def staff_orgs(cfg: "models.TaskBotSettings") -> set[str]:
+    """Фирмы, где проверяются зарплата и подотчёт. Пусто (NULL) — все: так
+    проверка работает и там, где настройку ещё ни разу не сохраняли."""
+    if cfg.staff_orgs is None:
+        return set(models.ORGS)
+    return split_orgs(cfg.staff_orgs)
+
+
+def _staff_events(db: Session, org: str, today: date) -> list[dict]:
+    """Зарплата и подотчёт — сроки внутри каждой базы, а не сверка двух.
+
+    Раньше они считались внутри «Оплат» и только при загруженном налоговом
+    журнале: у Blue Carbon оплаты не сверяются (налоговая почти пустая), и
+    подотчёт там не проверялся вовсе. Теперь каждая база проверяется сама по
+    себе — управленка, когда есть управленка, налоговая — когда налоговая."""
+    out: list[dict] = []
+    for base, side, present in (("upr", "upr", has_upr_ledger),
+                                ("nal", "tax", has_nal_ledger)):
+        if not present(db, org):
+            continue
+        for g in salary_gaps(db, org, base, today):
+            out.append({
+                "key": f"{org}|salary|{side}|{g['employee']}",
+                "organization": org, "kind": "salary", "side": side,
+                "doc_date": g["since"], "doc_number": f"с {g['since']:%d.%m.%y}",
+                "party": g["employee"], "qty": 0,
+                "amount": g["amount"], "is_task": True,
+            })
+        for g in accountable_overdue(db, org, base, today):
+            out.append({
+                "key": f"{org}|accountable|{side}|{g['person']}",
+                "organization": org, "kind": "accountable", "side": side,
+                "doc_date": g["since"], "doc_number": f"с {g['since']:%d.%m.%y}",
+                "party": g["person"], "qty": 0,
+                "amount": g["amount"], "is_task": True,
+            })
     return out
 
 
