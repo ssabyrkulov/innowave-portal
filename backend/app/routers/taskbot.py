@@ -46,6 +46,7 @@ def _status(db: Session, cfg: models.TaskBotSettings, me: models.User) -> dict:
         "escalate_days": cfg.escalate_days,
         "grace_days": cfg.grace_days,
         "item_aliases": cfg.item_aliases or "",
+        "party_aliases": reconcile.party_aliases_text(cfg),
         "last_scan_at": cfg.last_scan_at.isoformat() if cfg.last_scan_at else None,
         "nal_ledger": {o: reconcile.has_nal_ledger(db, o) for o in models.ORGS},
         "my_link": link,
@@ -79,6 +80,7 @@ class SettingsIn(BaseModel):
     escalate_days: int | None = None
     grace_days: int | None = None
     item_aliases: str | None = None
+    party_aliases: str | None = None
 
 
 @router.put("/taskbot/settings")
@@ -92,6 +94,8 @@ def save_settings(payload: SettingsIn, db: Session = Depends(get_db),
     for key in ("escalate_days", "grace_days"):
         if key in data and (data[key] is None or data[key] < 0):
             data.pop(key)
+    if "party_aliases" in data:
+        data["party_aliases"] = (data["party_aliases"] or "").strip()
     for key, value in data.items():
         setattr(cfg, key, value)
     db.commit()

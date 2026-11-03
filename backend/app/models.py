@@ -1545,6 +1545,10 @@ class TaskBotSettings(Base):
     # Соответствие названий товара в налоговой и управленке, по строке
     # «налоговое = управленческое».
     item_aliases: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Один покупатель — разные контрагенты в базах, по строке «в налоговой =
+    # в управленке»: Байго в налоговой работает через ИП. NULL — связки по
+    # умолчанию (reconcile.DEFAULT_PARTY_ALIASES), пустая строка — никаких.
+    party_aliases: Mapped[str | None] = mapped_column(String, nullable=True)
     last_digest_day: Mapped[date | None] = mapped_column(Date, nullable=True)
     last_scan_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(

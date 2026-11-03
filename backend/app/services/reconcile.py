@@ -75,6 +75,34 @@ def parse_aliases(text: str | None) -> dict[str, str]:
     return out
 
 
+# Связки, которые налоговая не может вывести сама: на ИП ещё нет реализаций
+# со ссылкой на номер управленки, а оплаты уже идут (авансы Байго от ИП
+# Мендалы уулу, 02.11.2026). Атабекова — на случай, когда реестр налоговых
+# реализаций не загружен.
+DEFAULT_PARTY_ALIASES = ("ИП Мендалы уулу = Байго Трейд\n"
+                         "ИП Атабекова = Байго Трейд")
+
+
+def party_aliases_text(cfg) -> str:
+    return DEFAULT_PARTY_ALIASES if cfg.party_aliases is None else cfg.party_aliases
+
+
+def parse_party_aliases(text: str | None) -> list[tuple[frozenset, frozenset]]:
+    """«в налоговой = в управленке» по строке → пары слов имён. Сравнение —
+    по словам без кода карточки и формы, поэтому «Байго Трейд» подходит к
+    «БАЙГО ТРЕЙД (j8_530) ХАЙДЖИН»."""
+    from ..routers.tax import _customer_tokens
+
+    out = []
+    for line in (text or "").splitlines():
+        if "=" not in line:
+            continue
+        a, b = (_customer_tokens(x) for x in line.split("=", 1))
+        if a and b:
+            out.append((a, b))
+    return out
+
+
 def stock_by_item(db: Session, org: str, base: str,
                   aliases: dict[str, str] | None = None) -> dict[str, dict]:
     """Остаток в штуках по каждому товару одного контура."""
@@ -449,12 +477,15 @@ def _wrong_operation(only_upr: list[dict], other: list[dict]) -> tuple[list, lis
     return left, wrong
 
 
-def _party_mismatch(db: Session, org: str, pairs: list) -> list:
+def _party_mismatch(db: Session, org: str, pairs: list,
+                    manual: list | None = None) -> list:
     """Пары, где сумма и дата сошлись, а покупатель — нет: в налоговой оплата
     записана на юрлицо (Булак Маркет, ИП Маманов), а в управленке это оплата
     точки или другого покупателя. Розница в налоговой — «ККМ», не юрлицо.
     Связки, которые налоговая сама держит по реализациям (Байго → ИП
-    Атабекова), ошибкой не считаются."""
+    Атабекова), ошибкой не считаются. Те, что налоговая связать не может
+    (на ИП ещё нет реализаций, только авансы), — ручной список manual из
+    настроек бота: пары слов (налоговая, управленка)."""
     from ..routers.tax import _customer_tokens, _is_legal, _party_aliases
 
     odd = [(u, n) for u, n in pairs
@@ -463,8 +494,12 @@ def _party_mismatch(db: Session, org: str, pairs: list) -> list:
     if not odd:
         return []
     aliases = _party_aliases(db, org)
-    return [(u, n) for u, n in odd
-            if (_customer_tokens(u["party"]), _customer_tokens(n["party"])) not in aliases]
+
+    def linked(u, n):
+        ut, nt = _customer_tokens(u["party"]), _customer_tokens(n["party"])
+        return (ut, nt) in aliases or any(
+            (a <= nt and b <= ut) or (a <= ut and b <= nt) for a, b in manual or [])
+    return [(u, n) for u, n in odd if not linked(u, n)]
 
 
 def pair_payments(upr: list[dict], nal: list[dict],
@@ -683,7 +718,8 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
         if org in pay_orgs:
             res = payment_diffs(db, org, since)
             age_ok = lambda d: (today - d).days >= (cfg.grace_days or 0)
-            for u, n in _party_mismatch(db, org, res["pairs"]):
+            manual = parse_party_aliases(party_aliases_text(cfg))
+            for u, n in _party_mismatch(db, org, res["pairs"], manual):
                 num = _doc_number(n["doc"])
                 out.append({
                     "key": f"{org}|payparty|{n['date'].isoformat()}|{num}|{n['amount']:.2f}",
