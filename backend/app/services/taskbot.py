@@ -9,7 +9,10 @@
 - галочку ставит следующая выгрузка: расхождение ушло — строка в списке
   зачёркивается, сообщение о задаче переписывается на «закрыто». Кнопок
   нет: отмечать руками нечего, выгрузка знает лучше;
-- в 18:00 — сводка, и задачи старше срока эскалации уходят руководителю.
+- рабочий день бота — с 8:30 до 18:30 по Бишкеку: новые задачи вечером и
+  ночью не будят группу, а копятся и приходят в 8:30 вместе с новым
+  списком дня; в 18:30 — сводка, и задачи старше срока эскалации уходят
+  руководителю.
 
 Бот отдельный — «Задачи бухгалтерии», токен в переменной окружения
 TASKBOT_TOKEN. Бот согласований платежей (TELEGRAM_BOT_TOKEN) его не
@@ -36,7 +39,11 @@ from ..config import settings
 
 # Бишкек: UTC+6 круглый год. День задач и время сводки — местные.
 TZ_SHIFT = timedelta(hours=6)
-DIGEST_HOUR = 18
+# Рабочий день бота (местное время, минуты от полуночи): с 8:30 приходят
+# новые задачи и заводится список дня, в 18:30 — сводка. Задачи, найденные
+# вечером и ночью (выгрузки идут круглые сутки), ждут утра.
+WORK_START = 8 * 60 + 30
+DIGEST_AT = 18 * 60 + 30
 # Сколько сообщений о новых задачах слать за один пересчёт. Однотипные
 # задачи идут одним сообщением (28 оплат «Булак Маркет» — одно), а что не
 # влезло — придёт следующим пересчётом: ни одна задача не теряется.
@@ -66,6 +73,15 @@ def local_now() -> datetime:
 
 def local_today() -> date:
     return local_now().date()
+
+
+def _minute(now: datetime) -> int:
+    return now.hour * 60 + now.minute
+
+
+def work_hours(now: datetime | None = None) -> bool:
+    """Можно ли сейчас присылать новые задачи: с 8:30 до сводки в 18:30."""
+    return WORK_START <= _minute(now or local_now()) < DIGEST_AT
 
 
 def _local(dt: datetime | None) -> datetime | None:
@@ -547,8 +563,13 @@ def refresh_list(db: Session, cfg: models.TaskBotSettings, force_new: bool = Fal
     """Переписать закреплённый список; с новым днём — завести новый."""
     if not _ready(cfg):
         return
+    now = local_now()
+    today = now.date()
+    if cfg.list_day != today and _minute(now) < WORK_START:
+        # Новый день начинается в 8:30: до этого вчерашний список не трогаем,
+        # а новый не заводим — ночная выгрузка не должна будить группу.
+        return
     text = render_list(db, cfg)
-    today = local_today()
     if cfg.list_message_id and cfg.list_day == today and not force_new:
         if text == cfg.list_text:
             return
@@ -583,12 +604,13 @@ def sync(db: Session) -> dict:
              .filter(models.ContourEvent.is_task.is_(True)).all())
 
     sent = closed = 0
-    # Новая — ещё не отправленная задача. Отозванная, которая снова стала
-    # задачей, — тоже. Нулевой номер ставила прежняя версия задачам «только в
-    # списке» — теперь и они уходят сообщением.
-    fresh = [e for e in tasks if is_open(e)
-             and (not e.tg_message_id or e.tg_closed)]
-    fresh.sort(key=lambda e: e.first_seen or datetime.min)
+    fresh = _unsent(tasks)
+    # Вечером и ночью новые задачи не шлём: они ждут 8:30 (periodic отправит
+    # их первым же кругом рабочего дня). Закрытые отмечаем в любое время —
+    # правка сообщения группу не будит.
+    held = 0 if work_hours() else len(fresh)
+    if held:
+        fresh = []
     groups: dict = {}
     for e in fresh:
         groups.setdefault(group_key(e), []).append(e)
@@ -656,19 +678,41 @@ def sync(db: Session) -> dict:
     refresh_list(db, cfg)
     db.commit()
     return {"sent": sent, "closed": closed, "withdrawn": withdrawn,
-            "pending": pending, "ready": True}
+            "pending": pending, "held": held, "ready": True}
+
+
+def _unsent(tasks: list) -> list:
+    """Новые — ещё не отправленные задачи. Отозванная, которая снова стала
+    задачей, — тоже. Нулевой номер ставила прежняя версия задачам «только в
+    списке» — теперь и они уходят сообщением."""
+    fresh = [e for e in tasks if is_open(e)
+             and (not e.tg_message_id or e.tg_closed)]
+    fresh.sort(key=lambda e: e.first_seen or datetime.min)
+    return fresh
 
 
 def periodic(db: Session) -> None:
-    """Раз в несколько минут: новый день — новый список; в 18:00 — сводка."""
+    """Раз в несколько минут: в 8:30 — новый список дня и задачи, накопленные
+    за вечер и ночь; в 18:30 — сводка."""
     cfg = get_settings(db)
     if not _ready(cfg):
         db.commit()
         return
     now = local_now()
-    if cfg.list_day != now.date():
+    minute = _minute(now)
+    if cfg.list_day != now.date() and minute >= WORK_START:
         refresh_list(db, cfg, force_new=True)
-    if now.hour >= DIGEST_HOUR and cfg.last_digest_day != now.date():
+    # Задачи, отложенные на утро, — первым же кругом рабочего дня, не дожидаясь
+    # следующей выгрузки. Пересчёт по кнопке держит замок — тогда отправит он.
+    if work_hours(now):
+        tasks = (db.query(models.ContourEvent)
+                 .filter(models.ContourEvent.is_task.is_(True)).all())
+        if _unsent(tasks) and scan_lock.acquire(blocking=False):
+            try:
+                sync(db)
+            finally:
+                scan_lock.release()
+    if minute >= DIGEST_AT and cfg.last_digest_day != now.date():
         digest(db, cfg)
         cfg.last_digest_day = now.date()
     db.commit()
