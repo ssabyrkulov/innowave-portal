@@ -74,6 +74,7 @@ export default function TaskBotPanel() {
       escalate_days: Number(form.escalate_days),
       grace_days: Number(form.grace_days),
       item_aliases: form.item_aliases,
+      party_aliases: form.party_aliases,
     })
     setCfg(c); setForm(c)
   })
@@ -215,6 +216,13 @@ export default function TaskBotPanel() {
             Один товар — разные названия, по строке «налоговое = управленческое»
             <textarea rows={3} value={form.item_aliases}
               onChange={(e) => setForm({ ...form, item_aliases: e.target.value })} />
+          </label>
+          <label className="tb-aliases">
+            Один покупатель — разные контрагенты, по строке «в налоговой = в
+            управленке» (Байго в налоговой платит через ИП): такая оплата не
+            задача «исправить контрагента»
+            <textarea rows={2} value={form.party_aliases}
+              onChange={(e) => setForm({ ...form, party_aliases: e.target.value })} />
           </label>
           <label className="tb-enabled">
             <input type="checkbox" checked={form.enabled}
