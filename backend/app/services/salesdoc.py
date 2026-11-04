@@ -591,6 +591,16 @@ def fetch_client_store_orgs(store_org: dict, date_from, date_to, use_cache: bool
     return _cached_result(key, CACHE_TTL, build)
 
 
+def _coord(v) -> float | None:
+    """Координата точки или None. Ноль — не место на карте, а «агент не
+    поставил геометку»: такие точки иначе все сошлись бы в одну у экватора."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f and abs(f) <= 180 else None
+
+
 def fetch_clients(use_cache: bool = False) -> list[dict]:
     """Справочник клиентов SalesDoc — вся вселенная точек, в т.ч. с нулевым
     балансом (их нет в getBalance).
@@ -607,6 +617,13 @@ def fetch_clients(use_cache: bool = False) -> list[dict]:
             # SalesDoc отдаёт признак строкой "Y"/"N", а bool("N") — истина:
             # закрытые точки годами считались рабочими.
             "active": r.get("active") not in ("N", "n", False, 0, "0"),
+            # Карточка точки: адрес, ориентир и GPS — по ним ищутся дубли.
+            "address": (r.get("address") or "").strip() or None,
+            "waymark": (r.get("waymark") or "").strip() or None,
+            "lat": _coord(r.get("lat")),
+            "lon": _coord(r.get("lon")),
+            "inn": (str(r.get("inn") or "").strip() or None),
+            "created": (str(r.get("createdAt") or "").strip() or None),
             "agents": [
                 {"sd_id": str(a.get("id") or "").lower(),
                  "code_1C": a.get("code"),

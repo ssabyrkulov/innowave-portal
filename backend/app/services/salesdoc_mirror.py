@@ -512,6 +512,12 @@ def sync_clients(db: Session, updated_since: str | None = None) -> int:
             # клиентов SalesDoc, поэтому строка про такую точку выглядит как
             # выдумка портала.
             "active": bool(c.get("active", True)),
+            "address": c.get("address"),
+            "waymark": c.get("waymark"),
+            "lat": c.get("lat"),
+            "lon": c.get("lon"),
+            "inn": c.get("inn"),
+            "sd_created": c.get("created"),
         })
         for a in c.get("agents") or []:
             want.add((sid, a["sd_id"],

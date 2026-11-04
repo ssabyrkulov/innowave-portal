@@ -358,6 +358,7 @@ export default function SalesDocPage() {
       <ShipmentsComparePanel />
 
       <VisitDebtPanel />
+      <ClientDupsPanel />
 
       <WhyPanel />
 
@@ -4521,6 +4522,148 @@ function CompareCard({ title, our, sd, diff, note }) {
         <div className={cls(diff)}><span>Разница</span><b>{money(diff)}</b></div>
       </div>
       {note && <div className="muted sd-card-note">{note}</div>}
+    </div>
+  )
+}
+
+
+const DUP_KIND = {
+  'дубль': { label: 'дубль', cls: 'sc-bad', hint: 'одно имя, одно место — объединить' },
+  'нет координат': { label: 'нет метки', cls: 'sc-diff', hint: 'одно имя, у кого-то нет GPS — проверить' },
+  'одно место': { label: 'одно место', cls: 'muted', hint: 'разные имена в одной точке — переименование?' },
+}
+
+function dupsCsv(groups) {
+  const head = ['Группа', 'Вид', 'Оставить', 'SD код', 'Код 1С', 'Название', 'Адрес',
+    'Ориентир', 'Широта', 'Долгота', 'Разброс, м', 'Заведена', 'Активна', 'Заказов',
+    'Отгружено', 'Последний заказ', 'Долг', 'Агенты']
+  const q = (v) => {
+    const t = v == null ? '' : String(v)
+    return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t
+  }
+  const lines = [head.join(';')]
+  groups.forEach((g, i) => g.cards.forEach((c) => lines.push([
+    i + 1, g.kind, c.keep ? 'да' : '', c.sd_id, c.code_1c, c.name, c.address, c.waymark,
+    c.lat, c.lon, g.spread_m, c.created, c.active ? 'да' : 'нет', c.orders,
+    String(c.shipped).replace('.', ','), c.last_order, String(c.debt).replace('.', ','),
+    c.agents.join(', '),
+  ].map(q).join(';'))))
+  // BOM — чтобы Excel открыл кириллицу без «кракозябр».
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `дубли_точек_${toISODate(new Date())}.csv`
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+function ClientDupsPanel() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [kind, setKind] = useState('дубль')
+
+  function load() {
+    setLoading(true); setError(null)
+    api.salesdocClientDups()
+      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false))
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && data === null) load() }
+
+  const shown = data ? data.groups.filter((g) => !kind || g.kind === kind) : []
+
+  return (
+    <div className="chart-card store-map">
+      <button className="btn btn-ghost store-map-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} 📍 Дубли точек
+      </button>
+      {open && (
+        <div className="store-map-body">
+          {error && <div className="error">{error}</div>}
+          {loading && <div className="muted">Загрузка…</div>}
+          {data && data.with_geo === 0 && (
+            <div className="note-readonly sd-warn">
+              Координат точек ещё нет в зеркале — они приходят со справочником
+              клиентов при следующей синхронизации (или по кнопке «↻ Обновить»).
+              До этого видны только группы «нет метки».
+            </div>
+          )}
+          {data && (
+            <>
+              <p className="muted">
+                Точек в SalesDoc: <b>{data.clients}</b>, с GPS-меткой: <b>{data.with_geo}</b>.
+                Дубль — одно имя (без кода и слов «магазин», «маркет»…) и метки
+                не дальше {data.dup_radius_m} м. Строка с ✔ — карточка, которую
+                стоит оставить: у неё больше заказов.
+              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '8px 0' }}>
+                {Object.entries(DUP_KIND).map(([k, v]) => (
+                  <button key={k}
+                    className={`btn ${kind === k ? 'btn-primary' : 'btn-ghost'}`}
+                    title={v.hint} onClick={() => setKind(k)}>
+                    {v.label}: {data.counts[k] || 0}
+                  </button>
+                ))}
+                <button className={`btn ${kind === '' ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => setKind('')}>все</button>
+                <button className="btn btn-ghost" disabled={!shown.length}
+                  onClick={() => dupsCsv(shown)}>⬇ Excel (CSV)</button>
+              </div>
+              {!shown.length && <div className="muted">Таких групп нет.</div>}
+              {shown.length > 0 && (
+                <div className="table-wrap rc-table sc-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>#</th><th>Точка</th><th>Код</th><th>Адрес / ориентир</th>
+                        <th className="num">Заказов</th><th className="num">Отгружено</th>
+                        <th>Посл. заказ</th><th className="num">Долг</th><th>Агенты</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shown.map((g, gi) => g.cards.map((c, ci) => (
+                        <tr key={`${gi}-${c.sd_id}`} style={ci === 0 && gi > 0 ? { borderTop: '2px solid var(--border-strong)' } : undefined}>
+                          {ci === 0 && (
+                            <td rowSpan={g.cards.length}>
+                              {gi + 1}
+                              <div className={DUP_KIND[g.kind].cls}>{DUP_KIND[g.kind].label}</div>
+                              {g.spread_m != null && <div className="muted">{g.spread_m} м</div>}
+                            </td>
+                          )}
+                          <td>
+                            {c.keep && <b title="оставить">✔ </b>}{c.name}
+                            {!c.active && <span className="muted"> (неактивна)</span>}
+                          </td>
+                          <td>
+                            {c.sd_id}
+                            {c.code_1c && <div className="muted">1С {c.code_1c}</div>}
+                          </td>
+                          <td>
+                            {c.address || <span className="muted">—</span>}
+                            {c.waymark && <div className="muted">{c.waymark}</div>}
+                            {c.lat != null && (
+                              <div>
+                                <a href={`https://maps.google.com/?q=${c.lat},${c.lon}`}
+                                  target="_blank" rel="noreferrer">на карте</a>
+                              </div>
+                            )}
+                          </td>
+                          <td className="num">{c.orders}</td>
+                          <td className="num">{money(c.shipped)}</td>
+                          <td>{c.last_order ? fdateShort(c.last_order) : <span className="muted">—</span>}</td>
+                          <td className="num">{c.debt ? money(c.debt) : ''}</td>
+                          <td>{c.agents.join(', ') || <span className="muted">—</span>}</td>
+                        </tr>
+                      )))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
