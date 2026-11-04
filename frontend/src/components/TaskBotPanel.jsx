@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 
@@ -21,6 +21,38 @@ const STATE = {
   done: ['✅', 'tb-done'],
   acked: ['✅', 'tb-done'],
 }
+// Сортировка задач. По умолчанию — по ответственным: у каждого свой блок
+// с его счётом, внутри — открытые (старые выше), потом закрытые.
+const STATE_RANK = { open: 0, done: 1, acked: 2 }
+const ROLE_RANK = { 'Налоговая': 0, 'Управленка': 1, 'Зарплата и подотчёт': 2, 'Склад Ош': 3 }
+const who = (t) => `${t.role || ''}|${t.responsible || ''}`
+const TASK_SORTS = {
+  responsible: (t) => [ROLE_RANK[t.role] ?? 9, t.responsible || '\uffff'],
+  state: (t) => [STATE_RANK[t.state]],
+  firm: (t) => [SHORT[t.organization] || t.organization],
+  text: (t) => [t.text],
+  age: (t) => [t.state === 'open' ? t.age_days : -1],
+}
+const TASK_SORT_KEY = 'taskbot.sort'
+function loadTaskSort() {
+  try {
+    const v = JSON.parse(localStorage.getItem(TASK_SORT_KEY) || 'null')
+    if (v && TASK_SORTS[v.by]) return v
+  } catch { /* нет хранилища — по умолчанию */ }
+  return { by: 'responsible', dir: 1 }
+}
+function cmpArr(a, b) {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] < b[i]) return -1
+    if (a[i] > b[i]) return 1
+  }
+  return 0
+}
+function sortTasks(rows, { by, dir }) {
+  const tie = (t) => [STATE_RANK[t.state], -t.age_days]
+  return [...rows].sort((a, b) => dir * cmpArr(TASK_SORTS[by](a), TASK_SORTS[by](b))
+    || cmpArr(tie(a), tie(b)))
+}
 
 export default function TaskBotPanel() {
   const { user } = useAuth()
@@ -32,6 +64,12 @@ export default function TaskBotPanel() {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState(null)
+  const [sort, setSortState] = useState(loadTaskSort)
+  function setSort(by) {
+    const next = { by, dir: sort.by === by ? -sort.dir : (by === 'age' ? -1 : 1) }
+    setSortState(next)
+    try { localStorage.setItem(TASK_SORT_KEY, JSON.stringify(next)) } catch { /* не страшно */ }
+  }
 
   function load() {
     api.taskbotSettings().then((c) => { setCfg(c); setForm(c) })
@@ -246,11 +284,41 @@ export default function TaskBotPanel() {
       {tasks && tasks.rows.length > 0 ? (
         <div className="table-wrap compact">
           <table>
+            <thead>
+              <tr>
+                {[['state', ''], ['firm', 'Фирма'], ['text', 'Задача'],
+                  ['responsible', 'Ответственный'], ['age', 'Висит']].map(([k, label]) => (
+                  <th key={k} onClick={() => setSort(k)} title="Сортировать"
+                    style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    {label || '•'}{sort.by === k ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}
+                  </th>
+                ))}
+              </tr>
+            </thead>
             <tbody>
-              {tasks.rows.map((t) => {
+              {sortTasks(tasks.rows, sort).map((t, i, arr) => {
                 const [icon, cls] = STATE[t.state]
+                // При сортировке по ответственным — заголовок блока со счётом.
+                const head = sort.by === 'responsible' && (i === 0 || who(arr[i - 1]) !== who(t))
+                const sc = tasks.score?.[who(t)]
                 return (
-                  <tr key={t.id} className={cls}>
+                  <Fragment key={t.id}>
+                  {head && (
+                    <tr className="tb-group">
+                      <td colSpan={5}>
+                        <b>{t.role} — {t.responsible || 'не назначен'}</b>
+                        {sc && (
+                          <span className="muted">
+                            {' · '}✅ закрыто сегодня <b className={sc.closed_today ? 'sc-ok' : ''}>{sc.closed_today}</b>
+                            {' · '}за неделю {sc.closed_week}
+                            {' · '}🔴 открыто {sc.open}
+                            {sc.late > 0 && <span className="sc-diff"> (⚠️ {sc.late} просрочено)</span>}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  <tr className={cls}>
                     <td>{icon}</td>
                     <td><b>{SHORT[t.organization] || t.organization}</b></td>
                     <td>
@@ -262,6 +330,7 @@ export default function TaskBotPanel() {
                       {t.state === 'open' ? `${t.age_days} дн.` : ''}
                     </td>
                   </tr>
+                  </Fragment>
                 )
               })}
             </tbody>
