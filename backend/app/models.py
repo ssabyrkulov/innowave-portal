@@ -1270,6 +1270,10 @@ class ContourEvent(Base):
     acked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     acked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     note: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Подсказка сверки: документ без пары повторяет другой документ той же
+    # базы («№124 от 16.09.2026») — тогда это не пропуск, а дубль, и
+    # разбирается он в своей базе.
+    hint: Mapped[str | None] = mapped_column(String, nullable=True)
     # Задача для бухгалтера: расхождение, которое надо закрыть, а не
     # справочный хвост. Считается при каждом пересчёте журнала.
     is_task: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)

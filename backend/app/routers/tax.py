@@ -1765,6 +1765,95 @@ def _assign_event_keys(o: str, kind: str, side: str, rows: list[dict]) -> None:
         r["key"] = base if repeats[base] == 1 else f"{base}#{repeats[base]}"
 
 
+_PARTY_STOP = {"осоо", "оао", "зао", "ооо", "ип", "хайджин"}
+
+
+def _party_key(name: str | None) -> str:
+    """Покупатель одной строкой без формы и кода: «ОсОО Эрай Фарм» и
+    «ОсОО "ЭрайФарм"» — одно и то же «эрайфарм»."""
+    s = re.sub(r"\([^)]*\)", " ", (name or "").lower().replace("ё", "е"))
+    words = [w for w in re.findall(r"[a-zа-я0-9]+", s) if w not in _PARTY_STOP]
+    return "".join(words)
+
+
+def _hint(r: dict) -> str | None:
+    """Подсказка для события: «dup:…» — доказанная копия, «like:…» —
+    похожий документ без улики."""
+    if r.get("dup_of"):
+        return f"dup:{r['dup_of']}"
+    if r.get("similar_to"):
+        return f"like:{r['similar_to']}"
+    return None
+
+
+def _refers_to(r: dict, d: dict) -> bool:
+    """Комментарий документа r прямо указывает на документ d: его дату,
+    его номер со знаком «№» или ту же ссылку на номер управленки."""
+    c = r.get("comment") or ""
+    if not c:
+        return False
+    if any(d["date"].strftime(f) in c for f in ("%d.%m.%Y", "%d.%m.%y")):
+        return True
+    num = re.sub(r"^[0\-]+(?=\d)", "", d.get("number") or "")
+    if num and re.search(rf"№\s*0*{re.escape(num)}(?!\d)", c):
+        return True
+    refs = set(_UPR_NUMBER.findall(c))
+    return bool(refs & set(_UPR_NUMBER.findall(d.get("comment") or "")))
+
+
+def _mark_duplicates(only: list[dict], docs: list[dict],
+                     other: list[dict]) -> None:
+    """Налоговый документ без пары, который повторяет другой налоговый
+    документ — тот же покупатель, те же штуки и сумма, — помечается dup_of.
+
+    Это не пропуск в управленке, а лишняя копия в налоговой: так появилась
+    реализация №137 от 31.10 Инновейва — копия №124 от 16.09 на ЭрайФарм с
+    комментарием «за 16.09.2026». Задача «внести её в управленку» звала бы
+    завести вторую отгрузку, которой не было.
+
+    Одинаковых штук и суммы мало: Глобус заказывает одно и то же каждые
+    две недели, Байго перевыставляет ЭСФ с исправленной ставкой — это не
+    копии. Ложная задача «удалите дубль» опаснее пропущенной: по ней
+    удалят настоящую продажу. Поэтому дублем называем только при прямой
+    улике и только когда копий в налоговой больше, чем в управленке за то
+    же время (управленка — эталон, отгрузку сначала проводят там).
+
+    Улика — документ сам ссылается на свою пару: в комментарии дата
+    раннего («за 16.09.2026»), его номер («№124») или та же ссылка на
+    номер управленки. Без улики документ остаётся обычной задачей
+    «проверить реализацию, которой нет в управленке» — без слова «дубль»."""
+    def sig(d):
+        return (round(d.get("qty") or 0, 3), round(d.get("amount") or 0))
+
+    by_sig: dict = defaultdict(list)
+    for d in docs:
+        by_sig[sig(d)].append(d)
+    other_sig: dict = defaultdict(list)
+    for d in other:
+        other_sig[sig(d)].append(d)
+    for r in only:
+        key = _party_key(r.get("party"))
+        if not key or not (r.get("qty") or r.get("amount")):
+            continue
+        twins = [d for d in by_sig.get(sig(r), []) if d is not r
+                 and _party_key(d.get("party")) == key
+                 and d["date"] <= r["date"]]
+        if not twins:
+            continue
+        proven = [d for d in twins if _refers_to(r, d)]
+        first = min(proven or twins, key=lambda d: d["date"])
+        lo, hi = first["date"] - timedelta(days=31), r["date"] + timedelta(days=31)
+        mine = 1 + sum(1 for d in (proven or twins) if d["date"] >= lo)
+        theirs = sum(1 for d in other_sig.get(sig(r), []) if lo <= d["date"] <= hi)
+        if mine <= theirs:
+            continue
+        number = re.sub(r"^[0\-]+(?=\d)", "", first.get("number") or "")
+        ref = (f"№{number} от " if number else "от ") + first["date"].strftime("%d.%m.%Y")
+        # С уликой — «дубль»; без неё — только «похожа на…»: подсказка, где
+        # искать, а решение за бухгалтером.
+        r["dup_of" if proven else "similar_to"] = ref
+
+
 @router.get("/unposted")
 def tax_unposted(
     db: Session = Depends(get_db),
@@ -1813,6 +1902,7 @@ def tax_unposted(
         only_u = [u for u in upr
                   if u not in pairs.values() and not u.get("ref_paired")]
         only_t = [t for j, t in enumerate(tax) if j not in pairs]
+        _mark_duplicates(only_t, tax, upr)
         def out(rows, other_last):
             return [{
                 "date": r["date"].isoformat(),
@@ -1836,6 +1926,8 @@ def tax_unposted(
                 # например, не ведёт списания на маркетинг) — тогда и
                 # просроченных тут не бывает.
                 "tail": bool(other_last is None or r["date"] > other_last),
+                "dup_of": r.get("dup_of"),
+                "similar_to": r.get("similar_to"),
             } for r in sorted(rows, key=lambda x: x["date"], reverse=True)]
 
         rows_u, rows_t = out(only_u, tax_last), out(only_t, upr_last)
@@ -1946,7 +2038,8 @@ def scan_contour_events(db: Session) -> dict:
     added = closed = 0
     existing = {e.key: e for e in db.query(models.ContourEvent).all()}
 
-    def is_task(o: str, r: dict, partial: bool) -> bool:
+    def is_task(o: str, r: dict, partial: bool, kind: str = "",
+                side: str = "") -> bool:
         """Задача — документ, которого нет во второй базе, хотя должен быть.
 
         База, которая ведёт вид документов лишь частично (налоговая Хайджина
@@ -1959,6 +2052,11 @@ def scan_contour_events(db: Session) -> dict:
         if (o not in doc_orgs or d < since or partial or r.get("summary")
                 or r.get("aligned")):
             return False
+        # Реализацию всегда сначала проводят в управленке. Если она есть
+        # только в налоговой, ждать нечего: это нарушение порядка, а не
+        # «бухгалтер ещё не дошёл», — задача сразу.
+        if kind == "sale" and side == "tax":
+            return True
         return bool(r.get("gap")) or (today - d).days >= (cfg.grace_days or 0)
 
     def reopen(e: models.ContourEvent) -> None:
@@ -2012,7 +2110,8 @@ def scan_contour_events(db: Session) -> dict:
                             doc_number=r["number"], party=shown,
                             qty=r["qty"], amount=r["amount"],
                             gap=bool(r.get("gap")),
-                            is_task=is_task(o, r, partial),
+                            is_task=is_task(o, r, partial, t["key"], side),
+                            hint=_hint(r),
                             first_seen=now, last_seen=now))
                         added += 1
                     else:
@@ -2021,7 +2120,8 @@ def scan_contour_events(db: Session) -> dict:
                         reopen(e)
                         e.party = shown
                         e.gap = bool(r.get("gap"))
-                        e.is_task = is_task(o, r, partial)
+                        e.is_task = is_task(o, r, partial, t["key"], side)
+                        e.hint = _hint(r)
 
     # Продажи юрлицам там, где налоговая ведёт реализации лишь частично
     # (Хайджин: розница — сводным ККМ), сверяются не документами, а по
