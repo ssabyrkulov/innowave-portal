@@ -365,6 +365,7 @@ export const api = {
   },
   salesdocVisitsSample: () => request('/salesdoc/visits-sample'),
   salesdocVisitDebt: () => request('/salesdoc/visit-debt'),
+  salesdocClientDups: () => request('/salesdoc/client-duplicates'),
   salesdocAgentsToday: (day) =>
     request(`/salesdoc/agents-today${day ? `?day=${day}` : ''}`),
   salesdocApiProbe: (params) =>

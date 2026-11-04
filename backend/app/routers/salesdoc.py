@@ -3099,6 +3099,18 @@ def agents_today(
     }
 
 
+@router.get("/client-duplicates")
+def client_duplicates(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(can_view),
+):
+    """Дубли точек: одна лавка, заведённая в SalesDoc под двумя кодами
+    (одно имя и одна GPS-метка), а также разные имена в одном месте.
+    Подробно — services/client_dups.py."""
+    from ..services import client_dups
+    return client_dups.report(db)
+
+
 @router.get("/visit-debt")
 def visit_debt(
     db: Session = Depends(get_db),

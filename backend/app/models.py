@@ -6,6 +6,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     LargeBinary,
@@ -912,6 +913,16 @@ class SalesDocClient(Base):
     # надо различать, иначе «баланс 0» читается как факт, а не как заглушка.
     in_balance: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Карточка точки из getClient: адрес, ориентир, координаты GPS, ИНН и
+    # дата заведения. Нужны, чтобы найти одну точку, заведённую дважды
+    # (см. services/client_dups.py): одинаковое имя ещё не дубль — «Береке»
+    # десятки, а одно имя в одном и том же месте — дубль.
+    address: Mapped[str | None] = mapped_column(String, nullable=True)
+    waymark: Mapped[str | None] = mapped_column(String, nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    inn: Mapped[str | None] = mapped_column(String, nullable=True)
+    sd_created: Mapped[str | None] = mapped_column(String, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
