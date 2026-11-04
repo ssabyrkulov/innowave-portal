@@ -191,8 +191,13 @@ def report(db: Session) -> dict:
                 "last_order": last.isoformat() if last else None,
                 "agents": sorted(set(agents.get(c.sd_id, []))),
             })
-        # Оставить ту, что живее: больше заказов, затем — заведённую раньше.
-        cards.sort(key=lambda r: (-r["orders"], r["created"] or "9999", r["sd_id"]))
+        # Оставить ту, что живее: активную; с бóльшим числом заказов; с долгом
+        # (иначе долг уйдёт вместе с удалённой карточкой); с более свежим
+        # заказом; при прочем равенстве — заведённую раньше.
+        # Сортировки устойчивые: последняя задаёт главный признак.
+        cards.sort(key=lambda r: (r["created"] or "9999", r["sd_id"]))
+        cards.sort(key=lambda r: r["last_order"] or "", reverse=True)
+        cards.sort(key=lambda r: (not r["active"], -r["orders"], abs(r["debt"]) < 1))
         cards[0]["keep"] = True
         pts = [(r["lat"], r["lon"]) for r in cards if r["lat"] is not None]
         spread = max((distance_m(a, b) for i, a in enumerate(pts)
