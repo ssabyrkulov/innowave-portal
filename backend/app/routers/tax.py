@@ -2038,7 +2038,8 @@ def scan_contour_events(db: Session) -> dict:
     added = closed = 0
     existing = {e.key: e for e in db.query(models.ContourEvent).all()}
 
-    def is_task(o: str, r: dict, partial: bool) -> bool:
+    def is_task(o: str, r: dict, partial: bool, kind: str = "",
+                side: str = "") -> bool:
         """Задача — документ, которого нет во второй базе, хотя должен быть.
 
         База, которая ведёт вид документов лишь частично (налоговая Хайджина
@@ -2051,6 +2052,11 @@ def scan_contour_events(db: Session) -> dict:
         if (o not in doc_orgs or d < since or partial or r.get("summary")
                 or r.get("aligned")):
             return False
+        # Реализацию всегда сначала проводят в управленке. Если она есть
+        # только в налоговой, ждать нечего: это нарушение порядка, а не
+        # «бухгалтер ещё не дошёл», — задача сразу.
+        if kind == "sale" and side == "tax":
+            return True
         return bool(r.get("gap")) or (today - d).days >= (cfg.grace_days or 0)
 
     def reopen(e: models.ContourEvent) -> None:
@@ -2104,7 +2110,7 @@ def scan_contour_events(db: Session) -> dict:
                             doc_number=r["number"], party=shown,
                             qty=r["qty"], amount=r["amount"],
                             gap=bool(r.get("gap")),
-                            is_task=is_task(o, r, partial),
+                            is_task=is_task(o, r, partial, t["key"], side),
                             hint=_hint(r),
                             first_seen=now, last_seen=now))
                         added += 1
@@ -2114,7 +2120,7 @@ def scan_contour_events(db: Session) -> dict:
                         reopen(e)
                         e.party = shown
                         e.gap = bool(r.get("gap"))
-                        e.is_task = is_task(o, r, partial)
+                        e.is_task = is_task(o, r, partial, t["key"], side)
                         e.hint = _hint(r)
 
     # Продажи юрлицам там, где налоговая ведёт реализации лишь частично
