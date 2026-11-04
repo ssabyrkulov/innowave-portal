@@ -467,6 +467,70 @@ def tasks_for_list(db: Session, today: date) -> list[models.ContourEvent]:
             or (e.acked_at and e.acked_at >= start)]
 
 
+def _day_start(day: date) -> datetime:
+    """Начало местного дня в UTC — так хранятся отметки в журнале."""
+    return datetime.combine(day, datetime.min.time()) - TZ_SHIFT
+
+
+def score(db: Session, cfg: models.TaskBotSettings,
+          today: date | None = None) -> dict:
+    """Счёт по ответственным: сколько открыто и сколько закрыто.
+
+    Список «что висит» без «что сделано» читается как укор: человек
+    закрыл за день десяток задач, а видит только оставшиеся. Поэтому рядом
+    с открытыми — закрытые сегодня и за неделю. «Закрыто» — расхождение
+    ушло со следующей выгрузкой, то есть документ исправили в 1С; «снято» —
+    признано нормой, это не работа в базе, и в счёт оно идёт отдельно.
+
+    Возвращает {uid: {open, late, new, closed_today, closed_week,
+    acked_today}}."""
+    today = today or local_today()
+    day0, week0 = _day_start(today), _day_start(today - timedelta(days=6))
+    esc = cfg.escalate_days or 2
+    out: dict = {}
+    for e in (db.query(models.ContourEvent)
+              .filter(models.ContourEvent.is_task.is_(True)).all()):
+        if not (is_open(e) or (e.resolved_at and e.resolved_at >= week0)
+                or (e.acked_at and e.acked_at >= day0)):
+            continue
+        s = out.setdefault(responsible_id(cfg, e), {
+            "open": 0, "late": 0, "new": 0, "closed_today": 0,
+            "closed_week": 0, "acked_today": 0})
+        if is_open(e):
+            s["open"] += 1
+            s["late"] += age_days(e, today) >= esc
+            s["new"] += bool(e.first_seen and e.first_seen >= day0)
+        elif e.resolved_at and e.resolved_at >= week0:
+            s["closed_week"] += 1
+            s["closed_today"] += e.resolved_at >= day0
+        elif e.acked_at:
+            s["acked_today"] += 1
+    return out
+
+
+def role_title(cfg: models.TaskBotSettings, uid: int | None) -> str:
+    return ("Налоговая" if uid == cfg.nal_user_id
+            else "Управленка" if uid == cfg.upr_user_id
+            else "Зарплата и подотчёт" if uid == cfg.salary_user_id
+            else "Склад Ош" if uid == cfg.osh_user_id
+            else "Задачи")
+
+
+def _score_line(s: dict) -> str:
+    """«✅ закрыто сегодня 9 · за неделю 41 · 🔴 открыто 25 (⚠️ 7)»."""
+    parts = [f"✅ закрыто сегодня <b>{s['closed_today']}</b>"
+             f" · за неделю {s['closed_week']}"]
+    if s["acked_today"]:
+        parts.append(f"снято как норма {s['acked_today']}")
+    late = f" (⚠️ {s['late']} просрочено)" if s["late"] else ""
+    parts.append(f"🔴 открыто {s['open']}{late}")
+    return " · ".join(parts)
+
+
+def _section_order(cfg: models.TaskBotSettings):
+    return lambda u: (u != cfg.nal_user_id, u != cfg.upr_user_id, u or 0)
+
+
 def waiting_reason(db: Session, cfg: models.TaskBotSettings) -> str | None:
     """Почему сверять пока нечего. Пустой список без причины читается как
     «всё сходится» — а это неправда, пока налоговых журналов нет или
@@ -493,14 +557,13 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
     for e in tasks:
         sections.setdefault(responsible_id(cfg, e), []).append(e)
 
+    sc = score(db, cfg, today)
+
     def title(uid):
-        role = ("Налоговая" if uid == cfg.nal_user_id
-                else "Управленка" if uid == cfg.upr_user_id
-                else "Зарплата и подотчёт" if uid == cfg.salary_user_id
-                else "Склад Ош" if uid == cfg.osh_user_id
-                else "Задачи")
         u = users.get(uid)
-        return f"<b>{role} — {_e(u.full_name) if u else 'не назначен'}</b>"
+        head = (f"<b>{role_title(cfg, uid)} — "
+                f"{_e(u.full_name) if u else 'не назначен'}</b>")
+        return head + ("\n" + _score_line(sc[uid]) if uid in sc else "")
 
     def order(e):
         # Сначала открытые (старые выше), потом закрытые.
@@ -508,7 +571,7 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
 
     lines = [f"📌 <b>Задачи бухгалтерии · {today.strftime('%d.%m')}</b>"]
     n_open = n_done = 0
-    for uid in sorted(sections, key=lambda u: (u != cfg.nal_user_id, u or 0)):
+    for uid in sorted(sections, key=_section_order(cfg)):
         rows = sorted(sections[uid], key=order)
         lines += ["", title(uid)]
         shown = 0
@@ -544,8 +607,9 @@ def render_list(db: Session, cfg: models.TaskBotSettings) -> str:
         lines += ["", waiting]
     elif not tasks:
         lines += ["", "✅ Всё сходится: управленка и налоговая совпадают."]
+    week = sum(v["closed_week"] for v in sc.values())
     lines += ["", f"<i>Обновлено {local_now():%H:%M} · открыто {n_open} · "
-                  f"закрыто сегодня {n_done}</i>"]
+                  f"закрыто сегодня {n_done} · за неделю {week}</i>"]
     link = _portal_link(cfg)
     if link:
         lines.append(f'<a href="{_e(link)}">Подробнее в портале</a>')
@@ -719,32 +783,61 @@ def periodic(db: Session) -> None:
 
 
 def digest(db: Session, cfg: models.TaskBotSettings) -> None:
-    today = local_today()
+    """Итоги дня в 18:30: сколько закрыто и сколько осталось — по каждому
+    ответственному, и что висит дольше срока эскалации."""
+    text = digest_text(db, cfg)
+    api("sendMessage", chat_id=cfg.chat_id, parse_mode="HTML",
+        text=text, disable_web_page_preview=True)
+
+
+DIGEST_LATE_PER_USER = 6
+
+
+def digest_text(db: Session, cfg: models.TaskBotSettings,
+                today: date | None = None) -> str:
+    today = today or local_today()
     users = {u.id: u for u in db.query(models.User).all()}
+    sc = score(db, cfg, today)
+    tot = {k: sum(v[k] for v in sc.values())
+           for k in ("open", "late", "new", "closed_today", "closed_week")}
+    lines = [f"📋 <b>Итоги дня · {today:%d.%m}</b>",
+             f"✅ Закрыто сегодня: <b>{tot['closed_today']}</b> · "
+             f"за неделю: {tot['closed_week']}",
+             f"🆕 Новых за день: {tot['new']} · 🔴 открыто: {tot['open']}"]
+    if tot["closed_today"] and tot["closed_today"] >= tot["new"]:
+        lines.append("👏 Закрыли больше, чем появилось, — список тает.")
+    best = max(sc.items(), key=lambda kv: kv[1]["closed_today"], default=None)
+    if best and best[1]["closed_today"] and len(sc) > 1:
+        lines.append(f"🏆 Больше всех закрыто сегодня: {_who(users.get(best[0]))}"
+                     f" — {best[1]['closed_today']}")
+
     open_tasks = [e for e in tasks_for_list(db, today) if is_open(e)]
-    if not open_tasks:
-        waiting = waiting_reason(db, cfg)
-        api("sendMessage", chat_id=cfg.chat_id, parse_mode="HTML",
-            text=f"📋 <b>Сводка на {today:%d.%m}</b>\n"
-                 + (waiting or "✅ Всё сходится, открытых задач нет."))
-        return
-    by_user: dict[int | None, list] = {}
+    late: dict = {}
     for e in open_tasks:
-        by_user.setdefault(responsible_id(cfg, e), []).append(e)
-    lines = [f"📋 <b>Сводка на {today:%d.%m}</b> · открыто {len(open_tasks)}", ""]
-    for uid, rows in by_user.items():
-        lines.append(f"{_who(users.get(uid))} — {len(rows)}")
-    late = [e for e in open_tasks if age_days(e, today) >= (cfg.escalate_days or 2)]
-    if late:
-        lines += ["", f"⚠️ <b>Не закрыто дольше {cfg.escalate_days} дн.:</b>"]
-        for e in sorted(late, key=lambda x: x.first_seen or datetime.min)[:15]:
-            lines.append(f"• <b>{FIRM.get(e.organization, e.organization)}</b>: "
+        if age_days(e, today) >= (cfg.escalate_days or 2):
+            late.setdefault(responsible_id(cfg, e), []).append(e)
+
+    for uid in sorted(sc, key=_section_order(cfg)):
+        lines += ["", f"<b>{role_title(cfg, uid)}</b> — {_who(users.get(uid))}",
+                  _score_line(sc[uid])]
+        rows = sorted(late.get(uid, []), key=lambda x: x.first_seen or datetime.min)
+        for e in rows[:DIGEST_LATE_PER_USER]:
+            lines.append(f"  ⚠️ <b>{FIRM.get(e.organization, e.organization)}</b>: "
                          f"{task_text(e)} · {age_days(e, today)} дн.")
+        if len(rows) > DIGEST_LATE_PER_USER:
+            lines.append(f"  …и ещё {len(rows) - DIGEST_LATE_PER_USER} просроченных"
+                         " — в портале")
+
+    if not open_tasks:
+        lines += ["", waiting_reason(db, cfg) or "✅ Всё сходится, открытых задач нет."]
+    elif late:
         owner = users.get(cfg.owner_user_id)
         if owner:
             lines += ["", f"Руководитель: {_who(owner)}"]
-    api("sendMessage", chat_id=cfg.chat_id, parse_mode="HTML",
-        text="\n".join(lines)[:4000], disable_web_page_preview=True)
+    link = _portal_link(cfg)
+    if link:
+        lines.append(f'<a href="{_e(link)}">Подробнее в портале</a>')
+    return "\n".join(lines)[:4000]
 
 
 # --- Входящие от Telegram ---------------------------------------------------

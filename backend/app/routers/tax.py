@@ -2115,7 +2115,19 @@ def contour_events(
     state: str = Query(default="open", pattern="^(open|resolved|acked|all)$"),
     limit: int = Query(default=200, le=1000),
 ):
-    """Журнал расхождений: что заметили, когда и чем закончилось."""
+    """Журнал расхождений: что заметили, когда и чем закончилось.
+
+    У каждой строки — ответственный (тот же, кому бот ставит задачу), а в
+    score — счёт по людям: открыто и закрыто сегодня/за неделю."""
+    from ..services import taskbot
+
+    cfg = taskbot.get_settings(db)
+    users = {u.id: u for u in db.query(models.User).all()}
+
+    def who(uid):
+        u = users.get(uid)
+        return u.full_name if u else "не назначен"
+
     q = db.query(models.ContourEvent)
     o = (org or "").strip().lower()
     if o in models.ORGS:
@@ -2145,7 +2157,13 @@ def contour_events(
             "resolved_at": e.resolved_at.isoformat() if e.resolved_at else None,
             "acked_at": e.acked_at.isoformat() if e.acked_at else None,
             "note": e.note,
+            "is_task": bool(e.is_task),
+            "responsible": who(taskbot.responsible_id(cfg, e)),
+            "role": taskbot.role_title(cfg, taskbot.responsible_id(cfg, e)),
         } for e in rows],
+        "score": [{"responsible": who(uid), "role": taskbot.role_title(cfg, uid), **v}
+                  for uid, v in sorted(taskbot.score(db, cfg).items(),
+                                       key=lambda kv: taskbot._section_order(cfg)(kv[0]))],
         "open_gaps": (db.query(models.ContourEvent)
                       .filter(models.ContourEvent.resolved_at.is_(None),
                               models.ContourEvent.acked_at.is_(None),
