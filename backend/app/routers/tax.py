@@ -1776,6 +1776,16 @@ def _party_key(name: str | None) -> str:
     return "".join(words)
 
 
+def _hint(r: dict) -> str | None:
+    """Подсказка для события: «dup:…» — доказанная копия, «like:…» —
+    похожий документ без улики."""
+    if r.get("dup_of"):
+        return f"dup:{r['dup_of']}"
+    if r.get("similar_to"):
+        return f"like:{r['similar_to']}"
+    return None
+
+
 def _refers_to(r: dict, d: dict) -> bool:
     """Комментарий документа r прямо указывает на документ d: его дату,
     его номер со знаком «№» или ту же ссылку на номер управленки."""
@@ -1830,17 +1840,18 @@ def _mark_duplicates(only: list[dict], docs: list[dict],
                  and d["date"] <= r["date"]]
         if not twins:
             continue
-        twins = [d for d in twins if _refers_to(r, d)]
-        if not twins:
-            continue
-        first = min(twins, key=lambda d: d["date"])
+        proven = [d for d in twins if _refers_to(r, d)]
+        first = min(proven or twins, key=lambda d: d["date"])
         lo, hi = first["date"] - timedelta(days=31), r["date"] + timedelta(days=31)
-        mine = 1 + sum(1 for d in twins if d["date"] >= lo)
+        mine = 1 + sum(1 for d in (proven or twins) if d["date"] >= lo)
         theirs = sum(1 for d in other_sig.get(sig(r), []) if lo <= d["date"] <= hi)
-        if mine > theirs:
-            number = re.sub(r"^[0\-]+(?=\d)", "", first.get("number") or "")
-            r["dup_of"] = (f"№{number} от " if number else "от ") + \
-                first["date"].strftime("%d.%m.%Y")
+        if mine <= theirs:
+            continue
+        number = re.sub(r"^[0\-]+(?=\d)", "", first.get("number") or "")
+        ref = (f"№{number} от " if number else "от ") + first["date"].strftime("%d.%m.%Y")
+        # С уликой — «дубль»; без неё — только «похожа на…»: подсказка, где
+        # искать, а решение за бухгалтером.
+        r["dup_of" if proven else "similar_to"] = ref
 
 
 @router.get("/unposted")
@@ -1916,6 +1927,7 @@ def tax_unposted(
                 # просроченных тут не бывает.
                 "tail": bool(other_last is None or r["date"] > other_last),
                 "dup_of": r.get("dup_of"),
+                "similar_to": r.get("similar_to"),
             } for r in sorted(rows, key=lambda x: x["date"], reverse=True)]
 
         rows_u, rows_t = out(only_u, tax_last), out(only_t, upr_last)
@@ -2093,7 +2105,7 @@ def scan_contour_events(db: Session) -> dict:
                             qty=r["qty"], amount=r["amount"],
                             gap=bool(r.get("gap")),
                             is_task=is_task(o, r, partial),
-                            hint=r.get("dup_of"),
+                            hint=_hint(r),
                             first_seen=now, last_seen=now))
                         added += 1
                     else:
@@ -2103,7 +2115,7 @@ def scan_contour_events(db: Session) -> dict:
                         e.party = shown
                         e.gap = bool(r.get("gap"))
                         e.is_task = is_task(o, r, partial)
-                        e.hint = r.get("dup_of")
+                        e.hint = _hint(r)
 
     # Продажи юрлицам там, где налоговая ведёт реализации лишь частично
     # (Хайджин: розница — сводным ККМ), сверяются не документами, а по
