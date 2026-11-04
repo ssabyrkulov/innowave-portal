@@ -638,19 +638,58 @@ def _doc_lines(db: Session, org: str, kind: str, side: str, number: str | None,
     return [(p, float(qty)) for p, qty in q.all() if p and qty]
 
 
+# Вид документа → начало его названия в журнале проводок обеих баз
+# («Реализация товаров и услуг 136 от…», «Реализация ТМЗ и услуг 00000000137
+# от…»).
+_LEDGER_DOC = {"sale": "Реализация", "return": "Возврат",
+               "writeoff": "Списание", "purchase": "Поступление"}
+
+
+def _ledger_docs(db: Session, org: str, base: str, since: date) -> set | None:
+    """Документы, уже попавшие в журнал проводок базы: (вид, номер, дата).
+    None — журнала этой базы нет вовсе, проверять не по чему."""
+    L = models.LedgerEntry
+    cond = (L.base == "nal") if base == "nal" else or_(L.base == "upr", L.base.is_(None))
+    rows = (db.query(L.doc, L.date).filter(L.organization == org, cond,
+                                           L.date >= since).distinct().all())
+    if not rows and not (has_nal_ledger(db, org) if base == "nal"
+                         else has_upr_ledger(db, org)):
+        return None
+    out = set()
+    for doc, d in rows:
+        for kind, head in _LEDGER_DOC.items():
+            if (doc or "").startswith(head):
+                out.add((kind, _doc_number(doc), d))
+    return out
+
+
 def pending_by_item(db: Session, org: str, pending: list[dict],
                     aliases: dict[str, str]) -> dict[str, dict]:
     """На сколько штук по каждому товару остаток налоговой обязан отличаться
     от управленки из-за документов, ещё не внесённых во вторую базу.
 
     Невнесённая реализация №134 на 150 шт — и в налоговой ровно на 150 шт
-    больше: это не вторая задача, а та же самая."""
+    больше: это не вторая задача, а та же самая.
+
+    Остаток считается по журналам проводок, а список документов — по
+    отдельным выгрузкам документов. Из 1С они приходят разными файлами и не
+    всегда одновременно: реализация №137 уже была в выгрузке реализаций, а
+    журнал налоговой ещё старый, без неё. Вычесть её штуки из остатка,
+    который их ещё не видел, — значит создать «лишние 42 шт.» на ровном
+    месте. Поэтому документ учитывается, только если он уже есть в журнале
+    своей базы; не попал — подождём следующей выгрузки журнала."""
     out: dict[str, dict] = {}
-    for p in pending:
-        if p["org"] != org:
-            continue
+    mine = [p for p in pending if p["org"] == org
+            and p["kind"] in _OUTFLOW + _INFLOW]
+    since = min((p["date"] for p in mine), default=None)
+    journals = ({"upr": _ledger_docs(db, org, "upr", since),
+                 "tax": _ledger_docs(db, org, "nal", since)} if since else {})
+    for p in mine:
         kind, side = p["kind"], p["side"]
-        if kind not in _OUTFLOW + _INFLOW:
+        seen = journals.get(side)
+        num = re.sub(r"^[0\-]+(?=\d)", "", p.get("number") or "")
+        num = re.sub(r"\D.*$", "", num) if num else ""
+        if seen is not None and num and (kind, num, p["date"]) not in seen:
             continue
         sign = (1 if kind in _OUTFLOW else -1) * (1 if side == "upr" else -1)
         for product, qty in _doc_lines(db, org, kind, side, p.get("number"),
