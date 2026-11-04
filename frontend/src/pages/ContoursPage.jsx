@@ -27,37 +27,6 @@ const KINDS = {
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
-// Сортировка журнала. По умолчанию — по ответственным: каждый сразу видит
-// свой кусок, а не ищет его среди чужих строк.
-const stateRank = (e) => (e.resolved_at ? 2 : e.acked_at ? 3 : e.gap ? 0 : 1)
-const SORTS = {
-  responsible: (e) => (e.is_task ? `${e.role || ''} ${e.responsible || ''}` : '\uffff'),
-  first_seen: (e) => e.first_seen || '',
-  firm: (e) => FIRMS[e.organization] || e.organization,
-  doc: (e) => `${KINDS[e.kind] || e.kind} ${e.number || ''}`,
-  party: (e) => (e.party || '').toLowerCase(),
-  qty: (e) => e.qty || 0,
-  amount: (e) => e.amount || 0,
-  state: stateRank,
-}
-const SORT_KEY = 'contours.sort'
-
-function loadSort() {
-  try {
-    const v = JSON.parse(localStorage.getItem(SORT_KEY) || 'null')
-    if (v && SORTS[v.by]) return v
-  } catch { /* приватное окно или пустое хранилище — берём по умолчанию */ }
-  return { by: 'responsible', dir: 1 }
-}
-
-function sortRows(rows, { by, dir }) {
-  const key = SORTS[by]
-  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
-  // Внутри одного значения — свежие сверху, как было раньше.
-  return [...rows].sort((a, b) => dir * cmp(key(a), key(b))
-    || cmp(b.first_seen || '', a.first_seen || ''))
-}
-
 // Момент, когда расхождение заметили, знает только сам портал: 1С про него
 // не помнит, а список «сейчас» ничего не хранит — документ провели во второй
 // базе, и расхождение исчезло, будто его не было. Журнал держит его событием.
@@ -72,13 +41,6 @@ function Journal() {
   // Отметка «это норма» сразу для нескольких строк — с общей причиной.
   const [picked, setPicked] = useState(new Set())
   const [note, setNote] = useState('')
-  const [sort, setSortState] = useState(loadSort)
-
-  function setSort(by) {
-    const next = { by, dir: sort.by === by ? -sort.dir : (['first_seen', 'qty', 'amount'].includes(by) ? -1 : 1) }
-    setSortState(next)
-    try { localStorage.setItem(SORT_KEY, JSON.stringify(next)) } catch { /* не страшно */ }
-  }
 
   function load(st = state) {
     setPicked(new Set())
@@ -156,14 +118,7 @@ function Journal() {
     setPicked(next)
   }
 
-  const rows = data ? sortRows(data.rows, sort) : []
-  const openRows = rows.filter((e) => !e.resolved_at && !e.acked_at)
-  const Th = ({ by, children, className }) => (
-    <th className={`th-sort ${className || ''}`} onClick={() => setSort(by)}
-      title="Сортировать" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}>
-      {children}{sort.by === by ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}
-    </th>
-  )
+  const openRows = data ? data.rows.filter((e) => !e.resolved_at && !e.acked_at) : []
   const allPicked = openRows.length > 0 && openRows.every((e) => picked.has(e.id))
 
   return (
@@ -196,34 +151,6 @@ function Journal() {
         )}
       </div>
       {qrNote && <p className="muted">{qrNote}</p>}
-      {data?.score?.length > 0 && (
-        <div className="table-wrap compact">
-          <table>
-            <thead>
-              <tr>
-                <th>Ответственный</th>
-                <th className="num">Закрыто сегодня</th>
-                <th className="num">За неделю</th>
-                <th className="num">Новых сегодня</th>
-                <th className="num">Открыто</th>
-                <th className="num">Просрочено</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.score.map((r) => (
-                <tr key={`${r.role}-${r.responsible}`}>
-                  <td>{r.role} — {r.responsible}</td>
-                  <td className="num"><b className={r.closed_today ? 'sc-ok' : ''}>{r.closed_today}</b></td>
-                  <td className="num">{r.closed_week}</td>
-                  <td className="num">{r.new}</td>
-                  <td className="num">{r.open}</td>
-                  <td className="num">{r.late ? <span className="sc-diff">{r.late}</span> : 0}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
       {!data ? <div className="muted">Загрузка…</div>
         : data.rows.length === 0 ? (
           <p className="muted">
@@ -253,26 +180,19 @@ function Journal() {
                         : new Set(openRows.map((e) => e.id)))} />
                   )}
                 </th>
-                <Th by="responsible">Ответственный</Th>
-                <Th by="first_seen">Замечено</Th><Th by="firm">Фирма</Th>
-                <Th by="doc">Документ</Th><Th by="party">Контрагент</Th>
-                <Th by="qty" className="num">Кол-во</Th>
-                <Th by="amount" className="num">Сумма</Th>
-                <Th by="state">Состояние</Th><th></th>
+                <th>Замечено</th><th>Фирма</th><th>Документ</th>
+                <th>Контрагент</th><th className="num">Кол-во</th>
+                <th className="num">Сумма</th><th>Состояние</th><th></th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((e) => (
+              {data.rows.map((e) => (
                 <tr key={e.id}>
                   <td>
                     {!e.resolved_at && !e.acked_at && (
                       <input type="checkbox" checked={picked.has(e.id)}
                         onChange={() => toggle(e.id)} />
                     )}
-                  </td>
-                  <td>
-                    {e.is_task ? e.responsible : <span className="muted">—</span>}
-                    {e.is_task && <div className="muted skipped-cols">{e.role}</div>}
                   </td>
                   <td>{fdate(e.first_seen.slice(0, 10))}</td>
                   <td className="muted">{FIRMS[e.organization] || e.organization}</td>
