@@ -1776,6 +1776,21 @@ def _party_key(name: str | None) -> str:
     return "".join(words)
 
 
+def _refers_to(r: dict, d: dict) -> bool:
+    """Комментарий документа r прямо указывает на документ d: его дату,
+    его номер со знаком «№» или ту же ссылку на номер управленки."""
+    c = r.get("comment") or ""
+    if not c:
+        return False
+    if any(d["date"].strftime(f) in c for f in ("%d.%m.%Y", "%d.%m.%y")):
+        return True
+    num = re.sub(r"^[0\-]+(?=\d)", "", d.get("number") or "")
+    if num and re.search(rf"№\s*0*{re.escape(num)}(?!\d)", c):
+        return True
+    refs = set(_UPR_NUMBER.findall(c))
+    return bool(refs & set(_UPR_NUMBER.findall(d.get("comment") or "")))
+
+
 def _mark_duplicates(only: list[dict], docs: list[dict],
                      other: list[dict]) -> None:
     """Налоговый документ без пары, который повторяет другой налоговый
@@ -1786,11 +1801,17 @@ def _mark_duplicates(only: list[dict], docs: list[dict],
     комментарием «за 16.09.2026». Задача «внести её в управленку» звала бы
     завести вторую отгрузку, которой не было.
 
-    Повторный заказ точки (те же штуки и сумма, что неделю назад) — не
-    дубль. Поэтому копией считаем документ, только если таких в налоговой
-    больше, чем в управленке за то же время: управленка — эталон, отгрузку
-    сначала проводят там. Покупатель в базах назван по-разному, поэтому
-    управленку считаем по штукам и сумме."""
+    Одинаковых штук и суммы мало: Глобус заказывает одно и то же каждые
+    две недели, Байго перевыставляет ЭСФ с исправленной ставкой — это не
+    копии. Ложная задача «удалите дубль» опаснее пропущенной: по ней
+    удалят настоящую продажу. Поэтому дублем называем только при прямой
+    улике и только когда копий в налоговой больше, чем в управленке за то
+    же время (управленка — эталон, отгрузку сначала проводят там).
+
+    Улика — документ сам ссылается на свою пару: в комментарии дата
+    раннего («за 16.09.2026»), его номер («№124») или та же ссылка на
+    номер управленки. Без улики документ остаётся обычной задачей
+    «проверить реализацию, которой нет в управленке» — без слова «дубль»."""
     def sig(d):
         return (round(d.get("qty") or 0, 3), round(d.get("amount") or 0))
 
@@ -1807,6 +1828,9 @@ def _mark_duplicates(only: list[dict], docs: list[dict],
         twins = [d for d in by_sig.get(sig(r), []) if d is not r
                  and _party_key(d.get("party")) == key
                  and d["date"] <= r["date"]]
+        if not twins:
+            continue
+        twins = [d for d in twins if _refers_to(r, d)]
         if not twins:
             continue
         first = min(twins, key=lambda d: d["date"])
