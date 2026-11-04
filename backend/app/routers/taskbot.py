@@ -181,6 +181,7 @@ def tasks(db: Session = Depends(get_db),
             "kind": e.kind, "side": e.side,
             "text": taskbot.html.unescape(taskbot.task_text(e)),
             "responsible": users.get(taskbot.responsible_id(cfg, e)),
+            "role": taskbot.role_title(cfg, taskbot.responsible_id(cfg, e)),
             "age_days": taskbot.age_days(e, today),
             "claimed_by": e.claimed_by, "note": e.note,
             "closed_at": (e.resolved_at or e.acked_at).isoformat()
@@ -188,7 +189,10 @@ def tasks(db: Session = Depends(get_db),
         })
     order = {"open": 0, "done": 1, "acked": 2}
     out.sort(key=lambda t: (order[t["state"]], -t["age_days"]))
-    return {"rows": out, "escalate_days": cfg.escalate_days}
+    sc = taskbot.score(db, cfg, today)
+    return {"rows": out, "escalate_days": cfg.escalate_days,
+            "score": {f"{taskbot.role_title(cfg, uid)}|{users.get(uid) or ''}": v
+                      for uid, v in sc.items()}}
 
 
 @router.post("/telegram/webhook")
