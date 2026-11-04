@@ -1765,6 +1765,60 @@ def _assign_event_keys(o: str, kind: str, side: str, rows: list[dict]) -> None:
         r["key"] = base if repeats[base] == 1 else f"{base}#{repeats[base]}"
 
 
+_PARTY_STOP = {"осоо", "оао", "зао", "ооо", "ип", "хайджин"}
+
+
+def _party_key(name: str | None) -> str:
+    """Покупатель одной строкой без формы и кода: «ОсОО Эрай Фарм» и
+    «ОсОО "ЭрайФарм"» — одно и то же «эрайфарм»."""
+    s = re.sub(r"\([^)]*\)", " ", (name or "").lower().replace("ё", "е"))
+    words = [w for w in re.findall(r"[a-zа-я0-9]+", s) if w not in _PARTY_STOP]
+    return "".join(words)
+
+
+def _mark_duplicates(only: list[dict], docs: list[dict],
+                     other: list[dict]) -> None:
+    """Налоговый документ без пары, который повторяет другой налоговый
+    документ — тот же покупатель, те же штуки и сумма, — помечается dup_of.
+
+    Это не пропуск в управленке, а лишняя копия в налоговой: так появилась
+    реализация №137 от 31.10 Инновейва — копия №124 от 16.09 на ЭрайФарм с
+    комментарием «за 16.09.2026». Задача «внести её в управленку» звала бы
+    завести вторую отгрузку, которой не было.
+
+    Повторный заказ точки (те же штуки и сумма, что неделю назад) — не
+    дубль. Поэтому копией считаем документ, только если таких в налоговой
+    больше, чем в управленке за то же время: управленка — эталон, отгрузку
+    сначала проводят там. Покупатель в базах назван по-разному, поэтому
+    управленку считаем по штукам и сумме."""
+    def sig(d):
+        return (round(d.get("qty") or 0, 3), round(d.get("amount") or 0))
+
+    by_sig: dict = defaultdict(list)
+    for d in docs:
+        by_sig[sig(d)].append(d)
+    other_sig: dict = defaultdict(list)
+    for d in other:
+        other_sig[sig(d)].append(d)
+    for r in only:
+        key = _party_key(r.get("party"))
+        if not key or not (r.get("qty") or r.get("amount")):
+            continue
+        twins = [d for d in by_sig.get(sig(r), []) if d is not r
+                 and _party_key(d.get("party")) == key
+                 and d["date"] <= r["date"]]
+        if not twins:
+            continue
+        first = min(twins, key=lambda d: d["date"])
+        lo, hi = first["date"] - timedelta(days=31), r["date"] + timedelta(days=31)
+        mine = 1 + sum(1 for d in twins if d["date"] >= lo)
+        theirs = sum(1 for d in other_sig.get(sig(r), []) if lo <= d["date"] <= hi)
+        if mine > theirs:
+            number = re.sub(r"^[0\-]+(?=\d)", "", first.get("number") or "")
+            r["dup_of"] = (f"№{number} от " if number else "от ") + \
+                first["date"].strftime("%d.%m.%Y")
+
+
 @router.get("/unposted")
 def tax_unposted(
     db: Session = Depends(get_db),
@@ -1813,6 +1867,7 @@ def tax_unposted(
         only_u = [u for u in upr
                   if u not in pairs.values() and not u.get("ref_paired")]
         only_t = [t for j, t in enumerate(tax) if j not in pairs]
+        _mark_duplicates(only_t, tax, upr)
         def out(rows, other_last):
             return [{
                 "date": r["date"].isoformat(),
@@ -1836,6 +1891,7 @@ def tax_unposted(
                 # например, не ведёт списания на маркетинг) — тогда и
                 # просроченных тут не бывает.
                 "tail": bool(other_last is None or r["date"] > other_last),
+                "dup_of": r.get("dup_of"),
             } for r in sorted(rows, key=lambda x: x["date"], reverse=True)]
 
         rows_u, rows_t = out(only_u, tax_last), out(only_t, upr_last)
@@ -2013,6 +2069,7 @@ def scan_contour_events(db: Session) -> dict:
                             qty=r["qty"], amount=r["amount"],
                             gap=bool(r.get("gap")),
                             is_task=is_task(o, r, partial),
+                            hint=r.get("dup_of"),
                             first_seen=now, last_seen=now))
                         added += 1
                     else:
@@ -2022,6 +2079,7 @@ def scan_contour_events(db: Session) -> dict:
                         e.party = shown
                         e.gap = bool(r.get("gap"))
                         e.is_task = is_task(o, r, partial)
+                        e.hint = r.get("dup_of")
 
     # Продажи юрлицам там, где налоговая ведёт реализации лишь частично
     # (Хайджин: розница — сводным ККМ), сверяются не документами, а по

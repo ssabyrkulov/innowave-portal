@@ -198,6 +198,13 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
     if e.kind == "osh":
         # Перемещение делает в управленке Хайджин тот, кто ведёт склад Ош.
         return cfg.osh_user_id or cfg.upr_user_id
+    if e.hint:
+        # Дубль внутри одной базы разбирает тот, кто её ведёт.
+        return cfg.nal_user_id if e.side == "tax" else cfg.upr_user_id
+    if e.kind == "sale" and e.side == "tax":
+        # Реализацию сначала проводят в управленке; если она есть только в
+        # налоговой, первый вопрос — к налоговой: откуда она взялась.
+        return cfg.nal_user_id
     if e.kind in ("stock", "payparty", "payop") or e.side == "upr":
         return cfg.nal_user_id
     return cfg.upr_user_id
@@ -313,8 +320,19 @@ def task_text(e: models.ContourEvent) -> str:
         # У списания состав уже с количеством — второй раз не пишем.
         tail.append(f"{_money(e.qty)} шт.")
     tail = f" · {' · '.join(tail)}" if tail else ""
+    if e.hint:
+        base = "налоговой" if e.side == "tax" else "управленке"
+        who = (f"{KIND.get(e.kind, e.kind).lower()}{num} от "
+               f"{e.doc_date.strftime('%d.%m.%y')}")
+        return (f"Похоже на дубль в {base}: {who}{tail} повторяет "
+                f"{_e(e.hint)} (тот же покупатель, штуки и сумма) — проверить, "
+                f"какой из них лишний, и удалить его")
     if e.side == "upr":
         return f"Внести в налоговую {what}{tail}"
+    if e.kind == "sale":
+        return (f"Проверить {what}{tail}: в управленке её нет — если ошибка, "
+                f"убрать из налоговой; если отгрузка была, сообщить "
+                f"управленке, чтобы внесли")
     return (f"Внести в управленку {what}{tail} "
             f"(или убрать из налоговой, если там ошибка)")
 
@@ -359,6 +377,8 @@ def group_key(e: models.ContourEvent) -> tuple:
     label = ""
     if e.kind in ("payparty", "payop"):
         label = (e.party or "").partition(" → ")[0]
+    if getattr(e, "hint", None):
+        label = "dup"
     return (e.organization, e.kind, e.side, label)
 
 
@@ -417,8 +437,16 @@ def group_head(e: models.ContourEvent, n: int) -> str:
         return (f"Выписать ЭСФ покупателям-юрлицам ({n})" if e.side == "upr"
                 else f"Проверить покупателей-юрлиц: в налоговой больше ({n})")
     what = KIND_PL.get(e.kind, KIND.get(e.kind, e.kind))
+    if getattr(e, "hint", None):
+        base = "налоговой" if e.side == "tax" else "управленке"
+        return (f"Похоже на дубли в {base}: {what} ({n}) — каждая повторяет "
+                f"более ранний документ, проверить и удалить лишние")
     if e.side == "upr":
         return f"Внести в налоговую: {what} ({n})"
+    if e.kind == "sale":
+        return (f"Проверить реализации, которых нет в управленке ({n}): "
+                f"ошибку убрать из налоговой, настоящую отгрузку — сообщить "
+                f"управленке")
     return f"Внести в управленку или убрать из налоговой: {what} ({n})"
 
 
