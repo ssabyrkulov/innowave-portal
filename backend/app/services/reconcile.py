@@ -817,6 +817,10 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                         "amount": round(r["amount"], 2),
                         "is_task": age >= (cfg.grace_days or 0),
                     })
+    # Дубли точек SalesDoc — задача тому, кто ведёт справочник покупателей
+    # (управленка): объединить карточки в SalesDoc и 1С.
+    from .client_dups import task_events
+    out += task_events(db, today)
     return out
 
 

@@ -64,7 +64,7 @@ KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": 
         "customer": "Покупатель", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
         "payparty": "Контрагент оплаты", "payop": "Вид оплаты",
         "qr": "QR-оплата", "salary": "Зарплата", "accountable": "Подотчёт",
-        "osh": "Склад Ош"}
+        "osh": "Склад Ош", "clientdup": "Дубль точки"}
 
 
 def local_now() -> datetime:
@@ -209,6 +209,10 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
     if e.kind == "osh":
         # Перемещение делает в управленке Хайджин тот, кто ведёт склад Ош.
         return cfg.osh_user_id or cfg.upr_user_id
+    if e.kind == "clientdup":
+        # Справочник покупателей ведёт управленка: она же объединяет дубли
+        # точек в SalesDoc и 1С.
+        return cfg.upr_user_id
     if _dup(e):
         # Дубль внутри одной базы разбирает тот, кто её ведёт.
         return cfg.nal_user_id if e.side == "tax" else cfg.upr_user_id
@@ -303,6 +307,12 @@ def task_text(e: models.ContourEvent) -> str:
         return (f"Проверить {_e(e.party)}: в налоговой на {n} шт. больше, "
                 f"чем отгружено в управленке ({_e(e.doc_number)}) — внести "
                 f"отгрузку в управленку или исправить налоговую")
+    if e.kind == "clientdup":
+        debt = float(e.amount or 0)
+        first = (f" — сначала перенести долг {_money(debt)} на оставляемую "
+                 f"карточку" if abs(debt) >= 1 else "")
+        return (f"Объединить дубли точки «{_e(e.party)}» в SalesDoc и 1С: "
+                f"{_e(e.doc_number)}{first}")
     if e.kind == "stock":
         q = float(e.qty or 0)
         # Дробное количество — не штуки (бензин в литрах): единицу не пишем.
@@ -430,6 +440,10 @@ def group_head(e: models.ContourEvent, n: int) -> str:
         tax = (e.party or "").partition(" → ")[0]
         return (f"Провести как оплату покупателя ({n}): в налоговой эти "
                 f"поступления проведены как {_e(tax)}")
+    if e.kind == "clientdup":
+        return (f"Объединить дубли точек в SalesDoc и 1С ({n}): одна точка "
+                f"заведена дважды — одно имя, одна GPS-метка. Лишнюю карточку "
+                f"деактивировать в SalesDoc и объединить в 1С с оставляемой")
     if e.kind == "stock":
         return f"Остатки: найти, почему налоговая не сходится с управленкой ({n})"
     if e.kind == "salary":
