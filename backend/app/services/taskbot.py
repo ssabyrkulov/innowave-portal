@@ -64,7 +64,8 @@ KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": 
         "customer": "Покупатель", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
         "payparty": "Контрагент оплаты", "payop": "Вид оплаты",
         "qr": "QR-оплата", "salary": "Зарплата", "accountable": "Подотчёт",
-        "osh": "Склад Ош", "clientdup": "Дубль точки"}
+        "osh": "Склад Ош", "clientdup": "Дубль точки",
+        "nogps": "Точка без GPS"}
 
 
 def local_now() -> datetime:
@@ -209,7 +210,7 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
     if e.kind == "osh":
         # Перемещение делает в управленке Хайджин тот, кто ведёт склад Ош.
         return cfg.osh_user_id or cfg.upr_user_id
-    if e.kind == "clientdup":
+    if e.kind in ("clientdup", "nogps"):
         # Справочник покупателей ведёт управленка: она же объединяет дубли
         # точек в SalesDoc и 1С.
         return cfg.upr_user_id
@@ -307,6 +308,10 @@ def task_text(e: models.ContourEvent) -> str:
         return (f"Проверить {_e(e.party)}: в налоговой на {n} шт. больше, "
                 f"чем отгружено в управленке ({_e(e.doc_number)}) — внести "
                 f"отгрузку в управленку или исправить налоговую")
+    if e.kind == "nogps":
+        return (f"Новая точка без GPS-метки: «{_e(e.party)}» ({_e(e.doc_number)}), "
+                f"заведена {e.doc_date:%d.%m} — попросить агента поставить метку "
+                f"в SalesDoc; без неё портал не найдёт дубль этой точки")
     if e.kind == "clientdup":
         debt = float(e.amount or 0)
         first = (f" — сначала перенести долг {_money(debt)} на оставляемую "
@@ -440,6 +445,9 @@ def group_head(e: models.ContourEvent, n: int) -> str:
         tax = (e.party or "").partition(" → ")[0]
         return (f"Провести как оплату покупателя ({n}): в налоговой эти "
                 f"поступления проведены как {_e(tax)}")
+    if e.kind == "nogps":
+        return (f"Новые точки без GPS-метки ({n}): попросить агентов поставить "
+                f"метку в SalesDoc — без неё портал не найдёт дубли")
     if e.kind == "clientdup":
         return (f"Объединить дубли точек в SalesDoc и 1С ({n}): одна точка "
                 f"заведена дважды — одно имя, одна GPS-метка. Лишнюю карточку "

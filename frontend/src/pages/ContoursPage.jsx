@@ -23,7 +23,7 @@ const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
   payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
-  qr: 'QR-оплата', salary: 'Зарплата', accountable: 'Подотчёт', osh: 'Склад Ош', clientdup: 'Дубль точки',
+  qr: 'QR-оплата', salary: 'Зарплата', accountable: 'Подотчёт', osh: 'Склад Ош', clientdup: 'Дубль точки', nogps: 'Точка без GPS',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
@@ -196,7 +196,7 @@ function Journal() {
                   </td>
                   <td>{fdate(e.first_seen.slice(0, 10))}</td>
                   <td className="muted">{FIRMS[e.organization] || e.organization}</td>
-                  {['stock', 'customer', 'kkm', 'kkmpay', 'salary', 'accountable', 'clientdup'].includes(e.kind) ? (
+                  {['stock', 'customer', 'kkm', 'kkmpay', 'salary', 'accountable', 'clientdup', 'nogps'].includes(e.kind) ? (
                     // Остаток и покупатель — не документ: товар или юрлицо,
                     // у которых штуки в налоговой не равны управленке.
                     <td>

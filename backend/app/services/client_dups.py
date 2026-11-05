@@ -257,3 +257,51 @@ def task_events(db: Session, today) -> list[dict]:
             "qty": len(close), "amount": debt, "is_task": True,
         })
     return out
+
+
+# Сколько дней назад заведённую точку без метки ещё ловим. Старые карточки
+# без GPS — наследство первой загрузки базы; ставить по ним сотни задач
+# бессмысленно. Задача — приучить агентов ставить метку на новых точках.
+NOGPS_DAYS = 30
+
+
+def nogps_events(db: Session, today, since=None) -> list[dict]:
+    """Новые активные точки без GPS-метки — задачи: без метки дубль не найти.
+
+    Ловим карточки, заведённые за последние NOGPS_DAYS дней (и не раньше
+    «Контроля с»). Поставили метку или деактивировали карточку — задача
+    закрывается сама при следующей синхронизации справочника."""
+    from datetime import date as _date, timedelta as _td
+
+    # Пока зеркало не знает ни одной метки (справочник ещё не
+    # синхронизирован с координатами), «без метки» были бы все точки.
+    if not db.query(models.SalesDocClient.id).filter(
+            models.SalesDocClient.lat.isnot(None)).first():
+        return []
+    lo = today - _td(days=NOGPS_DAYS)
+    if since and since > lo:
+        lo = since
+    names = {a.sd_id: a.name for a in db.query(models.SalesDocAgent).all()}
+    agents: dict = defaultdict(list)
+    for link in db.query(models.SalesDocClientAgent).all():
+        agents[link.client_sd_id].append(names.get(link.agent_sd_id) or link.agent_sd_id)
+    out = []
+    for c in (db.query(models.SalesDocClient)
+              .filter(models.SalesDocClient.active.is_(True),
+                      models.SalesDocClient.lat.is_(None)).all()):
+        try:
+            created = _date.fromisoformat((c.sd_created or "")[:10])
+        except ValueError:
+            continue
+        if created < lo or created > today:
+            continue
+        who = ", ".join(sorted(set(agents.get(c.sd_id, [])))) or "агент не закреплён"
+        out.append({
+            "key": f"hygiene|nogps|{c.sd_id}",
+            "organization": "hygiene", "kind": "nogps", "side": "upr",
+            "doc_date": created,
+            "doc_number": f"{c.sd_id} · {who}",
+            "party": _clean(c.name) or c.sd_id,
+            "qty": 0, "amount": 0, "is_task": True,
+        })
+    return out
