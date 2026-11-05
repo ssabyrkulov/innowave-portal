@@ -704,6 +704,73 @@ def pending_by_item(db: Session, org: str, pending: list[dict],
     return out
 
 
+# За сколько дней назад искать документы, уже пришедшие файлом документов,
+# но ещё не попавшие в журнал проводок своей базы. Файлы из 1С расходятся
+# на минуты-часы; две недели — с большим запасом.
+LAG_DAYS = 14
+
+
+def _norm_num(number: str | None) -> str:
+    n = re.sub(r"^[0\-]+(?=\d)", "", number or "")
+    return re.sub(r"\D.*$", "", n)
+
+
+def journal_lag(db: Session, org: str, pending: list[dict],
+                aliases: dict[str, str], today: date) -> dict[str, dict]:
+    """Документы, которые уже есть в выгрузке документов своей базы, но ещё
+    не в её журнале проводок, — на сколько штук из-за них «врёт» остаток.
+
+    Остаток считается по журналу, а пары документов — по файлам документов.
+    Налоговая выгрузила реализацию №138 (Глобус, 6 пачек L): файл реализаций
+    уже пришёл, и портал спарил её с №136 управленки, а журнал налоговой ещё
+    старый — в нём эти 6 пачек на складе. Выходило «в налоговой лишние 6 шт.»
+    на ровном месте. Документы без пары сюда не входят: их учитывает
+    pending_by_item, и только когда они уже в журнале."""
+    lo = today - timedelta(days=LAG_DAYS)
+    skip = {(p["side"], p["kind"], _norm_num(p.get("number")), p["date"])
+            for p in pending if p["org"] == org}
+    out: dict[str, dict] = {}
+    for side, base in (("tax", "nal"), ("upr", "upr")):
+        seen = _ledger_docs(db, org, base, lo)
+        if seen is None:
+            continue
+        docs: set = set()
+        if side == "tax":
+            T = models.TaxOperation
+            for kind, num, d in (db.query(T.kind, T.doc_number, T.date)
+                                 .filter(T.organization == org, T.date >= lo,
+                                         T.date <= today,
+                                         T.kind.in_(_OUTFLOW + _INFLOW))
+                                 .distinct().all()):
+                docs.add((kind, num, d))
+        else:
+            for kind, model in (("sale", models.Sale),
+                                ("writeoff", models.WriteOff),
+                                ("purchase", models.Purchase)):
+                for num, d in (db.query(model.doc_number, model.date)
+                               .filter(model.organization == org,
+                                       model.date >= lo, model.date <= today)
+                               .distinct().all()):
+                    docs.add((kind, num, d))
+        for kind, num, d in docs:
+            n = _norm_num(num)
+            if not n or (kind, n, d) in seen or (side, kind, n, d) in skip:
+                continue
+            # Не в журнале своей базы: остаток этой базы ещё «до документа».
+            sign = (1 if kind in _OUTFLOW else -1) * (1 if side == "tax" else -1)
+            base_name = "налоговой" if side == "tax" else "управленки"
+            label = (f"{'реализация' if kind == 'sale' else kind} №{n} {base_name} "
+                     f"ещё не в журнале проводок")
+            for product, qty in _doc_lines(db, org, kind, side, num, d, None):
+                key = _norm(product)
+                key = aliases.get(key, key)
+                a = out.setdefault(key, {"qty": 0.0, "docs": []})
+                a["qty"] += sign * qty
+                if label not in a["docs"]:
+                    a["docs"].append(label)
+    return out
+
+
 def _doc_number(doc: str) -> str | None:
     m = re.search(r"(\d+)\s+от", doc or "")
     return (m.group(1).lstrip("0") or "0") if m else None
@@ -737,15 +804,21 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
             continue
         if org in stock_orgs:
             waiting = pending_by_item(db, org, pending or [], aliases)
+            lag = journal_lag(db, org, pending or [], aliases, today)
             for d in stock_diffs(db, org, aliases):
                 w = waiting.get(d["key"])
-                rest = round(d["diff"] - (w["qty"] if w else 0.0), 3)
+                g = lag.get(d["key"])
+                rest = round(d["diff"] - (w["qty"] if w else 0.0)
+                             - (g["qty"] if g else 0.0), 3)
                 if abs(rest) < 0.001:
                     continue
                 note = f"упр {_fmt(d['upr'])} · нал {_fmt(d['nal'])}"
                 if w and abs(w["qty"]) >= 0.001:
                     note += (f"; ещё {_fmt(abs(w['qty']))} — это "
                              f"{', '.join(w['docs'])}, задача уже есть")
+                if g and abs(g["qty"]) >= 0.001:
+                    note += (f"; ещё {_fmt(abs(g['qty']))} — "
+                             f"{', '.join(g['docs'])}")
                 out.append({
                     "key": f"{org}|stock|{d['key']}",
                     "organization": org, "kind": "stock", "side": "tax",
