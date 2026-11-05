@@ -219,3 +219,41 @@ def report(db: Session) -> dict:
         "counts": {k: sum(1 for g in rows if g["kind"] == k) for k in kind_order},
         "groups": rows,
     }
+
+
+def _clean(name: str | None) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\([^)]*\)", " ", name or "")).strip()
+
+
+def task_events(db: Session, today) -> list[dict]:
+    """Подтверждённые дубли точек (одно имя, одна GPS-метка) — задачи для
+    журнала контуров: какую карточку оставить, какие закрыть.
+
+    Считаются только активные карточки: деактивировали лишнюю в SalesDoc —
+    в группе осталась одна, и задача закрылась сама. Ключ — состав группы,
+    поэтому из трёх карточек закрыли одну — старая задача закрывается, а
+    на оставшиеся две приходит новая. Пока в зеркале нет ни одной GPS-метки,
+    задач нет вовсе: «дублей не найдено» тогда значило бы «не искали»."""
+    rep = report(db)
+    if not rep["with_geo"]:
+        return []
+    out = []
+    for g in rep["groups"]:
+        if g["kind"] != "дубль":
+            continue
+        active = [c for c in g["cards"] if c["active"]]
+        if len(active) < 2:
+            continue
+        keep = next((c for c in g["cards"] if c.get("keep") and c["active"]), active[0])
+        close = [c for c in active if c is not keep]
+        debt = round(sum(c["debt"] for c in close if abs(c["debt"]) >= 1), 2)
+        out.append({
+            "key": "hygiene|clientdup|" + "+".join(sorted(c["sd_id"] for c in active)),
+            "organization": "hygiene", "kind": "clientdup", "side": "upr",
+            "doc_date": today,
+            "doc_number": (f"оставить {keep['sd_id']} · закрыть "
+                           + ", ".join(c["sd_id"] for c in close)),
+            "party": _clean(keep["name"]) or keep["sd_id"],
+            "qty": len(close), "amount": debt, "is_task": True,
+        })
+    return out
