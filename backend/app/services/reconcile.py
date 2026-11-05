@@ -819,8 +819,9 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                     })
     # Дубли точек SalesDoc — задача тому, кто ведёт справочник покупателей
     # (управленка): объединить карточки в SalesDoc и 1С.
-    from .client_dups import task_events
+    from .client_dups import nogps_events, task_events
     out += task_events(db, today)
+    out += nogps_events(db, today, since)
     return out
 
 
