@@ -296,10 +296,13 @@ def task_text(e: models.ContourEvent) -> str:
     if e.kind == "accountable":
         from .reconcile import ACCOUNTABLE_DAYS
         where = "управленке" if e.side == "upr" else "налоговой"
+        num = e.doc_number or ""
+        late = ("" if "дольше" in num
+                else f", дольше {ACCOUNTABLE_DAYS} дней")
         return (f"Подотчёт в {where}: «{_e(e.party)}» не отчитался за "
-                f"{_money(e.amount)} сом (выдано {_e(e.doc_number)}, дольше "
-                f"{ACCOUNTABLE_DAYS} дней) — получить авансовый отчёт или "
-                f"вернуть деньги, иначе удержать из ближайшей зарплаты")
+                f"{_money(e.amount)} сом (выдано {_e(num)}{late}) — получить "
+                f"авансовый отчёт или вернуть деньги, иначе удержать из "
+                f"ближайшей зарплаты")
     if e.kind == "customer":
         n = _money(abs(float(e.qty or 0)))
         if e.side == "upr":

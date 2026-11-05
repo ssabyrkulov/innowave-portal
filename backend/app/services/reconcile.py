@@ -202,8 +202,15 @@ def accountable_overdue(db: Session, org: str, base: str, today: date) -> list[d
     """Подотчёт, по которому нет отчёта дольше ACCOUNTABLE_DAYS дней.
 
     Выданное под отчёт (Дт 1520) закрывается авансовым отчётом или
-    возвратом (Кт 1520). Закрытие идёт в счёт самых ранних выдач; что из
-    выданного раньше срока так и не закрыто — просрочено."""
+    возвратом (Кт 1520). Закрытие идёт в счёт самых ранних выдач.
+
+    Задача появляется, только когда хоть одна незакрытая выдача старше
+    срока: свежие выдачи сами по себе — не долг. Но сумма в задаче — весь
+    открытый остаток человека, как в карточке 1520 в 1С, а не только
+    просроченная часть: иначе портал и 1С показывают разные цифры, а
+    свежие выдачи всплывали бы отдельной задачей неделей позже.
+    Просроченная часть — отдельно (overdue), отсчёт — от самой ранней
+    незакрытой выдачи (since)."""
     E = models.LedgerEntry
     q = base_scope(db.query(
         E.date, E.debit_account, E.debit_sub, E.credit_account, E.credit_sub,
@@ -224,16 +231,20 @@ def accountable_overdue(db: Session, org: str, base: str, today: date) -> list[d
     out = []
     for who, rows in issued.items():
         left = closed.get(who, 0.0)
-        overdue, since = 0.0, None
+        overdue, total, since = 0.0, 0.0, None
         for d, a in sorted(rows):
             covered = min(a, left)
             left -= covered
             rest = a - covered
-            if rest > 0.005 and d <= cutoff:
+            if rest <= 0.005:
+                continue
+            total += rest
+            since = since or d
+            if d <= cutoff:
                 overdue += rest
-                since = since or d
         if overdue >= 1 and who:
-            out.append({"person": who, "amount": round(overdue, 2), "since": since})
+            out.append({"person": who, "amount": round(total, 2),
+                        "overdue": round(overdue, 2), "since": since})
     return out
 
 
@@ -906,6 +917,16 @@ def staff_orgs(cfg: "models.TaskBotSettings") -> set[str]:
     return split_orgs(cfg.staff_orgs)
 
 
+def _accountable_number(g: dict) -> str:
+    """«с 26.10.25» — весь остаток просрочен; иначе ещё и сколько из него
+    старше срока: «с 26.10.25, из них 67 374 дольше 7 дн.»."""
+    since = f"с {g['since']:%d.%m.%y}"
+    if g["amount"] - g["overdue"] < 1:
+        return since
+    part = f"{g['overdue']:,.0f}".replace(",", " ")
+    return f"{since}, из них {part} дольше {ACCOUNTABLE_DAYS} дн."
+
+
 def _staff_events(db: Session, org: str, today: date) -> list[dict]:
     """Зарплата и подотчёт — сроки внутри каждой базы, а не сверка двух.
 
@@ -930,7 +951,7 @@ def _staff_events(db: Session, org: str, today: date) -> list[dict]:
             out.append({
                 "key": f"{org}|accountable|{side}|{g['person']}",
                 "organization": org, "kind": "accountable", "side": side,
-                "doc_date": g["since"], "doc_number": f"с {g['since']:%d.%m.%y}",
+                "doc_date": g["since"], "doc_number": _accountable_number(g),
                 "party": g["person"], "qty": 0,
                 "amount": g["amount"], "is_task": True,
             })
