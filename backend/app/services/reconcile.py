@@ -82,25 +82,47 @@ def parse_aliases(text: str | None) -> dict[str, str]:
 DEFAULT_PARTY_ALIASES = ("ИП Мендалы уулу = Байго Трейд\n"
                          "ИП Атабекова = Байго Трейд")
 
+# Связки, которые действуют всегда, что бы ни было в настройках. Байго платит
+# в налоговой через разные ИП, и список этих ИП растёт: 05.11.2026 добавилась
+# ИП Зикирия кызы — и портал поставил «исправить контрагента» на оплату,
+# которая записана верно. «ИП *» — любой ИП.
+BUILTIN_PARTY_ALIASES = "ИП * = Байго Трейд"
+
+# Любой ИП: в паре вместо слов имени — этот знак.
+ANY_IP = frozenset({"*ип"})
+
 
 def party_aliases_text(cfg) -> str:
     return DEFAULT_PARTY_ALIASES if cfg.party_aliases is None else cfg.party_aliases
 
 
+def _alias_side(text: str) -> frozenset:
+    """Слова имени для связки; «ИП *» — любой ИП."""
+    from ..routers.tax import _customer_tokens
+
+    if re.fullmatch(r"\s*ип\s*\*\s*", text, re.IGNORECASE):
+        return ANY_IP
+    return _customer_tokens(text)
+
+
 def parse_party_aliases(text: str | None) -> list[tuple[frozenset, frozenset]]:
     """«в налоговой = в управленке» по строке → пары слов имён. Сравнение —
     по словам без кода карточки и формы, поэтому «Байго Трейд» подходит к
-    «БАЙГО ТРЕЙД (j8_530) ХАЙДЖИН»."""
-    from ..routers.tax import _customer_tokens
-
+    «БАЙГО ТРЕЙД (j8_530) ХАЙДЖИН». «ИП * = Байго Трейд» — любой ИП."""
     out = []
     for line in (text or "").splitlines():
         if "=" not in line:
             continue
-        a, b = (_customer_tokens(x) for x in line.split("=", 1))
+        a, b = (_alias_side(x) for x in line.split("=", 1))
         if a and b:
             out.append((a, b))
     return out
+
+
+def _alias_fits(side: frozenset, name: str | None, tokens: frozenset) -> bool:
+    if side == ANY_IP:
+        return bool(re.match(r"\s*ип\s", (name or "") + " ", re.IGNORECASE))
+    return side <= tokens
 
 
 def stock_by_item(db: Session, org: str, base: str,
@@ -506,10 +528,15 @@ def _party_mismatch(db: Session, org: str, pairs: list,
         return []
     aliases = _party_aliases(db, org)
 
+    manual = (manual or []) + parse_party_aliases(BUILTIN_PARTY_ALIASES)
+
     def linked(u, n):
         ut, nt = _customer_tokens(u["party"]), _customer_tokens(n["party"])
+        un, nn = u["party"], n["party"]
         return (ut, nt) in aliases or any(
-            (a <= nt and b <= ut) or (a <= ut and b <= nt) for a, b in manual or [])
+            (_alias_fits(a, nn, nt) and _alias_fits(b, un, ut))
+            or (_alias_fits(a, un, ut) and _alias_fits(b, nn, nt))
+            for a, b in manual)
     return [(u, n) for u, n in odd if not linked(u, n)]
 
 

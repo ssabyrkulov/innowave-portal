@@ -257,8 +257,8 @@ export default function TaskBotPanel() {
           </label>
           <label className="tb-aliases">
             Один покупатель — разные контрагенты, по строке «в налоговой = в
-            управленке» (Байго в налоговой платит через ИП): такая оплата не
-            задача «исправить контрагента»
+            управленке», «ИП * = …» — любой ИП. Байго через любого ИП
+            уже учтён: такая оплата не задача «исправить контрагента»
             <textarea rows={2} value={form.party_aliases}
               onChange={(e) => setForm({ ...form, party_aliases: e.target.value })} />
           </label>
