@@ -186,6 +186,127 @@ function SalesGroupsCard() {
   )
 }
 
+// «Нужно решение» — первым экраном главной: что ждёт человека сегодня,
+// по срочности, с причиной и ссылкой туда, где это решается. Графики —
+// ниже. Каждый источник грузится отдельно: если один недоступен (нет
+// прав, бот не настроен), остальные строки всё равно показываются.
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100
+  if (m10 === 1 && m100 !== 11) return one
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few
+  return many
+}
+
+function DecisionsCard({ data }) {
+  const [appr, setAppr] = useState(null)
+  const [tasks, setTasks] = useState(null)
+
+  useEffect(() => {
+    api.approvalsSummary().then(setAppr).catch(() => setAppr(false))
+    api.taskbotTasks().then(setTasks).catch(() => setTasks(false))
+  }, [])
+
+  const rows = []
+  const brief = []
+
+  if (appr && appr.inbox > 0) {
+    rows.push({
+      level: appr.overdue > 0 ? 'bad' : 'attn',
+      title: `Заявки ждут вашего решения`,
+      why: appr.overdue > 0
+        ? `${appr.overdue} ${plural(appr.overdue, 'просрочена', 'просрочены', 'просрочено')} на ${shortMoney(appr.overdue_sum)}`
+        : 'по срокам всё в порядке',
+      num: `${appr.inbox} · ${shortMoney(appr.inbox_sum)}`,
+      to: '/approvals',
+    })
+    brief.push(`${appr.inbox} ${plural(appr.inbox, 'заявка ждёт', 'заявки ждут', 'заявок ждут')} вас`)
+  }
+
+  if (data.checks.critical > 0) {
+    rows.push({
+      level: 'bad',
+      title: 'Критичные сигналы контроля',
+      why: data.checks.warning > 0 ? `и ещё ${data.checks.warning} на внимание` : 'нужно разобрать',
+      num: data.checks.critical,
+      to: '/checks',
+    })
+    brief.push(`${data.checks.critical} ${plural(data.checks.critical, 'критичный сигнал', 'критичных сигнала', 'критичных сигналов')}`)
+  }
+
+  if (data.payments.overdue_count > 0) {
+    rows.push({
+      level: 'bad',
+      title: 'Просроченные платежи',
+      why: 'срок прошёл, а оплата не отмечена',
+      num: data.payments.overdue_count,
+      to: '/calendar',
+    })
+  }
+
+  if (tasks && tasks.rows) {
+    const open = tasks.rows.filter((t) => t.state === 'open')
+    const lim = tasks.escalate_days || 3
+    const byPerson = new Map()
+    for (const t of open) {
+      const who = t.responsible || 'Без ответственного'
+      const g = byPerson.get(who) || { who, role: t.role, n: 0, late: 0, oldest: 0 }
+      g.n += 1
+      if (t.age_days >= lim) g.late += 1
+      g.oldest = Math.max(g.oldest, t.age_days)
+      byPerson.set(who, g)
+    }
+    const people = [...byPerson.values()].sort((a, b) => b.late - a.late || b.n - a.n)
+    for (const g of people.slice(0, 4)) {
+      rows.push({
+        level: g.late > 0 ? 'attn' : 'ok',
+        title: `Задачи 1С · ${g.who}`,
+        why: [g.role, g.late > 0 ? `${g.late} дольше ${lim} дн., самой старой ${g.oldest} дн.` : 'без просрочки']
+          .filter(Boolean).join(' · '),
+        num: g.n,
+        to: '/contours',
+      })
+    }
+    const late = people.reduce((s, g) => s + g.late, 0)
+    if (open.length > 0) {
+      brief.push(`${open.length} ${plural(open.length, 'задача', 'задачи', 'задач')} у бухгалтерии` +
+        (late > 0 ? ` (${late} просрочено)` : ''))
+    }
+  }
+
+  const order = { bad: 0, attn: 1, ok: 2 }
+  rows.sort((a, b) => order[a.level] - order[b.level])
+  const loading = appr === null || tasks === null
+
+  return (
+    <section className="decide">
+      <div className="decide-head">
+        <h2>Нужно решение</h2>
+        {loading && <span className="muted">загрузка…</span>}
+      </div>
+      {brief.length > 0 && (
+        <div className="decide-brief">Сегодня: {brief.join(', ')}.</div>
+      )}
+      {!loading && rows.length === 0 ? (
+        <div className="decide-empty">✓ Сейчас ничего не ждёт вашего решения</div>
+      ) : (
+        <div className="decide-list">
+          {rows.map((r, i) => (
+            <Link key={i} to={r.to} className={`decide-row is-${r.level}`}>
+              <span className="decide-dot" />
+              <span>
+                <div className="decide-title">{r.title}</div>
+                <div className="decide-why">{r.why}</div>
+              </span>
+              <span className="decide-num">{r.num}</span>
+              <span className="decide-go">открыть →</span>
+            </Link>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export default function DashboardPage() {
   const { user } = useAuth()
   const [data, setData] = useState(null)
@@ -620,6 +741,8 @@ function DesktopDash({ data }) {
         </span>
       </div>
 
+      <DecisionsCard data={data} />
+
       <div className="summary-bar">
         {data.cash && (
           <button
@@ -755,6 +878,8 @@ function MobileDash({ data }) {
           {crit ? `🛡 ${crit} крит` : warn ? `🛡 ${warn} внимание` : '🛡 всё чисто'}
         </Link>
       </div>
+
+      <DecisionsCard data={data} />
 
       {/* Главная цифра — деньги в моменте (тап — детализация по счетам) */}
       {data.cash && (

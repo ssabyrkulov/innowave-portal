@@ -3227,3 +3227,181 @@ th.num .th-sort { justify-content: flex-end; }
 .tb-enabled { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; font-weight: normal; }
 .tb-enabled input { width: auto; margin: 0; }
 .ce-note { flex: 1; min-width: 240px; }
+
+/* =====================================================================
+   Тема «Командный центр» — поверх Ventriloc.
+   Приёмы операционных панелей: сначала решения, потом графики; один
+   спокойный акцент; цвета статусов одинаковые на каждой странице
+   (зелёный — в порядке, жёлтый — посмотреть, красный — просрочено).
+   Переопределяем токены — страницы, построенные на var(--…), меняются
+   сами; ниже — точечные правки компонентов, где Ventriloc был жёстко
+   задан (острые углы, кнопки-призраки, «шёпотный» вес заголовков).
+   ===================================================================== */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --ivory: #eef4ff;
+  --border: #e4e7ec;
+  --border-strong: #d0d5dd;
+
+  --text: #101828;
+  --muted: #475467;
+  --faint: #98a2b3;
+
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-soft: #e8efff;
+  --primary-glow: rgba(37, 99, 235, 0.22);
+  --brass: #475467;
+
+  --action: #2563eb;
+  --action-hover: #1d4ed8;
+
+  --side-bg: #ffffff;
+  --side-bg2: #f8fafc;
+  --side-text: #475467;
+  --side-active: #1d4ed8;
+  --side-hover: #f2f4f7;
+  --side-active-bg: #e8efff;
+  --side-border: #e4e7ec;
+
+  /* Статусы — единые для всего портала */
+  --ok: #067647;
+  --ok-soft: #ecfdf3;
+  --attn: #b54708;
+  --attn-soft: #fffaeb;
+  --bad: #d92d20;
+  --bad-soft: #fef3f2;
+
+  --in: var(--ok);
+  --in-soft: var(--ok-soft);
+  --out: var(--bad);
+  --out-soft: var(--bad-soft);
+  --planned: #475467;
+  --planned-soft: #f2f4f7;
+  --warn: var(--attn);
+  --warn-soft: var(--attn-soft);
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-pop: 0 16px 40px -12px rgba(16, 24, 40, 0.25);
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 12px;
+
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.brand-title,
+.page-header h1,
+.calendar-header h1,
+.chart-title,
+.section-title,
+.modal h2,
+.mdash-greet {
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.summary-value,
+.mdash-kpi-value {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.page-header h1,
+.calendar-header h1,
+.mdash-greet {
+  font-size: 26px;
+}
+
+.brand-mark { border-radius: var(--r-md); background: var(--primary); }
+.avatar { border-radius: 50%; }
+
+.nav-link { border-radius: var(--r-sm); }
+.nav-link.active { box-shadow: none; font-weight: 600; }
+
+.btn,
+.btn-sm,
+.btn-block {
+  border-radius: var(--r-sm);
+  border-color: var(--border-strong);
+  font-weight: 500;
+}
+.btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--faint);
+}
+.btn-primary,
+.btn-primary:hover { color: #fff; }
+.btn-primary { background: var(--action); border-color: var(--action); }
+.btn-primary:hover { background: var(--action-hover); border-color: var(--action-hover); }
+
+.summary-card:hover { transform: none; border-color: var(--border-strong); }
+.summary-link:hover { border-color: var(--primary); }
+
+/* ---------- Блок «Нужно решение» на главной ---------- */
+.decide {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.decide-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.decide-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.decide-brief { color: var(--muted); font-size: 13.5px; padding: 10px 20px 0; line-height: 1.5; }
+.decide-list { display: flex; flex-direction: column; padding: 8px 8px 10px; }
+.decide-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  text-decoration: none;
+  color: var(--text);
+}
+.decide-row:hover { background: var(--surface-2); }
+.decide-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.decide-row.is-bad .decide-dot { background: var(--bad); }
+.decide-row.is-attn .decide-dot { background: var(--attn); }
+.decide-row.is-ok .decide-dot { background: var(--ok); }
+.decide-title { font-weight: 500; }
+.decide-why { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.decide-num { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.decide-go { color: var(--primary); font-size: 13px; white-space: nowrap; }
+.decide-empty { padding: 14px 20px 18px; color: var(--ok); }
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.status-pill.is-bad { background: var(--bad-soft); color: var(--bad); }
+.status-pill.is-attn { background: var(--attn-soft); color: var(--attn); }
+.status-pill.is-ok { background: var(--ok-soft); color: var(--ok); }
+
+@media (max-width: 840px) {
+  .decide-row { grid-template-columns: 10px 1fr auto; }
+  .decide-go { display: none; }
+}
+
+/* Графики: обычные месяцы — мягкий акцент, текущий — полный */
+.dash-bar { fill: #c7d7fe; }
+.dash-bar-cur { fill: var(--primary); }
+.dash-bar:hover { fill: #93b4fd; }
