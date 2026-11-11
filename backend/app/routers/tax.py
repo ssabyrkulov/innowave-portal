@@ -906,6 +906,38 @@ def _sale_classes(db: Session, org: str) -> dict:
             "refs": refs, "names": names, "upr_key": return_key, "tax_key": tax_key}
 
 
+# Недостача при приёмке. В управленке её списывают (Дт 7190 Кт 1610), а в
+# налоговой партию продают целиком, как в инвойсе: за недостачу перед
+# налоговой пришлось бы отчитываться. Фура StarKid 02.10.2026: пришло на
+# 1 020 шт меньше, управленка списала (№67) и отгрузила Байго 18 294, а
+# налоговая продала ИП все 19 314 — и сверка показывала «в налоговой на
+# 1 020 больше». Это схема, а не ошибка: списанная недостача покрывает
+# такой же излишек в налоговой у покупателя, которому эту партию отгрузили
+# в ближайшие SHORTAGE_DAYS дней.
+SHORTAGE_ACCOUNT = "7190"
+SHORTAGE_DAYS = 7
+
+
+def _receipt_shortages(db: Session, org: str, since: date) -> list[dict]:
+    """Списания недостачи при приёмке в управленке: дата, штуки, номер."""
+    from .ledger import base_scope
+
+    E = models.LedgerEntry
+    docs: dict = {}
+    for d, doc, qty in base_scope(db.query(E.date, E.doc, E.credit_qty).filter(
+            E.organization == org, E.debit_account == SHORTAGE_ACCOUNT,
+            E.date >= since - timedelta(days=SHORTAGE_DAYS)), "upr").all():
+        x = docs.setdefault(doc or f"{d}", {"date": d, "qty": 0.0,
+                                             "number": _doc_no(doc)})
+        x["qty"] += float(qty or 0)
+    return [x for x in docs.values() if x["qty"] >= 1]
+
+
+def _doc_no(doc: str | None) -> str:
+    m = re.search(r"\s(\d+)\s+от\s", doc or "")
+    return m.group(1) if m else ""
+
+
 def customer_diffs(db: Session, org: str, since: date, cutoff: date,
                    cls: dict | None = None) -> list[dict]:
     """Сверка продаж юрлицам по покупателю: отгружено (за вычетом
@@ -936,6 +968,16 @@ def customer_diffs(db: Session, org: str, since: date, cutoff: date,
             c["u_all"] += u["qty"] or 0
             if u["date"] <= cutoff:
                 c["u_due"] += u["qty"] or 0
+
+    # Недостача при приёмке — тому покупателю, кому партию отгрузили первым
+    # после списания (в пределах SHORTAGE_DAYS дней).
+    for x in _receipt_shortages(db, org, since):
+        after = [(u["date"], ukey[i]) for i, u in enumerate(upr)
+                 if ukey[i] and u["date"] >= since
+                 and 0 <= (u["date"] - x["date"]).days <= SHORTAGE_DAYS]
+        if after:
+            c = card(min(after, key=lambda a: a[0])[1])
+            c.setdefault("short", []).append(x)
 
     # Возврат уменьшает отгрузку, только если покупателю в периоде есть что
     # возвращать: возврат 2026-го за продажу 2025-го (Туратов, 637 шт) —
@@ -980,12 +1022,18 @@ def customer_diffs(db: Session, org: str, since: date, cutoff: date,
 
     out = []
     for k, c in cust.items():
+        short = sum(x["qty"] for x in c.get("short", []))
         missing = round(c["u_due"] - c["t_all"])
-        extra = round(c["t_due"] - c["u_all"])
+        extra = round(c["t_due"] - c["u_all"] - short)
         if missing < 1 and extra < 1:
             continue
         side = "upr" if missing >= 1 else "tax"
         hint = ""
+        if short and side == "tax":
+            hint = "; из излишка " + ", ".join(
+                f"{_qty(x['qty'])} шт — недостача при приёмке, списана в "
+                f"управленке (№{x['number']} от {x['date']:%d.%m})"
+                for x in c["short"])
         if side == "upr" and c["docs"]:
             last = sorted(c["docs"], key=lambda u: u["date"], reverse=True)[:3]
             # Налоговая по нему пуста — значит, не выписаны именно эти; если
