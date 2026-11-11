@@ -811,6 +811,25 @@ def _party_aliases(db: Session, org: str) -> set:
     return out
 
 
+def _esf_links(db: Session, org: str) -> dict:
+    """Точки управленки, которым налоговая выписывает ЭСФ на юрлицо: слова
+    имени точки → имя юрлица. «Клин хаус (j1_150)» в управленке — это
+    ИП её владельца в налоговой: реализации на ИП ссылаются на номера
+    документов точки. Байго и другие юрлица управленки сюда не входят — у них
+    имя юрлица уже в управленке."""
+    upr = _upr_docs(db, org, "sale")
+    by_number = _numbers_index(upr)
+    out: dict = {}
+    for t in _tax_doc_rows(db, org, "sale"):
+        if not _is_legal(t["party"]):
+            continue
+        for i in _ref_targets(upr, by_number, t):
+            if not _is_legal(upr[i]["party"]):
+                out.setdefault(_customer_tokens(upr[i]["party"]),
+                               _clean_customer(t["party"]))
+    return out
+
+
 def _sale_classes(db: Session, org: str) -> dict:
     """Кому продано: юрлицу (ключ покупателя) или в розницу (None).
 
@@ -2171,13 +2190,13 @@ def scan_contour_events(db: Session) -> dict:
             # У остатка цифры меняются, а задача та же: товар не сошёлся.
             e.doc_number, e.qty = r["doc_number"], r["qty"]
             e.is_task = r["is_task"]
-            if r["kind"] in ("customer", "kkm", "kkmpay", "payparty", "payop", "qr", "salary", "accountable", "osh", "clientdup", "nogps"):
+            if r["kind"] in ("customer", "kkm", "kkmpay", "payparty", "payop", "paykkm", "qr", "salary", "accountable", "osh", "clientdup", "nogps"):
                 e.doc_date, e.party = r["doc_date"], r["party"]
             if r["kind"] in ("kkmpay", "salary", "accountable", "osh", "clientdup"):
                 e.amount = r["amount"]
 
     for key, e in existing.items():
-        if (extra is None and e.kind in ("stock", "payment", "kkmpay", "payparty", "payop", "qr", "salary", "accountable", "osh", "clientdup", "nogps")) or (
+        if (extra is None and e.kind in ("stock", "payment", "kkmpay", "payparty", "payop", "paykkm", "qr", "salary", "accountable", "osh", "clientdup", "nogps")) or (
                 customer_rows is None and e.kind in ("customer", "kkm")):
             # Сверка остатков упала — её события не трогаем, иначе все они
             # «закрылись бы сами» и в Telegram ушли бы ложные галочки.

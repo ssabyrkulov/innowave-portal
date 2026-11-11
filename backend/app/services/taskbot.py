@@ -63,6 +63,7 @@ KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": 
         "purchase": "Поступление", "payment": "Оплата", "stock": "Остаток",
         "customer": "Покупатель", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
         "payparty": "Контрагент оплаты", "payop": "Вид оплаты",
+        "paykkm": "Оплата ИП на ККМ",
         "qr": "QR-оплата", "salary": "Зарплата", "accountable": "Подотчёт",
         "osh": "Склад Ош", "clientdup": "Дубль точки",
         "nogps": "Точка без GPS"}
@@ -221,7 +222,7 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
         # Реализацию сначала проводят в управленке; если она есть только в
         # налоговой, первый вопрос — к налоговой: откуда она взялась.
         return cfg.nal_user_id
-    if e.kind in ("stock", "payparty", "payop") or e.side == "upr":
+    if e.kind in ("stock", "payparty", "payop", "paykkm") or e.side == "upr":
         return cfg.nal_user_id
     return cfg.upr_user_id
 
@@ -271,6 +272,15 @@ def task_text(e: models.ContourEvent) -> str:
         return (f"Провести как оплату покупателя поступление {what}: в "
                 f"налоговой оно проведено как {_e(tax_side)}, а по управленке "
                 f"это оплата покупателя «{_e(who)}» — покупатель {_e(need)}")
+    if e.kind == "paykkm":
+        # party: «точка → ИП [→ QR дд.мм чч:мм]».
+        point, legal, qr = _paykkm_parts(e)
+        when = f", QR {qr}" if qr else ""
+        return (f"Перенести с «ККМ» на «{_e(legal)}» оплату №{_e(e.doc_number)} "
+                f"от {e.doc_date:%d.%m.%y} на {_money(e.amount)}{when}: это "
+                f"оплата точки «{_e(point)}», а ей выписываются ЭСФ на ИП — "
+                f"на «ККМ» ИП остаётся должником, а продажа попадает в выручку "
+                f"дважды. Чек ККМ на эту оплату не выбивать")
     if e.kind == "qr":
         # doc_number — время оплаты, party — комментарий плательщика.
         note = "" if e.party in (None, "", "QR") else f" (комментарий: «{_e(e.party)}»)"
@@ -406,6 +416,15 @@ def alert_text(cfg, e, users: dict[int, models.User]) -> str:
             f"{task_text(e)}\nОтветственный: {_who(who)}")
 
 
+def _paykkm_parts(e) -> tuple[str, str, str]:
+    from ..routers.tax import _clean_customer
+    parts = (e.party or "").split(" → ")
+    point = _clean_customer(parts[0]) if parts else ""
+    legal = parts[1] if len(parts) > 1 else ""
+    qr = parts[2].removeprefix("QR ") if len(parts) > 2 else ""
+    return point, legal, qr
+
+
 def group_key(e: models.ContourEvent) -> tuple:
     """Задачи, которые идут одним сообщением и одной строкой списка: та же
     фирма, тот же вид, та же сторона; у ошибок оплат в налоговой — ещё и тот
@@ -413,6 +432,8 @@ def group_key(e: models.ContourEvent) -> tuple:
     label = ""
     if e.kind in ("payparty", "payop"):
         label = (e.party or "").partition(" → ")[0]
+    if e.kind == "paykkm":
+        label = _paykkm_parts(e)[1]
     if _dup(e):
         label = "dup"
     return (e.organization, e.kind, e.side, label)
@@ -425,6 +446,11 @@ def _item_text(e: models.ContourEvent) -> str:
         upr = _clean_customer((e.party or "").partition(" → ")[2])
         return (f"№{_e(e.doc_number)} от {e.doc_date:%d.%m} на "
                 f"{_money(e.amount)} — по управленке «{_e(upr)}»")
+    if e.kind == "paykkm":
+        point, _, qr = _paykkm_parts(e)
+        when = f", QR {qr}" if qr else ""
+        return (f"№{_e(e.doc_number)} от {e.doc_date:%d.%m} на "
+                f"{_money(e.amount)}{when} — «{_e(point)}»")
     if e.kind in ("salary", "accountable"):
         return f"{_e(e.party)} — {_money(e.amount)} сом ({_e(e.doc_number)})"
     if e.kind == "qr":
@@ -444,6 +470,12 @@ def group_head(e: models.ContourEvent, n: int) -> str:
         return (f"Исправить контрагента в оплатах ({n}): в налоговой они "
                 f"записаны на «{_e(_clean_customer(tax))}», а по управленке это "
                 f"оплаты других покупателей — для розницы должно быть «ККМ»")
+    if e.kind == "paykkm":
+        legal = _paykkm_parts(e)[1]
+        return (f"Перенести с «ККМ» на «{_e(legal)}» оплаты ({n}): точке "
+                f"выписываются ЭСФ на ИП, а её оплаты в налоговой записаны на "
+                f"розницу — ИП остаётся должником, продажа идёт в выручку "
+                f"дважды. Чеки ККМ на них не выбивать")
     if e.kind == "payop":
         tax = (e.party or "").partition(" → ")[0]
         return (f"Провести как оплату покупателя ({n}): в налоговой эти "
