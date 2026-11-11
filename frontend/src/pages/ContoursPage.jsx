@@ -22,7 +22,7 @@ const pairs = (n) => {
 const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
-  payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
+  payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', taxref: 'Номер отгрузки', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
   qr: 'QR-оплата', salary: 'Зарплата', accountable: 'Подотчёт', osh: 'Склад Ош', clientdup: 'Дубль точки', nogps: 'Точка без GPS',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
