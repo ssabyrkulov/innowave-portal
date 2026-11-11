@@ -540,42 +540,6 @@ def _party_mismatch(db: Session, org: str, pairs: list,
     return [(u, n) for u, n in odd if not linked(u, n)]
 
 
-def _kkm_paid_esf(db: Session, org: str, pairs: list) -> list:
-    """Оплаты точек-ИП, которые налоговая записала на «ККМ».
-
-    Точке «Клин хаус» налоговая выписывает ЭСФ на ИП владельца, а её
-    QR-оплату — без имени плательщика в выписке — разносит на «ККМ»: ИП
-    остаётся должником за все ЭСФ, а одна продажа попадает в выручку дважды —
-    ЭСФ на ИП и розничным чеком. Пара оплат та же, что в сверке оплат;
-    точка — ИП, если налоговые реализации на юрлицо ссылаются на её номера.
-    → [(оплата управленки, оплата налоговой, имя юрлица)]."""
-    from ..routers.tax import _RETAIL_SUMMARY, _customer_tokens, _esf_links
-
-    retail = [(u, n) for u, n in pairs if _RETAIL_SUMMARY.search(n["party"] or "")]
-    if not retail:
-        return []
-    links = _esf_links(db, org)
-    out = []
-    for u, n in retail:
-        legal = links.get(_customer_tokens(u["party"]))
-        if legal:
-            out.append((u, n, legal))
-    return out
-
-
-def _qr_time(db: Session, org: str, amount: float, day: date) -> str:
-    """Когда точка заплатила по QR: оплата той же суммы (до сома) из отчёта
-    банка за QR_DAYS до даты в 1С — банк зачисляет QR с задержкой. Только
-    если такая QR одна: две QR по 2 677 в один день — это разные точки, и
-    назвать время одной из них значит угадать."""
-    Q = models.QrPayment
-    rows = (db.query(Q.paid_at).filter(
-        Q.organization == org, Q.date <= day,
-        Q.date >= day - timedelta(days=QR_DAYS),
-        Q.amount >= amount - 1, Q.amount <= amount + 1).limit(2).all())
-    return f"{rows[0][0]:%d.%m %H:%M}" if len(rows) == 1 else ""
-
-
 def pair_payments(upr: list[dict], nal: list[dict],
                   days_max: int = PAYMENT_DAYS) -> dict:
     """Пары оплат: сначала — та же дата и сумма, потом оставшимся — ±3 дня.
@@ -913,17 +877,6 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                     "doc_date": n["date"], "doc_number": num,
                     "party": f"{n['party']} → {u['party']}", "qty": 0,
                     "amount": round(n["amount"], 2), "is_task": age_ok(n["date"]),
-                })
-            for u, n, legal in _kkm_paid_esf(db, org, res["pairs"]):
-                num = _doc_number(n["doc"])
-                qr = _qr_time(db, org, n["amount"], n["date"])
-                out.append({
-                    "key": f"{org}|paykkm|{n['date'].isoformat()}|{num}|{n['amount']:.2f}",
-                    "organization": org, "kind": "paykkm", "side": "tax",
-                    "doc_date": n["date"], "doc_number": num,
-                    "party": f"{u['party']} → {legal}" + (f" → QR {qr}" if qr else ""),
-                    "qty": 0, "amount": round(n["amount"], 2),
-                    "is_task": age_ok(n["date"]),
                 })
             other = _other_inflows(db, org, since - timedelta(days=PAYMENT_DAYS))
             res["only_upr"], wrong = _wrong_operation(res["only_upr"], other)

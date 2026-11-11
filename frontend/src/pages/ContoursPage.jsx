@@ -22,7 +22,7 @@ const pairs = (n) => {
 const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
-  payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты', paykkm: 'Оплата ИП на ККМ',
+  payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
   qr: 'QR-оплата', salary: 'Зарплата', accountable: 'Подотчёт', osh: 'Склад Ош', clientdup: 'Дубль точки', nogps: 'Точка без GPS',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
@@ -208,7 +208,7 @@ function Journal() {
                   ) : (
                     <td>
                       {KINDS[e.kind] || e.kind} {e.number || '—'}
-                      <span className="muted"> · {['payparty', 'payop', 'paykkm'].includes(e.kind)
+                      <span className="muted"> · {['payparty', 'payop'].includes(e.kind)
                         ? 'ошибка в налоговой' : e.kind === 'qr'
                           ? 'есть в банке, нет в управленке' : e.kind === 'osh'
                           ? `нет перемещения Ош → Бишкек под продажу Инновейва (${e.party || ''})` : e.side === 'upr'
