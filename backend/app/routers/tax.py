@@ -811,6 +811,47 @@ def _party_aliases(db: Session, org: str) -> set:
     return out
 
 
+# Отгрузку Байго налоговая выписывает на нескольких ИП и связывает с
+# управленкой номером отгрузки в комментарии («0000-000560»). Без номера
+# («за фуру октября») портал видел три задачи: «Байго — не выписано» и
+# «лишнее» у каждого ИП. Реализации на ИП одного дня без ссылки, которые по
+# штукам — одна отгрузка Байго (с поправкой на недостачу при приёмке), портал
+# связывает сам и ставит одну задачу: вписать номер.
+_BAYGO = re.compile(r"байго", re.IGNORECASE)
+INFER_DAYS = 45
+# Налоговая продаёт партию целиком, управленка — за вычетом недостачи.
+INFER_SHORT = 0.10
+
+
+def _infer_refs(upr: list[dict], tax: list[dict], refs: list[set]) -> dict:
+    """{номер налогового документа в tax: индекс отгрузки Байго в upr}."""
+    used: set = set()
+    for r in refs:
+        used |= r
+    groups: dict = defaultdict(list)
+    for j, t in enumerate(tax):
+        if refs[j] or not re.match(r"\s*ип\s", (t["party"] or "") + " ", re.IGNORECASE):
+            continue
+        groups[t["date"]].append(j)
+    out: dict = {}
+    for d, js in sorted(groups.items()):
+        q = sum(tax[j]["qty"] or 0 for j in js)
+        if q < 100:
+            continue
+        cands = [i for i, u in enumerate(upr)
+                 if i not in used and _BAYGO.search(u["party"] or "")
+                 and abs((u["date"] - d).days) <= INFER_DAYS
+                 and q * (1 - INFER_SHORT) <= (u["qty"] or 0) <= q]
+        if not cands:
+            continue
+        i = min(cands, key=lambda i: (q - (upr[i]["qty"] or 0),
+                                      abs((upr[i]["date"] - d).days)))
+        used.add(i)
+        for j in js:
+            out[j] = i
+    return out
+
+
 def _sale_classes(db: Session, org: str) -> dict:
     """Кому продано: юрлицу (ключ покупателя) или в розницу (None).
 
@@ -825,6 +866,9 @@ def _sale_classes(db: Session, org: str) -> dict:
     tax = _tax_doc_rows(db, org, "sale")
     by_number = _numbers_index(upr)
     refs = [_ref_targets(upr, by_number, t) for t in tax]
+    inferred = _infer_refs(upr, tax, refs)
+    for j, i in inferred.items():
+        refs[j] = {i}
 
     link: dict = {}
     for j, t in enumerate(tax):
@@ -903,7 +947,8 @@ def _sale_classes(db: Session, org: str) -> dict:
         k = tax_key(t["party"])
         tparts.append([(k, 1.0)] if k else [])
     return {"upr": upr, "ukey": ukey, "tax": tax, "tparts": tparts,
-            "refs": refs, "names": names, "upr_key": return_key, "tax_key": tax_key}
+            "refs": refs, "inferred": inferred, "names": names,
+            "upr_key": return_key, "tax_key": tax_key}
 
 
 # Недостача при приёмке. В управленке её списывают (Дт 7190 Кт 1610), а в
@@ -1021,6 +1066,24 @@ def customer_diffs(db: Session, org: str, since: date, cutoff: date,
                 c["first"] = u["date"]
 
     out = []
+    by_upr: dict = defaultdict(list)
+    for j, i in cls.get("inferred", {}).items():
+        by_upr[i].append(tax[j])
+    for i, ts in by_upr.items():
+        u = upr[i]
+        d = min(t["date"] for t in ts)
+        if d < since:
+            continue
+        nums = sorted(re.sub(r"^0+(?=\d)", "", t["number"] or "") for t in ts)
+        parties = sorted({_clean_customer(t["party"]) for t in ts})
+        out.append({
+            "key": f"{org}|taxref|{u['number']}|{u['date'].isoformat()}",
+            "organization": org, "kind": "taxref", "side": "tax",
+            "doc_date": d,
+            "doc_number": f"{', '.join(nums)} → {u['number']} от {u['date']:%d.%m.%y}",
+            "party": f"{'; '.join(parties)} → {_clean_customer(u['party'])}",
+            "qty": round(sum(t["qty"] or 0 for t in ts)), "amount": 0,
+        })
     for k, c in cust.items():
         short = sum(x["qty"] for x in c.get("short", []))
         missing = round(c["u_due"] - c["t_all"])
@@ -2239,14 +2302,14 @@ def scan_contour_events(db: Session) -> dict:
             # У остатка цифры меняются, а задача та же: товар не сошёлся.
             e.doc_number, e.qty = r["doc_number"], r["qty"]
             e.is_task = r["is_task"]
-            if r["kind"] in ("customer", "kkm", "kkmpay", "payparty", "payop", "qr", "salary", "accountable", "osh", "clientdup", "nogps"):
+            if r["kind"] in ("customer", "taxref", "kkm", "kkmpay", "payparty", "payop", "qr", "salary", "accountable", "osh", "clientdup", "nogps"):
                 e.doc_date, e.party = r["doc_date"], r["party"]
             if r["kind"] in ("kkmpay", "salary", "accountable", "osh", "clientdup"):
                 e.amount = r["amount"]
 
     for key, e in existing.items():
         if (extra is None and e.kind in ("stock", "payment", "kkmpay", "payparty", "payop", "qr", "salary", "accountable", "osh", "clientdup", "nogps")) or (
-                customer_rows is None and e.kind in ("customer", "kkm")):
+                customer_rows is None and e.kind in ("customer", "taxref", "kkm")):
             # Сверка остатков упала — её события не трогаем, иначе все они
             # «закрылись бы сами» и в Telegram ушли бы ложные галочки.
             continue
