@@ -4595,7 +4595,9 @@ function ClientDupsPanel() {
                 Точек в SalesDoc: <b>{data.clients}</b>, с GPS-меткой: <b>{data.with_geo}</b>.
                 Дубль — одно имя (без кода и слов «магазин», «маркет»…) и метки
                 не дальше {data.dup_radius_m} м. Строка с ✔ — карточка, которую
-                стоит оставить: у неё больше заказов.
+                стоит оставить: у неё больше заказов. Сети (Глобус, Неман,
+                Азия) не проверяются — у них филиалы под одним именем
+                {data.chains ? <> (карточек сетей: <b>{data.chains}</b>)</> : null}.
               </p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '8px 0' }}>
                 {Object.entries(DUP_KIND).map(([k, v]) => (
