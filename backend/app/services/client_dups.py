@@ -308,6 +308,9 @@ def nogps_events(db: Session, today, since=None) -> list[dict]:
             continue
         if created < lo or created > today:
             continue
+        if is_chain(c.name):
+            # Сети в поиске дублей не участвуют — метка для этого не нужна.
+            continue
         who = ", ".join(sorted(set(agents.get(c.sd_id, [])))) or "агент не закреплён"
         out.append({
             "key": f"hygiene|nogps|{c.sd_id}",
