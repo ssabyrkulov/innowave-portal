@@ -42,6 +42,17 @@ _STOP = {
 }
 
 
+# Сети: у них в SalesDoc несколько филиалов под одним именем («Глобус»,
+# «Неман Фарм», «Азия») — это разные магазины, а не дубли, объединять их
+# нельзя. Карточку сети узнаём по любому слову имени, начинающемуся с одной
+# из основ (латиницу тоже ловим: агенты пишут и так).
+CHAINS = ("глобус", "globus", "неман", "neman", "азия", "asia", "aziya")
+
+
+def is_chain(name: str) -> bool:
+    return any(w.startswith(c) for w in match_key(name).split() for c in CHAINS)
+
+
 def norm_name(name: str) -> str:
     words = [w for w in match_key(name).split() if w not in _STOP]
     return " ".join(sorted(words))
@@ -76,6 +87,7 @@ def _point(c) -> tuple[float, float] | None:
 
 
 def _groups(clients) -> list[tuple[str, list]]:
+    clients = [c for c in clients if not is_chain(c.name)]
     by_name: dict[str, list] = defaultdict(list)
     for c in clients:
         key = norm_name(c.name)
@@ -214,6 +226,7 @@ def report(db: Session) -> dict:
     return {
         "clients": len(clients),
         "with_geo": with_geo,
+        "chains": sum(1 for c in clients if is_chain(c.name)),
         "dup_radius_m": DUP_RADIUS_M,
         "same_spot_m": SAME_SPOT_M,
         "counts": {k: sum(1 for g in rows if g["kind"] == k) for k in kind_order},
