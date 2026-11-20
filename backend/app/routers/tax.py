@@ -243,6 +243,8 @@ def _parse(content: bytes, filename: str) -> tuple[str, list[dict]]:
                                or "").strip() or None,
                 "qty": _num(first("Количество", "КоличествоФакт", "КоличествоУчет")),
                 "account": str(first("СчетУчетаБУ", "СчетУчета") or "").strip() or None,
+                **({"esf_number": _esf_no(first("НомерБланкаСФ", "СчетФактураНомерБланка")),
+                    "esf_date": _day(first("ДатаСФ"))} if kind == "sale" else {}),
             })
         else:
             out.append({
@@ -266,6 +268,65 @@ def _parse(content: bytes, filename: str) -> tuple[str, list[dict]]:
             uniq.append(op)
         out = uniq
     return kind, out
+
+
+def _esf_no(value) -> str | None:
+    """Номер ЭСФ как строка без ведущих нулей: 1C отдаёт его то числом
+    (1651876 или 1651876.0), то строкой «01651876»."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    s = str(value or "").strip()
+    return s.lstrip("0") or None
+
+
+def esf_events(db: Session, org: str, today: date, grace_days: int = 0) -> list[dict]:
+    """Реализации юрлицам без номера ЭСФ и номера ЭСФ на нескольких
+    реализациях — задачи налоговой.
+
+    Розница (ККМ, обезличенные покупатели) ЭСФ не требует. Номера читаются
+    из выгрузки «Реализация товары»; пока её не перезагрузили с номерами
+    (выгрузка до этой проверки), задач нет вовсе — иначе «без номера»
+    оказались бы все реализации."""
+    T = models.TaxOperation
+    docs: dict = {}
+    for guid, num, d, party, total, esf in db.query(
+            T.doc_guid, T.doc_number, T.date, T.counterparty, T.doc_total,
+            T.esf_number).filter(T.organization == org, T.kind == "sale").all():
+        key = guid or f"{num}|{d}|{party}"
+        x = docs.setdefault(key, {"key": key, "num": num or "", "date": d,
+                                  "party": (party or "").strip(),
+                                  "total": float(total or 0), "esf": None})
+        if esf:
+            x["esf"] = esf
+    if not any(x["esf"] for x in docs.values()):
+        return []
+    out = []
+    by_esf: dict = defaultdict(list)
+    for x in docs.values():
+        if x["esf"]:
+            by_esf[x["esf"]].append(x)
+        elif _is_legal(x["party"]):
+            out.append({
+                "key": f"{org}|esf|{x['key']}", "organization": org,
+                "kind": "esf", "side": "tax", "doc_date": x["date"],
+                "doc_number": x["num"], "party": x["party"], "qty": 0,
+                "amount": round(x["total"], 2),
+                "is_task": (today - x["date"]).days >= grace_days,
+            })
+    for no, xs in by_esf.items():
+        if len(xs) < 2:
+            continue
+        xs.sort(key=lambda x: (x["date"], x["num"]))
+        out.append({
+            "key": f"{org}|esfdup|{no}", "organization": org,
+            "kind": "esfdup", "side": "tax", "doc_date": xs[-1]["date"],
+            "doc_number": no,
+            "party": "; ".join(f"№{x['num']} от {x['date']:%d.%m.%y} «{x['party']}»"
+                               for x in xs),
+            "qty": len(xs), "amount": round(sum(x["total"] for x in xs), 2),
+            "is_task": True,
+        })
+    return out
 
 
 def import_tax_workbook(db: Session, content: bytes, filename: str,
@@ -2289,6 +2350,17 @@ def scan_contour_events(db: Session) -> dict:
         print(f"[contours] сверка по покупателям не прошла: {err}", flush=True)
         customer_rows = None
 
+    # Номера ЭСФ в налоговых реализациях: нет номера у реализации юрлицу,
+    # один номер на нескольких реализациях.
+    esf_rows: list | None = []
+    try:
+        with db.begin_nested():
+            for o in sorted(doc_orgs):
+                esf_rows += esf_events(db, o, today, cfg.grace_days or 0)
+    except Exception as err:  # noqa: BLE001 — документный журнал важнее
+        print(f"[contours] номера ЭСФ не проверены: {err}", flush=True)
+        esf_rows = None
+
     # Остатки товаров и оплаты — по журналам проводок двух контуров. Они
     # ловят то, чего документная сверка не видит: забытое списание, оплату
     # в одной базе, ручную операцию, бензин, не списанный в налоговой.
@@ -2302,7 +2374,7 @@ def scan_contour_events(db: Session) -> dict:
         extra = None
     for r in customer_rows or []:
         r["is_task"] = True
-    for r in (extra or []) + (customer_rows or []):
+    for r in (extra or []) + (customer_rows or []) + (esf_rows or []):
         seen.add(r["key"])
         e = existing.get(r["key"])
         if e is None:
@@ -2319,14 +2391,15 @@ def scan_contour_events(db: Session) -> dict:
             # У остатка цифры меняются, а задача та же: товар не сошёлся.
             e.doc_number, e.qty = r["doc_number"], r["qty"]
             e.is_task = r["is_task"]
-            if r["kind"] in ("customer", "taxref", "kkm", "kkmpay", "payparty", "payop", "qr", "qrtax", "bank", "bankfee", "salary", "accountable", "osh", "clientdup", "nogps"):
+            if r["kind"] in ("customer", "taxref", "kkm", "kkmpay", "payparty", "payop", "qr", "qrtax", "bank", "bankfee", "salary", "accountable", "osh", "clientdup", "nogps", "esf", "esfdup"):
                 e.doc_date, e.party = r["doc_date"], r["party"]
-            if r["kind"] in ("kkmpay", "salary", "accountable", "osh", "clientdup", "bankfee"):
+            if r["kind"] in ("kkmpay", "salary", "accountable", "osh", "clientdup", "bankfee", "esf", "esfdup"):
                 e.amount = r["amount"]
 
     for key, e in existing.items():
         if (extra is None and e.kind in ("stock", "payment", "kkmpay", "payparty", "payop", "qr", "qrtax", "bank", "bankfee", "salary", "accountable", "osh", "clientdup", "nogps")) or (
-                customer_rows is None and e.kind in ("customer", "taxref", "kkm")):
+                customer_rows is None and e.kind in ("customer", "taxref", "kkm")) or (
+                esf_rows is None and e.kind in ("esf", "esfdup")):
             # Сверка остатков упала — её события не трогаем, иначе все они
             # «закрылись бы сами» и в Telegram ушли бы ложные галочки.
             continue

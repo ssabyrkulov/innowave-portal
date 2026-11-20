@@ -64,7 +64,8 @@ KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": 
         "customer": "Покупатель", "taxref": "Номер отгрузки", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
         "payparty": "Контрагент оплаты", "payop": "Вид оплаты",
         "qr": "QR-оплата", "qrtax": "QR-оплата (налоговая)",
-        "bank": "Выписка банка", "bankfee": "Комиссии банка", "salary": "Зарплата", "accountable": "Подотчёт",
+        "bank": "Выписка банка", "bankfee": "Комиссии банка",
+        "esf": "Номер ЭСФ", "esfdup": "Дубль номера ЭСФ", "salary": "Зарплата", "accountable": "Подотчёт",
         "osh": "Склад Ош", "clientdup": "Дубль точки",
         "nogps": "Точка без GPS"}
 
@@ -226,6 +227,9 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
         # QR, которых нет в налоговой, вносит свой человек; не выбран —
         # ответственный за налоговую.
         return cfg.qr_tax_user_id or cfg.nal_user_id
+    if e.kind in ("esf", "esfdup"):
+        # ЭСФ выписывает и номер вносит налоговая.
+        return cfg.nal_user_id
     if e.kind in ("bank", "bankfee"):
         # Операции из выписки банка вносит тот, кто ведёт базу, где её нет.
         return cfg.nal_user_id if e.side == "tax" else cfg.upr_user_id
@@ -301,6 +305,14 @@ def task_text(e: models.ContourEvent) -> str:
                 f"{_e(e.doc_number)} на {_money(e.amount)} сом{note}: деньги "
                 f"на счёт пришли (отчёт банка), а оплаты в управленке нет — "
                 f"найти точку и провести")
+    if e.kind == "esf":
+        return (f"Выписать ЭСФ и внести его номер в реализацию №{_e(e.doc_number)} "
+                f"от {e.doc_date:%d.%m.%y} «{_e(e.party)}» на "
+                f"{_money(e.amount)} сом: в налоговой номер ЭСФ не заполнен")
+    if e.kind == "esfdup":
+        return (f"Номер ЭСФ {_e(e.doc_number)} стоит в {int(e.qty or 0)} "
+                f"реализациях: {_e(e.party)} — исправить номер в той, где он "
+                f"неверный")
     if e.kind in ("bank", "bankfee"):
         where = "налоговую" if e.side == "tax" else "управленку"
         base = "налоговой" if e.side == "tax" else "управленке"
@@ -526,6 +538,12 @@ def group_head(e: models.ContourEvent, n: int) -> str:
     if e.kind == "qr":
         return (f"Внести в управленку QR-оплаты ({n}): деньги на счёт пришли "
                 f"(отчёт банка), а оплат в управленке нет — найти точки и провести")
+    if e.kind == "esf":
+        return (f"Выписать ЭСФ и внести номера в реализации юрлицам ({n}): в "
+                f"налоговой номер ЭСФ не заполнен")
+    if e.kind == "esfdup":
+        return (f"Один номер ЭСФ в нескольких реализациях ({n}) — исправить "
+                f"номер там, где он неверный")
     if e.kind in ("bank", "bankfee"):
         where = "налоговую" if e.side == "tax" else "управленку"
         base = "налоговой" if e.side == "tax" else "управленке"
