@@ -1552,6 +1552,9 @@ class TaskBotSettings(Base):
     # Склад Хайджин в Оше: перемещения под продажи Инновейва ошским магазинам.
     # Пусто — ответственный за управленку.
     osh_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # QR-оплаты из отчёта банка, которых нет в налоговой. Пусто —
+    # ответственный за налоговую.
+    qr_tax_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     escalate_days: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     # Сколько дней документ может догонять вторую базу, прежде чем стать
