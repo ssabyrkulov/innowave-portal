@@ -43,6 +43,8 @@ def _status(db: Session, cfg: models.TaskBotSettings, me: models.User) -> dict:
         "salary_user_id": cfg.salary_user_id,
         "osh_user_id": cfg.osh_user_id,
         "qr_tax_user_id": cfg.qr_tax_user_id,
+        "upr_in_user_id": cfg.upr_in_user_id,
+        "upr_in_orgs": sorted(reconcile.upr_in_orgs(cfg)),
         "owner_user_id": cfg.owner_user_id,
         "escalate_days": cfg.escalate_days,
         "grace_days": cfg.grace_days,
@@ -78,6 +80,8 @@ class SettingsIn(BaseModel):
     salary_user_id: int | None = None
     osh_user_id: int | None = None
     qr_tax_user_id: int | None = None
+    upr_in_user_id: int | None = None
+    upr_in_orgs: list[str] | None = None
     owner_user_id: int | None = None
     escalate_days: int | None = None
     grace_days: int | None = None
@@ -90,7 +94,7 @@ def save_settings(payload: SettingsIn, db: Session = Depends(get_db),
                   me: models.User = Depends(admin_only)):
     cfg = taskbot.get_settings(db)
     data = payload.model_dump(exclude_unset=True)
-    for key in ("stock_orgs", "payment_orgs", "doc_orgs", "staff_orgs"):
+    for key in ("stock_orgs", "payment_orgs", "doc_orgs", "staff_orgs", "upr_in_orgs"):
         if key in data:
             data[key] = ",".join(o for o in data[key] or [] if o in models.ORGS)
     for key in ("escalate_days", "grace_days"):

@@ -1172,6 +1172,14 @@ def split_orgs(value: str | None) -> set[str]:
     return {o.strip() for o in (value or "").split(",") if o.strip() in models.ORGS}
 
 
+def upr_in_orgs(cfg: "models.TaskBotSettings") -> set[str]:
+    """Фирмы, где входящие оплаты управленки ведёт отдельный человек.
+    Пусто (NULL) — все: так настройка работает и до первого сохранения."""
+    if cfg.upr_in_orgs is None:
+        return set(models.ORGS)
+    return split_orgs(cfg.upr_in_orgs)
+
+
 def _short_item(name: str) -> str:
     """«Подгузники ONE размер XL» → «ONE XL»: в задаче важны модель и размер."""
     return re.sub(r"^(детские\s+)?подгузники\s+|размер\s+", "", (name or "").strip(),
