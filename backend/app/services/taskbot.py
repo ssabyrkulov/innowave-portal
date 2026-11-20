@@ -234,8 +234,9 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
         return cfg.osh_user_id or cfg.upr_user_id
     if e.kind in ("clientdup", "nogps"):
         # Справочник покупателей ведёт управленка: она же объединяет дубли
-        # точек в SalesDoc и 1С.
-        return cfg.upr_user_id
+        # точек в SalesDoc и 1С. Если покупателей (входящие оплаты) ведёт
+        # свой человек — ему: оплаты и карточки точек у одного человека.
+        return cfg.upr_in_user_id or cfg.upr_user_id
     if _dup(e):
         # Дубль внутри одной базы разбирает тот, кто её ведёт.
         return cfg.nal_user_id if e.side == "tax" else cfg.upr_user_id
@@ -640,7 +641,7 @@ def score(db: Session, cfg: models.TaskBotSettings,
 def role_title(cfg: models.TaskBotSettings, uid: int | None) -> str:
     return ("Налоговая" if uid == cfg.nal_user_id
             else "Управленка" if uid == cfg.upr_user_id
-            else "Входящие оплаты" if uid == cfg.upr_in_user_id
+            else "Покупатели" if uid == cfg.upr_in_user_id
             else "Склад Ош" if uid == cfg.osh_user_id
             else "QR в налоговой" if uid == cfg.qr_tax_user_id
             else "Задачи")
