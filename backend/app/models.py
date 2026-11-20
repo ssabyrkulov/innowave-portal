@@ -1555,6 +1555,11 @@ class TaskBotSettings(Base):
     # QR-оплаты из отчёта банка, которых нет в налоговой. Пусто —
     # ответственный за налоговую.
     qr_tax_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # Входящие оплаты в управленке (оплаты покупателей, QR, поступления по
+    # выписке) ведёт свой человек — для фирм из upr_in_orgs. Пусто (NULL) —
+    # все фирмы; человек не выбран — ответственный за управленку.
+    upr_in_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    upr_in_orgs: Mapped[str | None] = mapped_column(String, nullable=True)
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     escalate_days: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     # Сколько дней документ может догонять вторую базу, прежде чем стать

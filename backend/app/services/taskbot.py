@@ -199,10 +199,24 @@ def _dup(e) -> bool:
     return _hint(e)[0] == "dup"
 
 
+def upr_incoming(e: models.ContourEvent) -> bool:
+    """Задача — внести в управленку пришедшие деньги: оплату покупателя,
+    которая есть только в налоговой, QR из отчёта банка, поступление из
+    выписки, оплаты розницы."""
+    return (e.kind == "qr"
+            or (e.kind in ("payment", "kkmpay") and e.side == "tax")
+            or (e.kind == "bank" and e.side == "upr" and float(e.amount or 0) > 0))
+
+
 def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int | None:
     """Кто исправляет. Управленка — эталон (сверена с фактом): остаток,
     разошедшийся с ней, и документ, которого нет в налоговой, — задача
     налоговой. Документ или оплата, которых нет в управленке, — управленки."""
+    if cfg.upr_in_user_id and upr_incoming(e):
+        from .reconcile import upr_in_orgs
+        if e.organization in upr_in_orgs(cfg):
+            # Входящие оплаты управленки этих фирм ведёт свой человек.
+            return cfg.upr_in_user_id
     if e.kind in ("salary", "accountable"):
         # Зарплату и подотчёт исправляет тот, кто ведёт базу, где нашлась
         # ошибка: в управленке — ответственный за управленку, в налоговой —
@@ -626,6 +640,7 @@ def score(db: Session, cfg: models.TaskBotSettings,
 def role_title(cfg: models.TaskBotSettings, uid: int | None) -> str:
     return ("Налоговая" if uid == cfg.nal_user_id
             else "Управленка" if uid == cfg.upr_user_id
+            else "Входящие оплаты" if uid == cfg.upr_in_user_id
             else "Склад Ош" if uid == cfg.osh_user_id
             else "QR в налоговой" if uid == cfg.qr_tax_user_id
             else "Задачи")

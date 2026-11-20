@@ -13,6 +13,7 @@ const CHECKS = [
   ['payment_orgs', 'Оплаты', 'оплата покупателя есть в одной базе и нет в другой'],
   ['stock_orgs', 'Остатки', 'штуки по товару в налоговой ≠ управленке'],
   ['staff_orgs', 'Зарплата и подотчёт', 'подотчёт без авансового отчёта дольше 7 дней, выплата без начисления — в каждой базе отдельно'],
+  ['upr_in_orgs', 'Входящие оплаты → свой ответственный', 'оплаты покупателей, QR и поступления по выписке, которых нет в управленке, — ответственному за входящие оплаты'],
 ]
 // Эти проверки сравнивают две базы — без налогового журнала им не с чем.
 const NEEDS_NAL = new Set(['stock_orgs', 'payment_orgs'])
@@ -24,7 +25,7 @@ const STATE = {
 // Сортировка задач. По умолчанию — по ответственным: у каждого свой блок
 // с его счётом, внутри — открытые (старые выше), потом закрытые.
 const STATE_RANK = { open: 0, done: 1, acked: 2 }
-const ROLE_RANK = { 'Налоговая': 0, 'Управленка': 1, 'Зарплата и подотчёт': 2, 'Склад Ош': 3 }
+const ROLE_RANK = { 'Налоговая': 0, 'Управленка': 1, 'Входящие оплаты': 2, 'Склад Ош': 3 }
 const who = (t) => `${t.role || ''}|${t.responsible || ''}`
 const TASK_SORTS = {
   responsible: (t) => [ROLE_RANK[t.role] ?? 9, t.responsible || '\uffff'],
@@ -104,6 +105,8 @@ export default function TaskBotPanel() {
       control_from: form.control_from || null,
       doc_orgs: form.doc_orgs, payment_orgs: form.payment_orgs,
       stock_orgs: form.stock_orgs, staff_orgs: form.staff_orgs,
+      upr_in_orgs: form.upr_in_orgs,
+      upr_in_user_id: form.upr_in_user_id || null,
       upr_user_id: form.upr_user_id || null,
       nal_user_id: form.nal_user_id || null,
       osh_user_id: form.osh_user_id || null,
@@ -204,6 +207,8 @@ export default function TaskBotPanel() {
           <div className="tb-grid">
             <label>Ответственный за налоговую {userSelect('nal_user_id')}</label>
             <label>Ответственный за управленку {userSelect('upr_user_id')}</label>
+            <label title="Оплаты покупателей, QR и поступления по выписке банка, которых нет в управленке, — для фирм, отмеченных в таблице ниже. Не выбран — ответственный за управленку">
+              Входящие оплаты и QR в управленке {userSelect('upr_in_user_id')}</label>
             <label title="Перемещения со склада Хайджин в Оше под продажи Инновейва ошским магазинам (Нурзаман). Не выбран — ответственный за управленку">
               Ответственный за склад Ош {userSelect('osh_user_id')}</label>
             <label title="QR-оплаты из отчёта банка, которых нет в налоговой. Не выбран — ответственный за налоговую">
