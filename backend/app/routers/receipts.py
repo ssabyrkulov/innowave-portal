@@ -251,13 +251,14 @@ def import_receipts_workbook(
     # формата записи времени, на которых ломались хэш и ключ по имени.
     # Считаем именно количество строк документа: у расшифровки их бывает
     # несколько, и лишние отбрасывать нельзя.
-    doc_rows: dict[tuple, int] = defaultdict(int)
+    doc_rows: dict[tuple, list] = defaultdict(list)
     for r in (db.query(models.Receipt)
               .filter(models.Receipt.organization == org,
                       models.Receipt.doc_guid.isnot(None)).all()):
         doc_rows[(r.doc_guid, r.date, float(r.amount or 0),
-                  r.operation, r.kind)] += 1
+                  r.operation, r.kind)].append(r)
     doc_used: dict[tuple, int] = defaultdict(int)
+    repointed = 0
 
     seen, added, skipped, adopted = set(), 0, 0, 0
     occurrences: dict[str, int] = defaultdict(int)
@@ -271,8 +272,17 @@ def import_receipts_workbook(
             skipped += 1
             continue
         dk = (p.get("doc_guid"), p["date"], p["amount"], p["operation"], kind)
-        if p.get("doc_guid") and doc_used[dk] < doc_rows.get(dk, 0):
-            doc_used[dk] += 1  # этот документ уже загружен, пусть под другим именем
+        if p.get("doc_guid") and doc_used[dk] < len(doc_rows.get(dk, ())):
+            # Этот документ уже загружен, пусть под другим именем. Плательщика
+            # берём из файла: при объединении дублей точек оплату в 1С
+            # перевешивают на другую карточку (другой GUID контрагента), и
+            # старое имя в портале оставляло оплату «не найденной среди
+            # клиентов», а у оставленной карточки — долг.
+            row = doc_rows[dk][doc_used[dk]]
+            doc_used[dk] += 1
+            if p.get("payer") and (row.payer, row.payer_guid) != (p["payer"], p.get("payer_guid")):
+                row.payer, row.payer_guid = p["payer"], p.get("payer_guid")
+                repointed += 1
             skipped += 1
             continue
         bk = _biz_key(p["date"], p["amount"], p["currency"], p["payer"], p["operation"])
@@ -309,6 +319,8 @@ def import_receipts_workbook(
         "guid_backfilled": adopted,
         # Строки, переехавшие на новое название плательщика 1С.
         "renamed_payers": renamed_payers,
+        # Оплаты, которые в 1С перевесили на другую карточку покупателя.
+        "repointed_payers": repointed,
         "skipped_not_posted": len(not_posted),
         "replaced_rows": replaced,
         "errors": errors,

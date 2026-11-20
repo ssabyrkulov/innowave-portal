@@ -23,7 +23,7 @@ const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
   payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', taxref: 'Номер отгрузки', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
-  qr: 'QR-оплата', qrtax: 'QR-оплата', bank: 'Банк', bankfee: 'Комиссии банка', salary: 'Зарплата', accountable: 'Подотчёт', osh: 'Склад Ош', clientdup: 'Дубль точки', nogps: 'Точка без GPS',
+  qr: 'QR-оплата', qrtax: 'QR-оплата', bank: 'Банк', bankfee: 'Комиссии банка', esf: 'ЭСФ', esfdup: 'Дубль ЭСФ', salary: 'Зарплата', accountable: 'Подотчёт', osh: 'Склад Ош', clientdup: 'Дубль точки', nogps: 'Точка без GPS',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
@@ -183,7 +183,9 @@ function Journal({ version = 0 }) {
                       <span className="muted"> · {['payparty', 'payop'].includes(e.kind)
                         ? 'ошибка в налоговой' : e.kind === 'qr'
                           ? 'есть в банке, нет в управленке' : e.kind === 'qrtax'
-                          ? 'есть в банке, нет в налоговой' : ['bank', 'bankfee'].includes(e.kind)
+                          ? 'есть в банке, нет в налоговой' : e.kind === 'esf' ? 'реализация юрлицу без номера ЭСФ'
+                          : e.kind === 'esfdup' ? 'номер ЭСФ в нескольких реализациях'
+                          : ['bank', 'bankfee'].includes(e.kind)
                           ? (e.side === 'tax' ? 'есть в выписке, нет в налоговой' : 'есть в выписке, нет в управленке')
                           : e.kind === 'osh'
                           ? `нет перемещения Ош → Бишкек под продажу Инновейва (${e.party || ''})` : e.side === 'upr'

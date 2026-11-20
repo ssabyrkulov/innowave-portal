@@ -1210,6 +1210,11 @@ class TaxOperation(Base):
     # 0000-000761». Это единственная прямая связь между контурами — GUID у
     # баз свои, контрагенты разные, а номера проставлены руками.
     comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Номер и дата счёта-фактуры (ЭСФ) реализации — из полей «Номер бланка
+    # СФ» и «Дата СФ». Реализация юрлицу без номера — ЭСФ не выписан или
+    # номер не внесён; один номер у двух реализаций — ошибка в одной из них.
+    esf_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    esf_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
