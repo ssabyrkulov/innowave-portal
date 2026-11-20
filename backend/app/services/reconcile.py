@@ -312,8 +312,11 @@ def salary_gaps(db: Session, org: str, base: str, today: date) -> list[dict]:
     return out
 
 
-def qr_missing(db: Session, org: str) -> list[dict]:
-    """QR-оплаты из отчёта банка, которых нет в управленке.
+def qr_missing(db: Session, org: str, base: str = "upr",
+               since: date | None = None) -> list[dict]:
+    """QR-оплаты из отчёта банка, которых нет в управленке (base="upr") или
+    в налоговой (base="nal"). В налоговой розничная QR-оплата — поступление
+    на банк от «ККМ»; пачка нескольких QR одной строкой — тоже пара.
 
     Сверка баз видит только то, что внесено хотя бы в одну: три QR вечера
     26.10 на 7 182 сом не внесли ни управленка, ни налоговая — и задачи не
@@ -331,14 +334,15 @@ def qr_missing(db: Session, org: str) -> list[dict]:
           for t, d, at, a, s, c in db.query(
               Q.txn_id, Q.date, Q.paid_at, Q.amount, Q.status, Q.comment)
           .filter(Q.organization == org).all()
-          if (s or "").lower() == "оплата прошла" and float(a or 0) >= MIN_PAYMENT]
+          if (s or "").lower() == "оплата прошла" and float(a or 0) >= MIN_PAYMENT
+          and (since is None or d >= since)]
     if not qr:
         return []
     first = min(q["date"] for q in qr)
-    upr = _receipts(db, org, "upr", first - timedelta(days=QR_DAYS))
-    missing, free = _pair_qr(qr, upr)
-    missing = _batches(missing, upr, free, QR_DAYS)
-    return _split_qr(missing, [upr[i] for i in sorted(free)])
+    rec = _receipts(db, org, base, first - timedelta(days=QR_DAYS))
+    missing, free = _pair_qr(qr, rec)
+    missing = _batches(missing, rec, free, QR_DAYS)
+    return _split_qr(missing, [rec[i] for i in sorted(free)])
 
 
 def _pair_qr(qr: list[dict], upr: list[dict]) -> tuple[list[dict], set]:
@@ -898,6 +902,18 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                     "party": q["party"] or "QR", "qty": 0,
                     "amount": round(q["amount"], 2), "is_task": age_ok(q["date"]),
                 })
+            # Та же проверка для налоговой: QR пришёл на счёт, а поступления
+            # в налоговой нет. Здесь — с «Контроль с»: налоговую начали
+            # сверять позже управленки, и старые QR завалили бы задачами.
+            if has_nal_ledger(db, org):
+                for q in qr_missing(db, org, "nal", since):
+                    out.append({
+                        "key": f"{org}|qrtax|{q['txn_id']}",
+                        "organization": org, "kind": "qrtax", "side": "tax",
+                        "doc_date": q["date"], "doc_number": f"{q['paid_at']:%H:%M}",
+                        "party": q["party"] or "QR", "qty": 0,
+                        "amount": round(q["amount"], 2), "is_task": age_ok(q["date"]),
+                    })
             if org == OSH_KEEPER:
                 for x in osh_transfers_missing(db, since):
                     items = ", ".join(f"{_short_item(k)} ×{_fmt(v)}" for k, v in x["items"].items())

@@ -63,7 +63,7 @@ KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": 
         "purchase": "Поступление", "payment": "Оплата", "stock": "Остаток",
         "customer": "Покупатель", "taxref": "Номер отгрузки", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
         "payparty": "Контрагент оплаты", "payop": "Вид оплаты",
-        "qr": "QR-оплата", "salary": "Зарплата", "accountable": "Подотчёт",
+        "qr": "QR-оплата", "qrtax": "QR-оплата (налоговая)", "salary": "Зарплата", "accountable": "Подотчёт",
         "osh": "Склад Ош", "clientdup": "Дубль точки",
         "nogps": "Точка без GPS"}
 
@@ -207,6 +207,10 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
         # кто ведёт базу, где нашлась ошибка.
         return cfg.salary_user_id or (
             cfg.upr_user_id if e.side == "upr" else cfg.nal_user_id)
+    if e.kind == "qrtax":
+        # QR, которых нет в налоговой, вносит свой человек; не выбран —
+        # ответственный за налоговую.
+        return cfg.qr_tax_user_id or cfg.nal_user_id
     if e.kind == "osh":
         # Перемещение делает в управленке Хайджин тот, кто ведёт склад Ош.
         return cfg.osh_user_id or cfg.upr_user_id
@@ -278,6 +282,12 @@ def task_text(e: models.ContourEvent) -> str:
                 f"{_e(e.doc_number)} на {_money(e.amount)} сом{note}: деньги "
                 f"на счёт пришли (отчёт банка), а оплаты в управленке нет — "
                 f"найти точку и провести")
+    if e.kind == "qrtax":
+        note = "" if e.party in (None, "", "QR") else f" (комментарий: «{_e(e.party)}»)"
+        return (f"Внести в налоговую QR-оплату от {e.doc_date:%d.%m.%y} "
+                f"{_e(e.doc_number)} на {_money(e.amount)} сом{note}: деньги "
+                f"на счёт пришли (отчёт банка), а поступления в налоговой нет — "
+                f"провести поступление на банк (розница — покупатель «ККМ»)")
     if e.kind == "osh":
         # party: «покупатель: товар ×шт, …».
         who, _, items = (e.party or "").partition(": ")
@@ -436,7 +446,7 @@ def _item_text(e: models.ContourEvent) -> str:
                 f"{_money(e.amount)} — по управленке «{_e(upr)}»")
     if e.kind in ("salary", "accountable"):
         return f"{_e(e.party)} — {_money(e.amount)} сом ({_e(e.doc_number)})"
-    if e.kind == "qr":
+    if e.kind in ("qr", "qrtax"):
         note = "" if e.party in (None, "", "QR") else f" — «{_e(e.party)}»"
         return f"{e.doc_date:%d.%m} {_e(e.doc_number)} — {_money(e.amount)} сом{note}"
     if e.kind == "osh":
@@ -485,6 +495,10 @@ def group_head(e: models.ContourEvent, n: int) -> str:
     if e.kind == "qr":
         return (f"Внести в управленку QR-оплаты ({n}): деньги на счёт пришли "
                 f"(отчёт банка), а оплат в управленке нет — найти точки и провести")
+    if e.kind == "qrtax":
+        return (f"Внести в налоговую QR-оплаты ({n}): деньги на счёт пришли "
+                f"(отчёт банка), а поступлений в налоговой нет — провести "
+                f"поступления на банк (розница — покупатель «ККМ»)")
     if e.kind == "customer":
         return (f"Выписать ЭСФ покупателям-юрлицам ({n})" if e.side == "upr"
                 else f"Проверить покупателей-юрлиц: в налоговой больше ({n})")
@@ -593,6 +607,7 @@ def role_title(cfg: models.TaskBotSettings, uid: int | None) -> str:
             else "Управленка" if uid == cfg.upr_user_id
             else "Зарплата и подотчёт" if uid == cfg.salary_user_id
             else "Склад Ош" if uid == cfg.osh_user_id
+            else "QR в налоговой" if uid == cfg.qr_tax_user_id
             else "Задачи")
 
 
