@@ -204,10 +204,10 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
     разошедшийся с ней, и документ, которого нет в налоговой, — задача
     налоговой. Документ или оплата, которых нет в управленке, — управленки."""
     if e.kind in ("salary", "accountable"):
-        # Зарплату и подотчёт ведёт свой ответственный; не назначен — тот,
-        # кто ведёт базу, где нашлась ошибка.
-        return cfg.salary_user_id or (
-            cfg.upr_user_id if e.side == "upr" else cfg.nal_user_id)
+        # Зарплату и подотчёт исправляет тот, кто ведёт базу, где нашлась
+        # ошибка: в управленке — ответственный за управленку, в налоговой —
+        # за налоговую. Отдельного человека на зарплату больше нет.
+        return cfg.upr_user_id if e.side == "upr" else cfg.nal_user_id
     if e.kind == "qrtax":
         # QR, которых нет в налоговой, вносит свой человек; не выбран —
         # ответственный за налоговую.
@@ -626,7 +626,6 @@ def score(db: Session, cfg: models.TaskBotSettings,
 def role_title(cfg: models.TaskBotSettings, uid: int | None) -> str:
     return ("Налоговая" if uid == cfg.nal_user_id
             else "Управленка" if uid == cfg.upr_user_id
-            else "Зарплата и подотчёт" if uid == cfg.salary_user_id
             else "Склад Ош" if uid == cfg.osh_user_id
             else "QR в налоговой" if uid == cfg.qr_tax_user_id
             else "Задачи")
