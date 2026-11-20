@@ -63,7 +63,8 @@ KIND = {"sale": "Реализация", "return": "Возврат", "writeoff": 
         "purchase": "Поступление", "payment": "Оплата", "stock": "Остаток",
         "customer": "Покупатель", "taxref": "Номер отгрузки", "kkm": "ККМ", "kkmpay": "Оплаты розницы",
         "payparty": "Контрагент оплаты", "payop": "Вид оплаты",
-        "qr": "QR-оплата", "qrtax": "QR-оплата (налоговая)", "salary": "Зарплата", "accountable": "Подотчёт",
+        "qr": "QR-оплата", "qrtax": "QR-оплата (налоговая)",
+        "bank": "Выписка банка", "bankfee": "Комиссии банка", "salary": "Зарплата", "accountable": "Подотчёт",
         "osh": "Склад Ош", "clientdup": "Дубль точки",
         "nogps": "Точка без GPS"}
 
@@ -211,6 +212,9 @@ def responsible_id(cfg: models.TaskBotSettings, e: models.ContourEvent) -> int |
         # QR, которых нет в налоговой, вносит свой человек; не выбран —
         # ответственный за налоговую.
         return cfg.qr_tax_user_id or cfg.nal_user_id
+    if e.kind in ("bank", "bankfee"):
+        # Операции из выписки банка вносит тот, кто ведёт базу, где её нет.
+        return cfg.nal_user_id if e.side == "tax" else cfg.upr_user_id
     if e.kind == "osh":
         # Перемещение делает в управленке Хайджин тот, кто ведёт склад Ош.
         return cfg.osh_user_id or cfg.upr_user_id
@@ -282,6 +286,18 @@ def task_text(e: models.ContourEvent) -> str:
                 f"{_e(e.doc_number)} на {_money(e.amount)} сом{note}: деньги "
                 f"на счёт пришли (отчёт банка), а оплаты в управленке нет — "
                 f"найти точку и провести")
+    if e.kind in ("bank", "bankfee"):
+        where = "налоговую" if e.side == "tax" else "управленку"
+        base = "налоговой" if e.side == "tax" else "управленке"
+        amount = float(e.amount or 0)
+        if e.kind == "bankfee":
+            return (f"Внести в {where} комиссии банка за {_e(e.doc_number)}: "
+                    f"{int(e.qty or 0)} шт. на {_money(abs(amount))} сом есть в "
+                    f"выписке, а в {base} нет")
+        what = "поступление" if amount > 0 else "списание"
+        return (f"Внести в {where} {what} по банку от {e.doc_date:%d.%m.%y} на "
+                f"{_money(abs(amount))} сом ({_e(e.doc_number)}): {_e(e.party)} — "
+                f"в выписке банка есть, а в {base} нет")
     if e.kind == "qrtax":
         note = "" if e.party in (None, "", "QR") else f" (комментарий: «{_e(e.party)}»)"
         return (f"Внести в налоговую QR-оплату от {e.doc_date:%d.%m.%y} "
@@ -495,6 +511,11 @@ def group_head(e: models.ContourEvent, n: int) -> str:
     if e.kind == "qr":
         return (f"Внести в управленку QR-оплаты ({n}): деньги на счёт пришли "
                 f"(отчёт банка), а оплат в управленке нет — найти точки и провести")
+    if e.kind in ("bank", "bankfee"):
+        where = "налоговую" if e.side == "tax" else "управленку"
+        base = "налоговой" if e.side == "tax" else "управленке"
+        return (f"Внести в {where} операции по банку ({n}): в выписке банка "
+                f"они есть, а в {base} нет")
     if e.kind == "qrtax":
         return (f"Внести в налоговую QR-оплаты ({n}): деньги на счёт пришли "
                 f"(отчёт банка), а поступлений в налоговой нет — провести "

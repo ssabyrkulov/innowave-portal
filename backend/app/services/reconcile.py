@@ -438,6 +438,93 @@ def osh_transfers_missing(db: Session, since: date) -> list[dict]:
     return out
 
 
+# Выписка банка против базы: дни, на которые проводка может разойтись с
+# датой операции в банке.
+BANK_DAYS = 3
+
+
+def _bank_lines(db: Session, org: str, base: str, since: date) -> list[dict]:
+    """Движения по банковским счетам (12xx) в базе — построчно: в одном
+    платёжном поручении 1С и платёж, и комиссия банка, а в выписке это
+    две строки. Перевод между своими счетами — и приход, и расход."""
+    E = models.LedgerEntry
+    q = base_scope(
+        db.query(E.date, E.doc, E.debit_account, E.debit_sub, E.credit_account,
+                 E.credit_sub, E.amount)
+        .filter(E.organization == org, E.date >= since,
+                or_(E.debit_account.like("12%"), E.credit_account.like("12%"))), base)
+    out = []
+    for d, doc, da, ds, ca, cs, a in q.all():
+        a = float(a or 0)
+        if (da or "").startswith("12"):
+            out.append({"date": d, "dir": "in", "amount": a, "doc": doc or "", "party": cs or ""})
+        if (ca or "").startswith("12"):
+            out.append({"date": d, "dir": "out", "amount": a, "doc": doc or "", "party": ds or ""})
+    return out
+
+
+def bank_missing(db: Session, org: str, base: str) -> tuple[list, dict]:
+    """Операции выписки банка, которых нет в базе.
+
+    Пара — движение по банку в базе той же суммы (до сома), того же
+    направления, не дальше BANK_DAYS дней. Если строке выписки не нашлось
+    пары, а непарные строки базы того же дня в сумме дают её сумму, это
+    один платёж, разнесённый в базе на несколько строк (например, одна
+    оплата по договору — несколько выплат по людям в управленке).
+
+    QR в задачи не идут — их сверяет QR-отчёт банка. Комиссии банка
+    возвращаются отдельно, по месяцам: базы проводят их сводно.
+    Возвращает (непарные операции, {месяц: [непарные комиссии]})."""
+    from .bank_statement import is_fee
+
+    T = models.BankTxn
+    txns = [t for t in db.query(T).filter(T.organization == org).all() if not t.is_qr]
+    if not txns:
+        return [], {}
+    first = min(t.date for t in txns)
+    led = _bank_lines(db, org, base, first - timedelta(days=BANK_DAYS))
+    free = set(range(len(led)))
+    by_amount: dict = defaultdict(list)
+    for i, x in enumerate(led):
+        by_amount[(x["dir"], round(x["amount"]))].append(i)
+    missing = []
+    for t in sorted(txns, key=lambda t: (t.date, t.id)):
+        dirn = "in" if float(t.amount_in or 0) else "out"
+        amount = float(t.amount_in or 0) or float(t.amount_out or 0)
+        a = round(amount)
+        cand = [i for k in (a - 1, a, a + 1) for i in by_amount.get((dirn, k), ())
+                if i in free and abs(led[i]["amount"] - amount) < AMOUNT_TOLERANCE
+                and abs((led[i]["date"] - t.date).days) <= BANK_DAYS]
+        if cand:
+            free.discard(min(cand, key=lambda i: (abs((led[i]["date"] - t.date).days), i)))
+        else:
+            missing.append((t, dirn, amount))
+    left = []
+    for t, dirn, amount in missing:
+        same = [i for i in free if led[i]["dir"] == dirn and led[i]["date"] == t.date]
+        if len(same) > 1 and abs(sum(led[i]["amount"] for i in same) - amount) < AMOUNT_TOLERANCE:
+            free.difference_update(same)
+            continue
+        left.append(t)
+    fees: dict = defaultdict(list)
+    rest = []
+    for t in left:
+        if is_fee(t):
+            fees[t.date.strftime("%Y-%m")].append(t)
+        else:
+            rest.append(t)
+    # Комиссии месяца: если непарных мелких расходов (до 500 сом) в базе за
+    # месяц не меньше, чем непарных комиссий в выписке, — проведены сводно.
+    for month in list(fees):
+        booked = sum(led[i]["amount"] for i in free
+                     if led[i]["dir"] == "out" and led[i]["amount"] <= 500
+                     and led[i]["date"].strftime("%Y-%m") == month)
+        need = sum(float(t.amount_out or 0) for t in fees[month])
+        if booked + AMOUNT_TOLERANCE >= need:
+            del fees[month]
+    return rest, dict(fees)
+
+
 def _split_qr(missing: list[dict], free: list[dict]) -> list[dict]:
     """Один QR, разнесённый в управленке на несколько точек: QR 25.08 на
     16 300 — это «Маркет Таза шоп Араванская» 9 300 и «Тазалык дуйносу»
@@ -914,6 +1001,31 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                         "doc_date": q["date"], "doc_number": f"{q['paid_at']:%H:%M}",
                         "party": q["party"] or "QR", "qty": 0,
                         "amount": round(q["amount"], 2), "is_task": age_ok(q["date"]),
+                    })
+            # Выписка банка: операция по счёту, которой нет в базе.
+            for side, base in (("upr", "upr"), ("tax", "nal")):
+                if base == "nal" and not has_nal_ledger(db, org):
+                    continue
+                rest, fees = bank_missing(db, org, base)
+                for t in rest:
+                    amount = float(t.amount_in or 0) or -float(t.amount_out or 0)
+                    purpose = (t.purpose or "").strip()
+                    out.append({
+                        "key": f"{org}|bank|{side}|{t.key}",
+                        "organization": org, "kind": "bank", "side": side,
+                        "doc_date": t.date, "doc_number": t.doc or "",
+                        "party": (t.party or "—") + (f" — {purpose[:120]}" if purpose else ""),
+                        "qty": 0, "amount": round(amount, 2), "is_task": age_ok(t.date),
+                    })
+                for month, rows in fees.items():
+                    total = sum(float(t.amount_out or 0) for t in rows)
+                    last = max(t.date for t in rows)
+                    out.append({
+                        "key": f"{org}|bankfee|{side}|{month}",
+                        "organization": org, "kind": "bankfee", "side": side,
+                        "doc_date": last, "doc_number": f"{month[5:]}.{month[:4]}",
+                        "party": "Комиссии банка", "qty": len(rows),
+                        "amount": round(-total, 2), "is_task": age_ok(last),
                     })
             if org == OSH_KEEPER:
                 for x in osh_transfers_missing(db, since):
