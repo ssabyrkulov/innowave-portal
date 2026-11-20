@@ -23,7 +23,7 @@ const KINDS = {
   sale: 'Реализация', return: 'Возврат',
   writeoff: 'Списание', purchase: 'Поступление',
   payment: 'Оплата', stock: 'Остаток', customer: 'Покупатель', taxref: 'Номер отгрузки', kkm: 'ККМ', kkmpay: 'Оплаты розницы', payparty: 'Контрагент оплаты', payop: 'Вид оплаты',
-  qr: 'QR-оплата', qrtax: 'QR-оплата', salary: 'Зарплата', accountable: 'Подотчёт', osh: 'Склад Ош', clientdup: 'Дубль точки', nogps: 'Точка без GPS',
+  qr: 'QR-оплата', qrtax: 'QR-оплата', bank: 'Банк', bankfee: 'Комиссии банка', salary: 'Зарплата', accountable: 'Подотчёт', osh: 'Склад Ош', clientdup: 'Дубль точки', nogps: 'Точка без GPS',
 }
 const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: 'Blue Carbon' }
 
@@ -183,7 +183,9 @@ function Journal({ version = 0 }) {
                       <span className="muted"> · {['payparty', 'payop'].includes(e.kind)
                         ? 'ошибка в налоговой' : e.kind === 'qr'
                           ? 'есть в банке, нет в управленке' : e.kind === 'qrtax'
-                          ? 'есть в банке, нет в налоговой' : e.kind === 'osh'
+                          ? 'есть в банке, нет в налоговой' : ['bank', 'bankfee'].includes(e.kind)
+                          ? (e.side === 'tax' ? 'есть в выписке, нет в налоговой' : 'есть в выписке, нет в управленке')
+                          : e.kind === 'osh'
                           ? `нет перемещения Ош → Бишкек под продажу Инновейва (${e.party || ''})` : e.side === 'upr'
                           ? 'только в управленке' : 'только в налоговой'}</span>
                       <div className="muted skipped-cols">от {fdate(e.date)}</div>
@@ -251,8 +253,34 @@ function Uploads({ onDone }) {
     }
   }
 
+  // Выписка банка (PDF «Выписка по счету …»): операция по счёту, которой
+  // нет в управленке или в налоговой, — задача той базе.
+  async function uploadBank(ev) {
+    const file = ev.target.files?.[0]
+    ev.target.value = ''
+    if (!file) return
+    setBusy(true)
+    try {
+      const r = await api.bankImport(file)
+      const period = [r.date_from, r.date_to].filter(Boolean).map(fdate).join(' – ')
+      setNote(`Выписка ${FIRMS[r.organization] || r.organization}, счёт ${r.account}${period ? `, ${period}` : ''}: `
+        + `${r.total} операций (приход ${formatMoney(r.amount_in, '')}, расход ${formatMoney(r.amount_out, '')}), новых ${r.added}`)
+      await api.contourEventsScan()
+      onDone()
+    } catch (e) {
+      alert('Ошибка: ' + e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="rc-period">
+      <label className="btn btn-sm"
+        title="PDF-выписка банка «Выписка по счету …»: операции, которых нет в управленке или в налоговой, станут задачами">
+        {busy ? 'Загружаю…' : '⬆️ Выписка банка (PDF)'}
+        <input type="file" accept=".pdf" hidden disabled={busy} onChange={uploadBank} />
+      </label>
       <label className="btn btn-sm"
         title="Отчёт из кабинета банка (SHOP_OWNER): QR-оплаты, которых нет в управленке или в налоговой, станут задачей">
         {busy ? 'Загружаю…' : '⬆️ QR-отчёт (М-касса)'}

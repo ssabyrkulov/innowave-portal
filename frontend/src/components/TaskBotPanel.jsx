@@ -106,7 +106,6 @@ export default function TaskBotPanel() {
       stock_orgs: form.stock_orgs, staff_orgs: form.staff_orgs,
       upr_user_id: form.upr_user_id || null,
       nal_user_id: form.nal_user_id || null,
-      salary_user_id: form.salary_user_id || null,
       osh_user_id: form.osh_user_id || null,
       qr_tax_user_id: form.qr_tax_user_id || null,
       owner_user_id: form.owner_user_id || null,
@@ -205,8 +204,6 @@ export default function TaskBotPanel() {
           <div className="tb-grid">
             <label>Ответственный за налоговую {userSelect('nal_user_id')}</label>
             <label>Ответственный за управленку {userSelect('upr_user_id')}</label>
-            <label title="Выплаты зарплаты без начисления и подотчёт без отчёта. Не выбран — ответственный той базы, где найдено">
-              Ответственный за зарплату и подотчёт {userSelect('salary_user_id')}</label>
             <label title="Перемещения со склада Хайджин в Оше под продажи Инновейва ошским магазинам (Нурзаман). Не выбран — ответственный за управленку">
               Ответственный за склад Ош {userSelect('osh_user_id')}</label>
             <label title="QR-оплаты из отчёта банка, которых нет в налоговой. Не выбран — ответственный за налоговую">

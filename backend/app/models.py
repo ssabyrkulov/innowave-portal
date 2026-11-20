@@ -1574,6 +1574,34 @@ class TaskBotSettings(Base):
     )
 
 
+class BankTxn(Base):
+    """Операция из выписки банка (PDF «Выписка по счету …»).
+
+    Третий источник для денег по счёту: каждая операция должна быть и в
+    управленке, и в налоговой. Выписки загружают за период, периоды
+    пересекаются — строка одна на ключ (счёт, документ банка, дата, суммы).
+    """
+
+    __tablename__ = "bank_txns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    key: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    organization: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    account: Mapped[str] = mapped_column(String, nullable=False)
+    bank: Mapped[str | None] = mapped_column(String, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String, nullable=True)
+    doc: Mapped[str | None] = mapped_column(String, nullable=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # Ушло со счёта (оборот Дт) и пришло на счёт (оборот Кт).
+    amount_out: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    amount_in: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    party: Mapped[str | None] = mapped_column(String, nullable=True)
+    party_inn: Mapped[str | None] = mapped_column(String, nullable=True)
+    purpose: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_qr: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class QrPayment(Base):
     """QR-оплата из отчёта банка (кабинет SHOP_OWNER, «Оплата прошла»).
 

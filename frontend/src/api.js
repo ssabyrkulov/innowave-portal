@@ -314,6 +314,11 @@ export const api = {
     fd.append('org', org || 'hygiene')
     return request('/tax/import', { method: 'POST', formData: fd })
   },
+  bankImport: (file) => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    return request('/tax/bank-import', { method: 'POST', formData: fd })
+  },
   qrImport: (file) => {
     const fd = new FormData()
     fd.append('file', file, file.name)
