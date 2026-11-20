@@ -903,10 +903,11 @@ def extra_events(db: Session, cfg: "models.TaskBotSettings | None",
                     "amount": round(q["amount"], 2), "is_task": age_ok(q["date"]),
                 })
             # Та же проверка для налоговой: QR пришёл на счёт, а поступления
-            # в налоговой нет. Здесь — с «Контроль с»: налоговую начали
-            # сверять позже управленки, и старые QR завалили бы задачами.
+            # в налоговой нет. Как и для управленки — за весь загруженный
+            # отчёт банка, без «Контроль с»: деньги на счёте есть, значит, в
+            # налоговой их тоже должно быть видно, когда бы они ни пришли.
             if has_nal_ledger(db, org):
-                for q in qr_missing(db, org, "nal", since):
+                for q in qr_missing(db, org, "nal"):
                     out.append({
                         "key": f"{org}|qrtax|{q['txn_id']}",
                         "organization": org, "kind": "qrtax", "side": "tax",
