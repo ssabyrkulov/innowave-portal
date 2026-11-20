@@ -30,7 +30,7 @@ const FIRMS = { hygiene: 'Innowave Hygiene', innowave: 'Innowave', bluecarbon: '
 // Момент, когда расхождение заметили, знает только сам портал: 1С про него
 // не помнит, а список «сейчас» ничего не хранит — документ провели во второй
 // базе, и расхождение исчезло, будто его не было. Журнал держит его событием.
-function Journal() {
+function Journal({ version = 0 }) {
   const [state, setState] = useState('open')
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -46,7 +46,7 @@ function Journal() {
     setPicked(new Set())
     return api.contourEvents(st).then(setData).catch(() => setData(null))
   }
-  useEffect(() => { load(state) }, [state])
+  useEffect(() => { load(state) }, [state, version])
 
   useEffect(() => {
     if (!data || scanned || data.rows.length || state !== 'open') return
@@ -58,28 +58,6 @@ function Journal() {
   async function rescan() {
     setBusy(true)
     try {
-      await api.contourEventsScan()
-      await load()
-    } catch (e) {
-      alert('Ошибка: ' + e.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  // QR-отчёт банка — третий источник: оплата, которой нет ни в одной
-  // базе, видна только по нему.
-  const [qrNote, setQrNote] = useState('')
-  async function uploadQr(ev) {
-    const file = ev.target.files?.[0]
-    ev.target.value = ''
-    if (!file) return
-    setBusy(true)
-    try {
-      const r = await api.qrImport(file)
-      const period = [r.date_from, r.date_to].filter(Boolean).map(fdate).join(' – ')
-      setQrNote(`QR-отчёт ${FIRMS[r.organization] || r.organization}${period ? `, ${period}` : ''}: `
-        + `${r.paid} оплат на ${formatMoney(r.paid_amount, '')} сом, новых ${r.added}`)
       await api.contourEventsScan()
       await load()
     } catch (e) {
@@ -139,18 +117,12 @@ function Journal() {
         <button className="btn btn-sm" disabled={busy} onClick={rescan}>
           {busy ? 'Считаю…' : 'Пересчитать'}
         </button>
-        <label className="btn btn-sm btn-ghost"
-          title="Отчёт из кабинета банка (SHOP_OWNER): QR-оплаты, которых на следующий день нет в управленке, станут задачей">
-          ⬆️ QR-отчёт банка
-          <input type="file" accept=".xlsx" hidden disabled={busy} onChange={uploadQr} />
-        </label>
         {data && (
           <span className="muted">
             открытых: {data.open_total} · из них просрочено: {data.open_gaps}
           </span>
         )}
       </div>
-      {qrNote && <p className="muted">{qrNote}</p>}
       {!data ? <div className="muted">Загрузка…</div>
         : data.rows.length === 0 ? (
           <p className="muted">
@@ -252,10 +224,50 @@ function Journal() {
   )
 }
 
+// Загрузки — первым делом на странице, а не под журналом: их делают каждый
+// день, и крутить ради них вниз через все задачи неудобно.
+function Uploads({ onDone }) {
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+
+  // QR-отчёт банка — третий источник: оплата, которой нет ни в одной
+  // базе, видна только по нему.
+  async function uploadQr(ev) {
+    const file = ev.target.files?.[0]
+    ev.target.value = ''
+    if (!file) return
+    setBusy(true)
+    try {
+      const r = await api.qrImport(file)
+      const period = [r.date_from, r.date_to].filter(Boolean).map(fdate).join(' – ')
+      setNote(`QR-отчёт ${FIRMS[r.organization] || r.organization}${period ? `, ${period}` : ''}: `
+        + `${r.paid} оплат на ${formatMoney(r.paid_amount, '')} сом, новых ${r.added}`)
+      await api.contourEventsScan()
+      onDone()
+    } catch (e) {
+      alert('Ошибка: ' + e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="rc-period">
+      <label className="btn btn-sm"
+        title="Отчёт из кабинета банка (SHOP_OWNER): QR-оплаты, которых нет в управленке или в налоговой, станут задачей">
+        {busy ? 'Загружаю…' : '⬆️ QR-отчёт (М-касса)'}
+        <input type="file" accept=".xlsx" hidden disabled={busy} onChange={uploadQr} />
+      </label>
+      {note && <span className="muted">{note}</span>}
+    </div>
+  )
+}
+
 export default function ContoursPage() {
   const [unposted, setUnposted] = useState(null)
   const [openType, setOpenType] = useState(null)
   const [error, setError] = useState(null)
+  const [version, setVersion] = useState(0)
 
   useEffect(() => {
     // Фирмы приходят внутри ответа — выбор в шапке эндпоинт учитывает сам.
@@ -275,7 +287,9 @@ export default function ContoursPage() {
         </span>
       </div>
 
-    <TaskBotPanel />
+    <Uploads onDone={() => setVersion((v) => v + 1)} />
+
+    <TaskBotPanel key={version} />
 
     {unposted?.firms?.length > 0 && (
       <div className="fresh-block">
@@ -413,7 +427,7 @@ export default function ContoursPage() {
       </p>
     )}
 
-    <Journal />
+    <Journal version={version} />
     </div>
   )
 }
