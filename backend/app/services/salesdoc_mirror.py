@@ -1898,3 +1898,76 @@ def start_background_sync() -> None:
             time.sleep(DELTA_EVERY)
 
     threading.Thread(target=loop, name="salesdoc-mirror", daemon=True).start()
+
+
+def missing_sales_by_agent(db: Session, clients: set[str], org: str | None,
+                           window_from: date) -> dict[str, dict]:
+    """Реализации 1С, которых нет в выгрузке SalesDoc, — по агентам.
+
+    Зачем. Когда агент уходит, точку переводят на нового (лимит агентов), а
+    старого деактивируют. Его заказы SalesDoc в балансе точки учитывает, но по
+    API больше не отдаёт: у деактивированного агента доступа к API нет. В
+    сверке это выглядит как «реализаций в 1С больше, чем в SalesDoc», а когда
+    вместе с заказами пропали и его оплаты — как «баланс сходится, а операции
+    нет». Ошибкой учёта это не является, и отличить такой случай от настоящей
+    ошибки можно только по документам: у каждого документа 1С есть GUID, и
+    SalesDoc отдаёт его же в code_1C своего заказа.
+
+    Документ 1С считается «нет в выгрузке», если его GUID не встречается ни в
+    одном заказе зеркала (любого статуса: отменённый в SalesDoc заказ — это
+    уже настоящее расхождение, а не скрытый документ). Документы без GUID
+    проверить нечем — их не учитываем. Документы старше окна сверки уходят в
+    отдельную графу: SalesDoc мы за тот период не выгружаем.
+
+    Возвращает {контрагент 1С: {"agents": [{name, active, amount, docs}],
+    "gone": сумма по деактивированным, "older": сумма до окна}}."""
+    if not clients:
+        return {}
+    in_sd = {
+        (c or "").strip().lower()
+        for (c,) in db.query(models.SalesDocOrder.code_1c)
+        .filter(models.SalesDocOrder.code_1c.isnot(None)).all()
+    }
+    status = {match_key(a.name): bool(a.active)
+              for a in db.query(models.SalesDocAgent).all() if a.name}
+
+    S = models.Sale
+    docs: dict[tuple, dict] = {}
+    q = models.org_scope(
+        db.query(S.client, S.doc_guid, S.date, S.agent, S.responsible,
+                 S.amount, S.discount_pct, S.doc_total),
+        S, org).filter(S.client.in_(sorted(clients)), S.doc_guid.isnot(None))
+    for client, guid, day, agent, resp, amount, disc, total in q.all():
+        g = guid.strip().lower()
+        if not g or g in in_sd:
+            continue
+        d = docs.get((client, g))
+        if d is None:
+            d = docs[(client, g)] = {"date": day, "agent": agent or resp or "",
+                                     "total": None, "lines": 0.0}
+        if total is not None:
+            d["total"] = float(total)
+        d["lines"] += float(amount or 0) * (1 - float(disc or 0) / 100)
+
+    out: dict[str, dict] = {}
+    for (client, _g), d in docs.items():
+        amount = d["total"] if d["total"] is not None else d["lines"]
+        o = out.setdefault(client, {"agents": {}, "gone": 0.0, "older": 0.0})
+        if d["date"] and d["date"] < window_from:
+            o["older"] += amount
+            continue
+        name = d["agent"].strip() or "без агента"
+        active = status.get(match_key(name)) if d["agent"].strip() else None
+        a = o["agents"].setdefault(name, {"name": name, "active": active,
+                                          "amount": 0.0, "docs": 0})
+        a["amount"] += amount
+        a["docs"] += 1
+        if active is False:
+            o["gone"] += amount
+    for o in out.values():
+        o["agents"] = sorted(
+            ({**a, "amount": round(a["amount"], 2)} for a in o["agents"].values()),
+            key=lambda a: -a["amount"])
+        o["gone"] = round(o["gone"], 2)
+        o["older"] = round(o["older"], 2)
+    return out

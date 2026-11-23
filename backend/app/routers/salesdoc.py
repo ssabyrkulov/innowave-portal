@@ -375,6 +375,29 @@ def _diagnose_reason(row: dict, comp: dict) -> tuple[str, str]:
     return "warn", "курс/период"
 
 
+def _gone_summary(rows: list[dict]) -> dict:
+    """Сводка по точкам, чьи обороты разошлись из-за уволенных агентов:
+    сколько точек, на какую сумму и по каким агентам."""
+    by_agent: dict[str, dict] = {}
+    for r in rows:
+        for a in r.get("missing_agents") or []:
+            if a["active"] is not False:
+                continue
+            b = by_agent.setdefault(a["name"], {"name": a["name"], "amount": 0.0,
+                                                "docs": 0, "clients": 0})
+            b["amount"] += a["amount"]
+            b["docs"] += a["docs"]
+            b["clients"] += 1
+    rows = sorted(rows, key=lambda r: -r["missing_gone"])
+    return {
+        "clients": len(rows),
+        "amount": round(sum(r["missing_gone"] for r in rows), 2),
+        "agents": sorted(({**b, "amount": round(b["amount"], 2)}
+                          for b in by_agent.values()), key=lambda b: -b["amount"]),
+        "top": rows,
+    }
+
+
 @router.get("/debt")
 def reconcile_debt(
     db: Session = Depends(get_db),
@@ -709,6 +732,8 @@ def reconcile_debt(
     # друга (не проведена реализация и не проведена оплата на ту же сумму), и
     # в обычном списке такая строка выглядит здоровой. Считаем отдельно.
     offset_rows: list[dict] = []
+    # Те же точки, но разрыв объяснён заказами деактивированных агентов.
+    gone_rows: list[dict] = []
     if with_reason and salesdoc_mirror.status(db)["ready"]:
         df, dt = salesdoc.reason_window()
         comp = salesdoc_mirror.reconcile_components(
@@ -750,6 +775,31 @@ def reconcile_debt(
         hidden_rows.sort(key=lambda x: -x["amount"])
         offset_rows.sort(key=lambda x: -x["worst"])
 
+        # Какие реализации 1С не пришли из SalesDoc и чьи они. Заказы
+        # деактивированного агента SalesDoc держит в балансе, но по API не
+        # отдаёт — и точка, переведённая на нового агента, попадает в
+        # «баланс сходится, а операции нет», хотя ошибки в учёте нет.
+        missing = salesdoc_mirror.missing_sales_by_agent(
+            db, {r["name"] for r in offset_rows + hidden_rows},
+            org, date.fromisoformat(df))
+        for r in offset_rows + hidden_rows:
+            m = missing.get(r["name"])
+            r["missing_agents"] = m["agents"] if m else []
+            r["missing_gone"] = m["gone"] if m else 0.0
+            r["missing_older"] = m["older"] if m else 0.0
+        real_rows: list[dict] = []
+        for r in offset_rows:
+            sales_gap = next((g["diff"] for g in r["gaps"]
+                              if g["name"] == "реализации"), 0.0)
+            # Разрыв по реализациям целиком покрыт документами уволенных
+            # агентов — значит, это не ошибка, а слепое пятно API.
+            if (sales_gap >= COMPONENT_MIN
+                    and r["missing_gone"] >= sales_gap - max(COMPONENT_MIN, 0.02 * sales_gap)):
+                gone_rows.append(r)
+            else:
+                real_rows.append(r)
+        offset_rows = real_rows
+
     if only_diff:
         rows = [r for r in rows if abs(r["diff"]) >= 0.5]
 
@@ -784,6 +834,9 @@ def reconcile_debt(
             # разбор в игру в угадайку — до остальных точек не добраться.
             "top": offset_rows,
         },
+        # Баланс сошёлся, операции разошлись из-за заказов уволенных агентов:
+        # SalesDoc их учитывает, но по API не отдаёт. Не ошибка — сводка.
+        "agent_gone": _gone_summary(gone_rows),
         "hidden": {
             "clients": len(hidden_rows),
             "amount": round(sum(h["amount"] for h in hidden_rows), 2),

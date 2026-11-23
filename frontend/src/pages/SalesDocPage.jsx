@@ -654,6 +654,10 @@ export default function SalesDocPage() {
         <OffsetPanel offset={debt.offset} onOpen={setDetail} />
       )}
 
+      {debt?.agent_gone?.clients > 0 && (
+        <AgentGonePanel gone={debt.agent_gone} onOpen={setDetail} />
+      )}
+
       {detail && (
         <ReconcileDetailModal row={detail} onClose={() => setDetail(null)} />
       )}
@@ -699,6 +703,7 @@ function OffsetPanel({ offset, onOpen }) {
                         {o.sd_name && o.sd_name !== o.name && (
                           <div className="rc-note">в SalesDoc: {o.sd_name}</div>
                         )}
+                        <MissingAgents row={o} />
                       </td>
                     )}
                     <td>{g.name}</td>
@@ -715,6 +720,82 @@ function OffsetPanel({ offset, onOpen }) {
             долга: реализации − возвраты − оплаты. Здесь эта сумма равна нулю —
             потому строки и не попали в список расхождений.
           </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* Чьи реализации 1С не пришли из SalesDoc: агент и сумма. Уволенный агент
+   помечен — его заказы SalesDoc по API не отдаёт. */
+function MissingAgents({ row }) {
+  const list = (row.missing_agents || []).filter((a) => a.amount >= 1)
+  if (!list.length && !(row.missing_older >= 1)) return null
+  return (
+    <div className="rc-note">
+      нет в выгрузке SD:{' '}
+      {list.map((a, i) => (
+        <span key={a.name}>
+          {i > 0 && ', '}
+          {a.name}{a.active === false && ' (деактивирован)'} — {money(a.amount)}
+        </span>
+      ))}
+      {row.missing_older >= 1 && (
+        <span>{list.length > 0 && ', '}старше окна сверки — {money(row.missing_older)}</span>
+      )}
+    </div>
+  )
+}
+
+/* Баланс сошёлся, а обороты разошлись потому, что часть заказов делал агент,
+   которого потом деактивировали: точку перевели на нового (лимит агентов),
+   а старые заказы SalesDoc учитывает в балансе, но по API не отдаёт. В учёте
+   ошибки нет — поэтому это сводка, а не предупреждение. */
+function AgentGonePanel({ gone, onOpen }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="note-readonly sd-offset">
+      <b>Заказы деактивированных агентов: {gone.clients} точек, {money(gone.amount)}.</b>{' '}
+      Долг с 1С сходится, а реализаций в выгрузке SalesDoc меньше: эти заказы
+      делал агент, которого потом деактивировали, а точку перевели на нового.
+      SalesDoc учитывает их в балансе, но по API не отдаёт. Ошибки в учёте нет,
+      исправлять нечего.
+      {gone.agents?.length > 0 && (
+        <div className="rc-note">
+          {gone.agents.map((a, i) => (
+            <span key={a.name}>
+              {i > 0 && ' · '}{a.name}: {a.clients} точек, {a.docs} док., {money(a.amount)}
+            </span>
+          ))}
+        </div>
+      )}{' '}
+      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
+        {open ? 'Свернуть' : 'Показать точки'}
+      </button>
+      {open && (
+        <div className="table-wrap rc-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Точка</th><th>Чьих заказов нет в выгрузке</th>
+                <th className="num">Долг</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gone.top.map((o) => (
+                <tr key={o.sd_id || o.name}>
+                  <td>
+                    <button className="client-link" onClick={() => onOpen(o)}>{o.name}</button>
+                    {o.sd_name && o.sd_name !== o.name && (
+                      <div className="rc-note">в SalesDoc: {o.sd_name}</div>
+                    )}
+                  </td>
+                  <td><MissingAgents row={o} /></td>
+                  <td className="num">{money(o.our_debt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -859,7 +940,7 @@ function HiddenDocsBanner({ hidden, onOpen }) {
                       <div className="rc-note">точка неактивна в SalesDoc</div>
                     )}
                   </td>
-                  <td>{h.reason}</td>
+                  <td>{h.reason}<MissingAgents row={h} /></td>
                   <td className="num">{money(h.amount)}</td>
                 </tr>
               ))}
