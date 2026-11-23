@@ -1900,64 +1900,107 @@ def start_background_sync() -> None:
     threading.Thread(target=loop, name="salesdoc-mirror", daemon=True).start()
 
 
-def missing_sales_by_agent(db: Session, clients: set[str], org: str | None,
-                           window_from: date) -> dict[str, dict]:
-    """Реализации 1С, которых нет в выгрузке SalesDoc, — по агентам.
+
+def missing_sales_by_agent(db: Session, clients: dict[str, str | None],
+                           org: str | None, window_from: date) -> dict:
+    """Реализации 1С, которых нет в выгрузке SalesDoc, — и чьи они.
 
     Зачем. Когда агент уходит, точку переводят на нового (лимит агентов), а
     старого деактивируют. Его заказы SalesDoc в балансе точки учитывает, но по
-    API больше не отдаёт: у деактивированного агента доступа к API нет. В
-    сверке это выглядит как «реализаций в 1С больше, чем в SalesDoc», а когда
-    вместе с заказами пропали и его оплаты — как «баланс сходится, а операции
-    нет». Ошибкой учёта это не является, и отличить такой случай от настоящей
-    ошибки можно только по документам: у каждого документа 1С есть GUID, и
-    SalesDoc отдаёт его же в code_1C своего заказа.
+    API больше не отдаёт. В сверке это выглядит как «реализаций в 1С больше,
+    чем в SalesDoc», а когда вместе с заказами пропали и его оплаты — как
+    «баланс сходится, а операции нет». Ошибкой учёта это не является.
 
-    Документ 1С считается «нет в выгрузке», если его GUID не встречается ни в
-    одном заказе зеркала (любого статуса: отменённый в SalesDoc заказ — это
-    уже настоящее расхождение, а не скрытый документ). Документы без GUID
-    проверить нечем — их не учитываем. Документы старше окна сверки уходят в
-    отдельную графу: SalesDoc мы за тот период не выгружаем.
+    Документ 1С «нет в выгрузке», если его GUID не встречается в code_1C ни
+    одного заказа зеркала (любого статуса: отменённый в SalesDoc заказ — уже
+    настоящее расхождение). Документы без GUID проверить нечем. Документы
+    старше окна сверки — отдельной графой: SalesDoc за тот период не
+    выгружаем.
 
-    Возвращает {контрагент 1С: {"agents": [{name, active, amount, docs}],
-    "gone": сумма по деактивированным, "older": сумма до окна}}."""
+    Чей документ. Колонка агента в выгрузке реализаций 1С — это агент
+    КАРТОЧКИ точки, а не заказа: после перевода точки на нового агента все
+    старые документы показывают нового. Поэтому агента ищем по визитам
+    SalesDoc: визит этой точки с заказом на ту же сумму за неделю до даты
+    документа. Не нашёлся — «агент не определён».
+
+    clients — {контрагент 1С: ИД точки SalesDoc}. Возвращает {"by_client":
+    {контрагент: {agents, missing, older}}, "checked", "found"} — checked и
+    found по документам в окне: если в SalesDoc находится малая доля, связка
+    по GUID не работает, и выводам верить нельзя."""
     if not clients:
-        return {}
+        return {"by_client": {}, "checked": 0, "found": 0}
     in_sd = {
         (c or "").strip().lower()
         for (c,) in db.query(models.SalesDocOrder.code_1c)
         .filter(models.SalesDocOrder.code_1c.isnot(None)).all()
     }
-    status = {match_key(a.name): bool(a.active)
-              for a in db.query(models.SalesDocAgent).all() if a.name}
+    agents = db.query(models.SalesDocAgent).all()
+    by_id = {a.sd_id: bool(a.active) for a in agents}
+    by_name = {match_key(a.name): bool(a.active) for a in agents if a.name}
 
     S = models.Sale
     docs: dict[tuple, dict] = {}
     q = models.org_scope(
-        db.query(S.client, S.doc_guid, S.date, S.agent, S.responsible,
-                 S.amount, S.discount_pct, S.doc_total),
+        db.query(S.client, S.doc_guid, S.date, S.amount, S.discount_pct, S.doc_total),
         S, org).filter(S.client.in_(sorted(clients)), S.doc_guid.isnot(None))
-    for client, guid, day, agent, resp, amount, disc, total in q.all():
-        g = guid.strip().lower()
-        if not g or g in in_sd:
+    for client, guid, day, amount, disc, total in q.all():
+        g = (guid or "").strip().lower()
+        if not g:
             continue
         d = docs.get((client, g))
         if d is None:
-            d = docs[(client, g)] = {"date": day, "agent": agent or resp or "",
+            d = docs[(client, g)] = {"date": day, "in_sd": g in in_sd,
                                      "total": None, "lines": 0.0}
         if total is not None:
             d["total"] = float(total)
         d["lines"] += float(amount or 0) * (1 - float(disc or 0) / 100)
 
+    # Визиты с заказом по нужным точкам: {точка SD: [(день, сумма, агент, ИД)]}.
+    sd_ids = {(v or "").lower() for v in clients.values() if v}
+    visits: dict[str, list] = {}
+    if sd_ids:
+        V = models.SalesDocVisit
+        for cli, at, summa, name, aid in (
+                db.query(V.client_sd_id, V.at, V.order_summa, V.agent_name, V.agent_sd_id)
+                .filter(V.client_sd_id.in_(sorted(sd_ids)), V.order_summa > 0).all()):
+            visits.setdefault(cli, []).append((at.date(), float(summa or 0), name, aid))
+
+    def who(sd_id: str | None, day: date | None, amount: float):
+        """Агент заказа по визиту: та же сумма, визит за 0–7 дней до документа."""
+        if not sd_id or day is None:
+            return None, None
+        best = None
+        for vday, summa, name, aid in visits.get(sd_id.lower(), ()):
+            lag = (day - vday).days
+            if -1 <= lag <= 7 and abs(summa - amount) <= max(1.0, 0.01 * amount):
+                if best is None or lag < best[0]:
+                    best = (lag, name, aid)
+        if best is None or not best[1]:
+            return None, None
+        _, name, aid = best
+        active = by_id.get((aid or "").lower())
+        if active is None:
+            active = by_name.get(match_key(name))
+        return name, active
+
     out: dict[str, dict] = {}
+    checked = found = 0
     for (client, _g), d in docs.items():
         amount = d["total"] if d["total"] is not None else d["lines"]
-        o = out.setdefault(client, {"agents": {}, "gone": 0.0, "older": 0.0})
-        if d["date"] and d["date"] < window_from:
+        old = d["date"] is not None and d["date"] < window_from
+        if not old:
+            checked += 1
+            found += d["in_sd"]
+        if d["in_sd"]:
+            continue
+        o = out.setdefault(client, {"agents": {}, "missing": 0.0, "gone": 0.0,
+                                    "older": 0.0})
+        if old:
             o["older"] += amount
             continue
-        name = d["agent"].strip() or "без агента"
-        active = status.get(match_key(name)) if d["agent"].strip() else None
+        o["missing"] += amount
+        name, active = who(clients.get(client), d["date"], amount)
+        name = name or "агент не определён"
         a = o["agents"].setdefault(name, {"name": name, "active": active,
                                           "amount": 0.0, "docs": 0})
         a["amount"] += amount
@@ -1968,6 +2011,6 @@ def missing_sales_by_agent(db: Session, clients: set[str], org: str | None,
         o["agents"] = sorted(
             ({**a, "amount": round(a["amount"], 2)} for a in o["agents"].values()),
             key=lambda a: -a["amount"])
-        o["gone"] = round(o["gone"], 2)
-        o["older"] = round(o["older"], 2)
-    return out
+        for k in ("missing", "gone", "older"):
+            o[k] = round(o[k], 2)
+    return {"by_client": out, "checked": checked, "found": found}
