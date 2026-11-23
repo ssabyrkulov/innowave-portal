@@ -654,7 +654,7 @@ export default function SalesDocPage() {
         <OffsetPanel offset={debt.offset} onOpen={setDetail} />
       )}
 
-      {debt?.agent_gone?.clients > 0 && (
+      {(debt?.agent_gone?.clients > 0 || debt?.agent_gone?.check) && (
         <AgentGonePanel gone={debt.agent_gone} onOpen={setDetail} />
       )}
 
@@ -747,31 +747,45 @@ function MissingAgents({ row }) {
   )
 }
 
-/* Баланс сошёлся, а обороты разошлись потому, что часть заказов делал агент,
-   которого потом деактивировали: точку перевели на нового (лимит агентов),
-   а старые заказы SalesDoc учитывает в балансе, но по API не отдаёт. В учёте
-   ошибки нет — поэтому это сводка, а не предупреждение. */
+/* Баланс сошёлся, а обороты разошлись потому, что SalesDoc не отдаёт часть
+   документов по API. Типичная причина — агент, которого деактивировали после
+   перевода точки на нового (лимит агентов): его заказы в балансе есть, а в
+   выгрузке нет. Ошибки в учёте нет — поэтому это сводка, а не предупреждение.
+   Строка «проверка» — сколько документов 1С нашлось в SalesDoc по GUID: если
+   мало, связка не работает и точки остаются в предупреждении. */
 function AgentGonePanel({ gone, onOpen }) {
   const [open, setOpen] = useState(false)
+  const chk = gone.check
   return (
     <div className="note-readonly sd-offset">
-      <b>Заказы деактивированных агентов: {gone.clients} точек, {money(gone.amount)}.</b>{' '}
-      Долг с 1С сходится, а реализаций в выгрузке SalesDoc меньше: эти заказы
-      делал агент, которого потом деактивировали, а точку перевели на нового.
-      SalesDoc учитывает их в балансе, но по API не отдаёт. Ошибки в учёте нет,
-      исправлять нечего.
+      <b>SalesDoc не отдаёт по API: {gone.clients} точек, {money(gone.amount)}.</b>{' '}
+      Долг с 1С сходится, но части реализаций 1С нет в выгрузке SalesDoc.
+      В балансе SalesDoc они есть, значит, ошибки в учёте нет. Обычно это заказы
+      агента, которого деактивировали после перевода точки на нового.
+      Агента ищем по визиту SalesDoc с заказом на ту же сумму: колонка агента в
+      1С показывает текущего агента точки, а не того, кто делал заказ.
+      {gone.older > 0 && <> Ещё {money(gone.older)} — документы старше окна сверки.</>}
       {gone.agents?.length > 0 && (
         <div className="rc-note">
           {gone.agents.map((a, i) => (
             <span key={a.name}>
-              {i > 0 && ' · '}{a.name}: {a.clients} точек, {a.docs} док., {money(a.amount)}
+              {i > 0 && ' · '}{a.name}{a.active === false && ' (деактивирован)'}:{' '}
+              {a.clients} точек, {a.docs} док., {money(a.amount)}
             </span>
           ))}
         </div>
-      )}{' '}
-      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
-        {open ? 'Свернуть' : 'Показать точки'}
-      </button>
+      )}
+      {chk && (
+        <div className={`rc-note${chk.reliable ? '' : ' rc-org-note-warn'}`}>
+          проверка: из {chk.checked} документов 1С в выгрузке SalesDoc найдено {chk.found}
+          {!chk.reliable && ' — слишком мало, связка по GUID не работает, точки оставлены в предупреждении'}
+        </div>
+      )}
+      {gone.clients > 0 && (
+        <button className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
+          {open ? 'Свернуть' : 'Показать точки'}
+        </button>
+      )}
       {open && (
         <div className="table-wrap rc-table">
           <table>
