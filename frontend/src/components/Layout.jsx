@@ -76,6 +76,15 @@ const PRIMARY = [
   { to: '/debt', icon: '💰', label: 'Дебиторка' },
   { to: '/checks', icon: '🛡', label: 'Контроль', badge: true },
 ]
+// Нижняя панель телефона: главные разделы плюс согласование. Заявки
+// решают с телефона чаще всего, поэтому они не прячутся в «Ещё».
+const TABBAR = [
+  PRIMARY[0],
+  PRIMARY[1],
+  { to: '/approvals', icon: '✅', label: 'Заявки', approvalsBadge: true },
+  PRIMARY[2],
+  PRIMARY[3],
+]
 const SECONDARY = [
   { to: '/work', icon: '🧭', label: 'Мой день', workOnly: true },
   { to: '/approvals', icon: '✅', label: 'Согласование', approvalsBadge: true },
@@ -179,8 +188,10 @@ export default function Layout() {
       (!i.editOnly || can.editPayments) &&
       (!i.workOnly || can.work)
   )
+  // В листе «Ещё» не дублируем то, что уже есть на нижней панели
+  const sheetLinks = secondaryVisible.filter((i) => !TABBAR.some((t) => t.to === i.to))
   // раздел активен по «Ещё», если открыта одна из вторичных страниц
-  const inSecondary = secondaryVisible.some((i) => i.to === location.pathname)
+  const inSecondary = sheetLinks.some((i) => i.to === location.pathname)
 
   return (
     <div className="app">
@@ -259,11 +270,12 @@ export default function Layout() {
 
       {/* ---------- Телефон: нижняя панель вкладок ---------- */}
       <nav className="tabbar">
-        {PRIMARY.map((i) => (
+        {TABBAR.map((i) => (
           <NavLink key={i.to} to={i.to} end={i.end} className="tab">
             <span className="tab-icon">
               {i.icon}
               {i.badge && badge}
+              {i.approvalsBadge && approvalsBadge}
             </span>
             <span className="tab-label">{i.label}</span>
           </NavLink>
@@ -295,7 +307,7 @@ export default function Layout() {
               </div>
             </div>
             <div className="sheet-links">
-              {secondaryVisible.map((i) => (
+              {sheetLinks.map((i) => (
                 <NavLink key={i.to} to={i.to} className="sheet-link">
                   <span className="sheet-link-icon">{i.icon}</span>
                   {i.label}

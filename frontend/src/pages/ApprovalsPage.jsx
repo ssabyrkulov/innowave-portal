@@ -145,7 +145,7 @@ export default function ApprovalsPage() {
 
       {error && <div className="error">{error}</div>}
 
-      <div className="table-wrap cards">
+      <div className="table-wrap req-table">
         <table>
           <thead>
             <tr>
@@ -199,6 +199,45 @@ export default function ApprovalsPage() {
             })}
           </tbody>
         </table>
+      </div>
+
+      {/* Телефон: компактные карточки вместо таблицы — за что, сколько,
+          кому и до какого числа видно сразу, без восьми строк подписей. */}
+      <div className="req-cards">
+        {rows.length === 0 && (
+          <div className="req-cards-empty muted">
+            {tab === 'inbox' ? 'Заявок, ждущих вашего решения, нет' : 'Заявок нет'}
+          </div>
+        )}
+        {rows.map((r) => {
+          const late = r.status === 'approved' && r.due_date < today
+          const warn = (r.warnings || []).filter((w) => w.level === 'warn')
+          return (
+            <button
+              key={r.id}
+              type="button"
+              className={`req-card ${late ? 'req-card-late' : ''}`}
+              onClick={() => open(r.id)}
+            >
+              <span className="req-card-top">
+                <span className="req-card-title">{r.title}</span>
+                <span className="req-card-sum">{formatMoney(r.amount, r.currency)}</span>
+              </span>
+              <span className="req-card-sub">
+                {r.counterparty} · {ORG_LABELS[r.organization] || r.organization}
+              </span>
+              <span className="req-card-meta">
+                <span className={`badge badge-req-${r.status}`}>
+                  {REQUEST_STATUS_LABELS[r.status] || r.status}
+                </span>
+                <span className={late ? 'req-card-due-late' : ''}>до {formatDateRu(r.due_date)}</span>
+                {warn.length > 0 && <span title={warn.map((w) => w.text).join('\n')}>⚠️</span>}
+                {r.files_count > 0 && <span>📎</span>}
+                <span className="req-card-id">№{r.id}</span>
+              </span>
+            </button>
+          )
+        })}
       </div>
 
       {openId && (
