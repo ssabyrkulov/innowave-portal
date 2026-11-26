@@ -19,6 +19,16 @@ const ACTION_LABELS = {
   cancel: 'Отменить заявку',
 }
 
+// Короткие подписи для закреплённой панели на телефоне (три кнопки в ряд)
+const SHORT_LABELS = {
+  submit: 'Отправить',
+  check: 'Проверено',
+  return: 'Вернуть',
+  approve: 'Утвердить',
+  reject: 'Отклонить',
+  pay: 'Оплачено',
+}
+
 const EVENT_LABELS = {
   create: 'Создана',
   update: 'Изменена',
@@ -30,6 +40,7 @@ const EVENT_LABELS = {
   pay: 'Оплачена',
   cancel: 'Отменена',
   upload: 'Добавлен файл',
+  file: 'Добавлен файл',
   file_delete: 'Удалён файл',
   reconcile: 'Найдена в учёте 1С',
 }
@@ -143,8 +154,10 @@ export default function RequestDetail({ id, onClose, onChanged, onEdit }) {
   }
 
   const can = req?.can || {}
-  const actions = req
-    ? ['submit', 'check', 'approve', 'pay', 'return', 'reject', 'cancel'].filter((a) => can[a])
+  // Решения по заявке — главные кнопки (на телефоне закреплены внизу
+  // экрана). Правка, отмена и «Закрыть» — второстепенные.
+  const decisions = req
+    ? ['reject', 'return', 'submit', 'check', 'approve', 'pay'].filter((a) => can[a])
     : []
 
   return (
@@ -166,6 +179,9 @@ export default function RequestDetail({ id, onClose, onChanged, onEdit }) {
               <span className={`badge badge-req-${req.status}`}>
                 {REQUEST_STATUS_LABELS[req.status] || req.status}
               </span>
+              <button type="button" className="req-close" onClick={onClose} aria-label="Закрыть">
+                ✕
+              </button>
             </div>
 
             {req.warnings?.length > 0 && (
@@ -312,6 +328,23 @@ export default function RequestDetail({ id, onClose, onChanged, onEdit }) {
               )}
             </div>
 
+            {/* Телефон: правка и отмена — обычной строкой, не в закреплённой
+                панели решений, чтобы она оставалась в одну строку. */}
+            {!panel && decisions.length > 0 && (can.edit || can.cancel) && (
+              <div className="req-extra-mobile">
+                {can.edit && (
+                  <button className="btn btn-sm" onClick={() => onEdit(req)} disabled={busy}>
+                    ✎ Изменить
+                  </button>
+                )}
+                {can.cancel && (
+                  <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => openPanel('cancel')}>
+                    {ACTION_LABELS.cancel}
+                  </button>
+                )}
+              </div>
+            )}
+
             {panel && (
               <div className="req-panel">
                 <div className="req-block-title">{ACTION_LABELS[panel.action]}</div>
@@ -356,32 +389,45 @@ export default function RequestDetail({ id, onClose, onChanged, onEdit }) {
             {error && <div className="error">{error}</div>}
 
             {!panel && (
-              <div className="req-actions">
-                {can.edit && (
-                  <button className="btn" onClick={() => onEdit(req)} disabled={busy}>
-                    ✎ Изменить
-                  </button>
-                )}
-                {actions.map((a) => (
+              <div className={`req-actions ${decisions.length ? 'req-actions-has-main' : ''}`}>
+                {decisions.map((a) => (
                   <button
                     key={a}
-                    className={`btn ${
+                    className={`btn req-act-${a} ${
                       a === 'approve' || a === 'check' || a === 'submit' || a === 'pay'
                         ? 'btn-primary'
-                        : a === 'reject' || a === 'cancel'
+                        : a === 'reject'
                           ? 'btn-danger'
                           : ''
                     }`}
                     disabled={busy}
-                    onClick={() =>
+                    onClick={() => {
+                      // На телефоне кнопка «Утвердить» закреплена под пальцем —
+                      // переспрашиваем, чтобы случайное касание не утвердило платёж.
+                      if (
+                        a === 'approve' &&
+                        window.matchMedia('(max-width: 840px)').matches &&
+                        !confirm(`Утвердить ${formatMoney(req.amount, req.currency)} — ${req.counterparty}?`)
+                      ) return
                       a === 'submit' || a === 'check' || a === 'approve' ? run(a) : openPanel(a)
-                    }
+                    }}
                   >
-                    {ACTION_LABELS[a]}
+                    <span className="lbl-long">{ACTION_LABELS[a]}</span>
+                    <span className="lbl-short">{SHORT_LABELS[a]}</span>
                   </button>
                 ))}
                 <span className="req-actions-spacer" />
-                <button className="btn btn-ghost" onClick={onClose}>
+                {can.edit && (
+                  <button className="btn req-act-extra" onClick={() => onEdit(req)} disabled={busy}>
+                    ✎ Изменить
+                  </button>
+                )}
+                {can.cancel && (
+                  <button className="btn btn-danger req-act-extra" disabled={busy} onClick={() => openPanel('cancel')}>
+                    {ACTION_LABELS.cancel}
+                  </button>
+                )}
+                <button className="btn btn-ghost req-act-extra" onClick={onClose}>
                   Закрыть
                 </button>
               </div>

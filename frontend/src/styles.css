@@ -3227,3 +3227,84 @@ th.num .th-sort { justify-content: flex-end; }
 .tb-enabled { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; font-weight: normal; }
 .tb-enabled input { width: auto; margin: 0; }
 .ce-note { flex: 1; min-width: 240px; }
+
+/* ---------- Согласование на телефоне ----------
+   Список — компактные карточки; карточка заявки — на весь экран, решения
+   (утвердить / вернуть / отклонить) закреплены внизу под большим пальцем. */
+.req-cards { display: none; }
+.req-close { display: none; }
+.req-extra-mobile { display: none; }
+.lbl-short { display: none; }
+
+@media (max-width: 840px) {
+  .req-table { display: none; }
+  .req-cards { display: flex; flex-direction: column; gap: 8px; }
+  .req-cards-empty { padding: 24px 8px; text-align: center; }
+
+  .req-card {
+    display: flex; flex-direction: column; gap: 4px; width: 100%;
+    text-align: left; font: inherit; color: var(--text); cursor: pointer;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: 12px 14px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .req-card:active { background: var(--surface-2); }
+  .req-card-late { border-color: var(--out); background: var(--out-soft); }
+  .req-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .req-card-title { font-weight: 600; font-size: 15px; line-height: 1.3; }
+  .req-card-sum { font-weight: 700; font-size: 15px; white-space: nowrap; }
+  .req-card-sub { font-size: 13px; color: var(--muted); }
+  .req-card-meta {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--muted); margin-top: 2px;
+  }
+  .req-card-due-late { color: var(--out); font-weight: 600; }
+  .req-card-id { margin-left: auto; color: var(--faint); }
+
+  /* Сводка: на телефоне только «ждут меня» и «просрочены» — остальное
+     видно по вкладкам. */
+  .req-kpis { gap: 8px; margin-bottom: 12px; }
+  .req-kpi { flex: 1 1 0; padding: 8px 12px; }
+  .req-kpi:nth-child(n + 3) { display: none; }
+  .req-kpi-num { font-size: 20px; }
+  .req-kpi-label { font-size: 11.5px; }
+  .req-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .req-tabs::-webkit-scrollbar { display: none; }
+  .req-tab { white-space: nowrap; }
+
+  /* Карточка заявки — на весь экран */
+  .modal.req-detail {
+    position: fixed; inset: 0; width: 100%; max-width: none;
+    height: 100dvh; max-height: none; border-radius: 0;
+    padding: calc(14px + env(safe-area-inset-top, 0px)) 16px 0;
+    overflow-y: auto; animation: none;
+  }
+  .req-head { flex-direction: row; flex-wrap: wrap; position: relative; padding-right: 40px; }
+  .req-head h2 { font-size: 18px; line-height: 1.3; }
+  .req-close {
+    display: flex; align-items: center; justify-content: center;
+    position: absolute; top: -4px; right: -6px; width: 40px; height: 40px;
+    border: none; background: none; font-size: 20px; color: var(--muted); cursor: pointer;
+  }
+  .req-grid { grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .req-grid .req-field:nth-child(n + 3) { grid-column: 1 / -1; }
+  .req-amount { font-size: 22px; }
+  .req-upload select, .req-upload input[type='file'] { width: 100%; }
+  .req-history { padding-bottom: 16px; }
+
+  .req-extra-mobile { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+
+  /* Панель решений прилипает к низу экрана */
+  .req-actions-has-main {
+    position: sticky; bottom: 0; z-index: 2; flex-wrap: nowrap;
+    margin: 0 -16px 14px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    background: var(--surface); border-top: 1px solid var(--border);
+    box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.06);
+  }
+  .req-actions-has-main .req-actions-spacer,
+  .req-actions-has-main .req-act-extra { display: none; }
+  .req-actions-has-main .btn { flex: 1 1 0; min-height: 46px; padding-left: 6px; padding-right: 6px; font-size: 14px; }
+  .req-actions-has-main .btn-primary { flex-grow: 1.6; }
+  .req-actions-has-main .lbl-long { display: none; }
+  .req-actions-has-main .lbl-short { display: inline; }
+}
